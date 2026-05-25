@@ -124,6 +124,7 @@ def compile_agentmakefile(
             "permissions": len(ir.permissions),
         },
     )
+    _warn_backend_downgrades(ir, selected_targets, diagnostics)
 
     files: List[GeneratedFile] = []
     for target in selected_targets:
@@ -173,6 +174,31 @@ def _select_targets(
     if configured_targets:
         return configured_targets
     return list(DEFAULT_BACKENDS)
+
+
+def _warn_backend_downgrades(ir: Any, selected_targets: List[str], diagnostics: Diagnostics) -> None:
+    has_permissions = bool(ir.permission_defaults or ir.permissions)
+    has_hooks = bool(ir.hooks)
+    if not has_permissions and not has_hooks:
+        return
+    for target in selected_targets:
+        backend = SUPPORTED_BACKENDS.get(target)
+        if backend is None:
+            continue
+        if has_permissions and backend.capabilities.permissions != "hard":
+            diagnostics.warning(
+                "AMF121",
+                f"permissions were compiled as soft instructions because backend {target} does not support hard enforcement",
+                f"compile.targets.{target}",
+                "use claude-code or opencode for native permission enforcement when available",
+            )
+        if has_hooks and not backend.capabilities.hooks:
+            diagnostics.warning(
+                "AMF124",
+                f"hooks were compiled as soft instructions because backend {target} does not support native hooks",
+                f"compile.targets.{target}",
+                "use claude-code or opencode for native hook support when available",
+            )
 
 
 def _has_fragment_outputs(files: List[GeneratedFile]) -> bool:

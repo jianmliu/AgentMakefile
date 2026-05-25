@@ -67,11 +67,17 @@ def _normalize_targets(
     skills: Dict[str, IRSkill],
     diagnostics: Diagnostics,
 ) -> List[IRTarget]:
-    targets = []
+    composed_targets: Dict[str, TargetSpec] = {}
     for name in sorted(source.targets):
         target = _compose_target(name, source.targets, diagnostics, set())
-        if target is None:
-            continue
+        if target is not None:
+            composed_targets[name] = target
+
+    _validate_target_dependencies(composed_targets, diagnostics)
+
+    targets = []
+    for name in sorted(composed_targets):
+        target = composed_targets[name]
         resolved_policies = []
         for policy_name in target.policies:
             policy = policies.get(policy_name)
@@ -116,6 +122,56 @@ def _normalize_targets(
             )
         )
     return targets
+
+
+def _validate_target_dependencies(targets: Dict[str, TargetSpec], diagnostics: Diagnostics) -> None:
+    for name in sorted(targets):
+        seen_deps: Set[str] = set()
+        for dep_name in targets[name].deps:
+            if dep_name in seen_deps:
+                continue
+            seen_deps.add(dep_name)
+            if dep_name not in targets:
+                diagnostics.error(
+                    "AMF122",
+                    f"target {name} depends on unknown target {dep_name}",
+                    f"targets.{name}.deps",
+                )
+
+    _validate_target_dependency_cycles(targets, diagnostics)
+
+
+def _validate_target_dependency_cycles(targets: Dict[str, TargetSpec], diagnostics: Diagnostics) -> None:
+    state: Dict[str, str] = {}
+    reported_cycles: Set[tuple[str, ...]] = set()
+
+    def visit(name: str, path: List[str]) -> None:
+        state[name] = "visiting"
+        path.append(name)
+        for dep_name in targets[name].deps:
+            if dep_name not in targets:
+                continue
+            dep_state = state.get(dep_name)
+            if dep_state == "visiting":
+                cycle = path[path.index(dep_name) :] + [dep_name]
+                cycle_key = tuple(cycle)
+                if cycle_key not in reported_cycles:
+                    reported_cycles.add(cycle_key)
+                    diagnostics.error(
+                        "AMF123",
+                        f"circular target dependency: {' -> '.join(cycle)}",
+                        f"targets.{cycle[0]}.deps",
+                    )
+                continue
+            if dep_state == "visited":
+                continue
+            visit(dep_name, path)
+        path.pop()
+        state[name] = "visited"
+
+    for name in sorted(targets):
+        if name not in state:
+            visit(name, [])
 
 
 def _compose_target(

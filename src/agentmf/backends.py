@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from agentmf.models import AgentRuleIR, IRPolicy, IRSkill, IRTarget
 
@@ -36,6 +37,7 @@ class Backend:
 
 class ClaudeMarkdownBackend(Backend):
     name = "claude-md"
+    capabilities = BackendCapabilities(markdown=True, permissions="soft")
 
     def emit(self, ir: AgentRuleIR) -> List[GeneratedFile]:
         artifact = ir.artifacts.get(self.name)
@@ -46,6 +48,7 @@ class ClaudeMarkdownBackend(Backend):
 
 class AgentsMarkdownBackend(Backend):
     name = "agents-md"
+    capabilities = BackendCapabilities(markdown=True, permissions="soft")
 
     def emit(self, ir: AgentRuleIR) -> List[GeneratedFile]:
         artifact = ir.artifacts.get(self.name)
@@ -56,6 +59,7 @@ class AgentsMarkdownBackend(Backend):
 
 class CursorRuleBackend(Backend):
     name = "cursor-rule"
+    capabilities = BackendCapabilities(markdown=True, permissions="soft")
 
     def emit(self, ir: AgentRuleIR) -> List[GeneratedFile]:
         artifact = ir.artifacts.get(self.name)
@@ -63,6 +67,38 @@ class CursorRuleBackend(Backend):
         frontmatter = artifact.frontmatter if artifact else {}
         content = render_cursor_rule(ir, frontmatter)
         return [GeneratedFile(path=path, content=content, backend=self.name, managed_block=False)]
+
+
+class ClaudeSkillBackend(Backend):
+    name = "claude-skill"
+    capabilities = BackendCapabilities(markdown=True, skills=True, permissions="soft")
+
+    def emit(self, ir: AgentRuleIR) -> List[GeneratedFile]:
+        return [
+            GeneratedFile(
+                path=skill_output_path(".claude/skills", skill),
+                content=render_skill_markdown(skill, ir),
+                backend=self.name,
+                managed_block=False,
+            )
+            for skill in _unique_skills(ir.skills)
+        ]
+
+
+class CodexSkillBackend(Backend):
+    name = "codex-skill"
+    capabilities = BackendCapabilities(markdown=True, skills=True, permissions="soft")
+
+    def emit(self, ir: AgentRuleIR) -> List[GeneratedFile]:
+        return [
+            GeneratedFile(
+                path=skill_output_path(".codex/skills", skill),
+                content=render_skill_markdown(skill, ir),
+                backend=self.name,
+                managed_block=False,
+            )
+            for skill in _unique_skills(ir.skills)
+        ]
 
 
 class ClaudeCodeBackend(Backend):
@@ -103,6 +139,8 @@ class OpenCodeBackend(Backend):
 
 
 class TargetFragmentBackend(Backend):
+    capabilities = BackendCapabilities(markdown=True, permissions="soft")
+
     def __init__(self, name: str, fragment_dir: str, title_suffix: str) -> None:
         self.name = name
         self.fragment_dir = fragment_dir
@@ -138,6 +176,8 @@ SUPPORTED_BACKENDS: Dict[str, Backend] = {
     "claude-md": ClaudeMarkdownBackend(),
     "agents-md": AgentsMarkdownBackend(),
     "cursor-rule": CursorRuleBackend(),
+    "claude-skill": ClaudeSkillBackend(),
+    "codex-skill": CodexSkillBackend(),
     "claude-code": ClaudeCodeBackend(),
     "opencode": OpenCodeBackend(),
     "agents-fragments": TargetFragmentBackend("agents-fragments", "agents", "Generic Coding Agents"),
@@ -177,6 +217,39 @@ def render_cursor_rule(ir: AgentRuleIR, frontmatter: Dict[str, Any]) -> str:
         lines.append(f"{key}: {rendered}")
     lines.extend(["---", "", render_markdown(ir, "Cursor")])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_skill_markdown(skill: IRSkill, ir: Optional[AgentRuleIR] = None) -> str:
+    description = skill.description or f"AgentMakefile skill {skill.qualified_name}."
+    lines = [
+        "---",
+        f"name: {skill.qualified_name}",
+        f"description: {description}",
+        "---",
+        "",
+        f"# {skill.qualified_name}",
+        "",
+        "## Overview",
+        "",
+        description,
+        "",
+    ]
+    _append_skill_mapping(lines, "When To Use", skill.match)
+    _append_skill_list(lines, "Guards", skill.guards)
+    _append_skill_list(lines, "Procedure", skill.steps)
+    _append_skill_list(lines, "Output Requirements", skill.output_format)
+    if ir is not None:
+        _append_permission_section(lines, ir)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def skill_output_path(base_dir: str, skill: IRSkill) -> str:
+    return f"{base_dir.rstrip('/')}/{skill_slug(skill.qualified_name)}/SKILL.md"
+
+
+def skill_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "skill"
 
 
 def _claude_settings(ir: AgentRuleIR, hook_files: List[GeneratedFile]) -> Dict[str, Any]:
@@ -410,6 +483,13 @@ def _skills_for_targets(targets: List[IRTarget]) -> List[IRSkill]:
     return skills
 
 
+def _unique_skills(skills: List[IRSkill]) -> List[IRSkill]:
+    unique: Dict[str, IRSkill] = {}
+    for skill in skills:
+        unique.setdefault(skill.qualified_name, skill)
+    return [unique[name] for name in sorted(unique)]
+
+
 def _fragment_file_name(target_name: str) -> str:
     return "".join(character if character.isalnum() or character in "._-" else "_" for character in target_name)
 
@@ -474,15 +554,20 @@ def _append_permission_section(lines: List[str], ir: AgentRuleIR) -> None:
     if not ir.permission_defaults and not ir.permissions:
         return
     lines.extend(["## Permission Guidance", ""])
+    lines.extend(["These permissions are soft instructions unless the selected backend supports native enforcement.", ""])
     if ir.permission_defaults:
         lines.extend(["### Defaults", ""])
+        lines.extend(["| Tool | Action |", "| --- | --- |"])
         for tool in sorted(ir.permission_defaults):
-            lines.append(f"- `{tool}`: {ir.permission_defaults[tool]}")
+            lines.append(f"| {_table_cell(tool)} | {_table_cell(ir.permission_defaults[tool])} |")
         lines.append("")
     if ir.permissions:
         lines.extend(["### Rules", ""])
+        lines.extend(["| Tool | Pattern | Action |", "| --- | --- | --- |"])
         for permission in ir.permissions:
-            lines.append(f"- `{permission.tool}` `{permission.pattern}`: {permission.action}")
+            lines.append(
+                f"| {_table_cell(permission.tool)} | {_table_cell(permission.pattern)} | {_table_cell(permission.action)} |"
+            )
         lines.append("")
 
 
@@ -504,9 +589,31 @@ def _append_mapping(lines: List[str], title: str, mapping: Dict[str, Any]) -> No
     lines.append("")
 
 
+def _append_skill_list(lines: List[str], title: str, items: List[Any]) -> None:
+    if not items:
+        return
+    lines.extend([f"## {title}", ""])
+    for item in items:
+        lines.append(f"- {_format_value(item)}")
+    lines.append("")
+
+
+def _append_skill_mapping(lines: List[str], title: str, mapping: Dict[str, Any]) -> None:
+    if not mapping:
+        return
+    lines.extend([f"## {title}", ""])
+    for key in sorted(mapping):
+        lines.append(f"- `{key}`: {_format_value(mapping[key])}")
+    lines.append("")
+
+
 def _format_value(value: Any) -> str:
     if isinstance(value, dict):
         return ", ".join(f"{key}={_format_value(value[key])}" for key in sorted(value))
     if isinstance(value, list):
         return ", ".join(_format_value(item) for item in value)
     return str(value)
+
+
+def _table_cell(value: Any) -> str:
+    return str(value).replace("|", "\\|")

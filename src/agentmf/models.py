@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 PermissionAction = Literal["allow", "ask", "deny"]
 
@@ -78,7 +78,7 @@ class SkillSpec(StrictModel):
 
 class TargetSpec(StrictModel):
     phony: bool = True
-    priority: int = 50
+    priority: StrictInt = Field(default=50, ge=0, le=100)
     description: Optional[str] = None
     inputs: InputSpec = Field(default_factory=InputSpec)
     match: Dict[str, Any] = Field(default_factory=dict)
