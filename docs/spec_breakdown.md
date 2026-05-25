@@ -635,14 +635,34 @@ These tasks should not block compiler milestones:
 Completed:
 
 - AMF-P0-001 trace output.
+- AMF-P0-002 generated file ownership tests.
 - AMF-P0-003 target metadata and dependency validation.
+- AMF-P0-004 CI.
+- AMF-P0-005 developer documentation.
 - AMF-P0-006 snapshot fixtures.
 - AMF-M1-001 backend capability warnings.
 - AMF-M1-002 shared skill rendering.
+- AMF-M1-003 `claude-skill` backend.
+- AMF-M1-004 `codex-skill` backend.
+- AMF-M1-005 soft permission tables.
 - AMF-M1-006 Karpathy default compile.
+- AMF-M2-000 Superpowers module coverage.
+- AMF-M2-001 namespaced includes.
+- AMF-M2-002 deterministic merge diagnostics.
+- AMF-M2-003 locked policy rules.
+- AMF-M2-004 target composition.
+- AMF-M2-005 local composition demo.
+- AMF-M2.5-001 target fragment backend.
+- AMF-M2.5-002 fragment manifest and hashes.
+- AMF-M2.5-003 fragment selection and link plan.
+- AMF-M3-001 permission conflict resolution.
+- AMF-M3-002 permission glob pattern validation.
+- AMF-M3-003 `claude-code` backend.
+- AMF-M3-004 `opencode` backend.
+- AMF-M3-005 unknown repo hard rails demo.
 
 Next:
 
-1. AMF-M1-003 `claude-skill` backend.
+1. No unreconciled implemented roadmap tasks remain in this breakdown.
 
-This order continues closing the MVP 1 skill compiler tasks that are already represented in code and tests.
+This order has reconciled the implemented compiler roadmap tasks currently listed in this breakdown.

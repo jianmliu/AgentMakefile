@@ -845,6 +845,14 @@ def test_target_composition_preserves_explicit_empty_overrides() -> None:
     assert child.fallback == {}
 
 
+def test_target_composition_fixture_matches_agents_md_snapshot() -> None:
+    result = compile_agentmakefile(TARGET_COMPOSITION_FIXTURE, targets=["agents-md"])
+
+    assert result.ok, result.diagnostics.format()
+    assert [file.path for file in result.files] == ["AGENTS.md"]
+    assert_matches_snapshot(result.files[0].content, "target-composition.agents.md")
+
+
 def test_target_composition_reports_circular_extends(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -1156,6 +1164,62 @@ permissions:
     ]
 
 
+def test_empty_permission_glob_pattern_emits_stable_diagnostic(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+permissions:
+  bash:
+    "": deny
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert not result.ok
+    assert [
+        (item.code, item.message, item.location, item.hint)
+        for item in result.diagnostics.items
+        if item.code == "AMF119"
+    ] == [
+        (
+            "AMF119",
+            "invalid permission glob pattern: ",
+            "permissions.bash.",
+            "use a non-empty glob pattern",
+        )
+    ]
+
+
+def test_empty_permission_tool_name_emits_stable_diagnostic(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+permissions:
+  "":
+    "*": deny
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert not result.ok
+    assert [
+        (item.code, item.message, item.location, item.hint)
+        for item in result.diagnostics.items
+        if item.code == "AMF120"
+    ] == [
+        (
+            "AMF120",
+            "invalid permission tool name: ",
+            "permissions.",
+            "use a non-empty tool name without whitespace",
+        )
+    ]
+
+
 def test_parse_preserve_future_sections(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -1443,7 +1507,7 @@ def test_compile_claude_skill_fixtures_are_supported() -> None:
 
     assert karpathy.ok, karpathy.diagnostics.format()
     assert [file.path for file in karpathy.files] == [".claude/skills/karpathy-guidelines/SKILL.md"]
-    assert "name: karpathy-guidelines" in karpathy.files[0].content
+    assert_matches_snapshot(karpathy.files[0].content, "karpathy.claude-skill.md")
     assert superpowers.ok, superpowers.diagnostics.format()
     assert ".claude/skills/superpowers-systematic-debugging/SKILL.md" in [
         file.path for file in superpowers.files
@@ -1502,7 +1566,7 @@ def test_compile_codex_skill_fixtures_are_supported() -> None:
 
     assert karpathy.ok, karpathy.diagnostics.format()
     assert [file.path for file in karpathy.files] == [".codex/skills/karpathy-guidelines/SKILL.md"]
-    assert "name: karpathy-guidelines" in karpathy.files[0].content
+    assert_matches_snapshot(karpathy.files[0].content, "karpathy.codex-skill.md")
     assert superpowers.ok, superpowers.diagnostics.format()
     assert ".codex/skills/superpowers-systematic-debugging/SKILL.md" in [
         file.path for file in superpowers.files
@@ -1670,6 +1734,7 @@ targets:
     ]
     manifest_file = next(file for file in result.files if file.path == ".agentmf/fragments/manifest.json")
     manifest = json.loads(manifest_file.content)
+    assert_matches_snapshot(manifest_file.content, "fragment-manifest.agents.json")
     assert manifest["version"] == 1
     assert manifest["compiler_version"] == "0.1.0"
     assert [entry["path"] for entry in manifest["fragments"]] == [
@@ -1903,6 +1968,7 @@ targets:
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert exit_code == 0
+    assert_matches_snapshot(captured.out, "link-plan.select.json")
     assert payload["ok"] is True
     assert payload["link_plan"]["target_closure"] == ["base.task", "review.task"]
     assert payload["link_plan"]["fragments"] == [

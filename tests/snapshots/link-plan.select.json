@@ -1,0 +1,34 @@
+{
+  "ok": true,
+  "link_plan": {
+    "version": 1,
+    "backend": "agents-fragments",
+    "selection": {
+      "mode": "explicit_target",
+      "request": null,
+      "targets": [
+        "review.task"
+      ]
+    },
+    "selected_targets": [
+      "review.task"
+    ],
+    "target_closure": [
+      "base.task",
+      "review.task"
+    ],
+    "fragments": [
+      {
+        "backend": "agents-fragments",
+        "target": "base.task",
+        "path": ".agentmf/fragments/agents/base.task.md"
+      },
+      {
+        "backend": "agents-fragments",
+        "target": "review.task",
+        "path": ".agentmf/fragments/agents/review.task.md"
+      }
+    ]
+  },
+  "diagnostics": []
+}

@@ -1,0 +1,44 @@
+{
+  "compiler_version": "0.1.0",
+  "fragments": [
+    {
+      "backend": "agents-fragments",
+      "hash": "sha256:9db9f2cc1c4710892627848a21239c1c3c99540f0e640e4110ec1b69a54c6450",
+      "inputs": [
+        "AgentMakefile",
+        "shared.yml"
+      ],
+      "path": ".agentmf/fragments/agents/base.task.md",
+      "policies": [
+        "shared_policy"
+      ],
+      "skills": [],
+      "target": "base.task",
+      "target_closure": [
+        "base.task"
+      ]
+    },
+    {
+      "backend": "agents-fragments",
+      "hash": "sha256:63c70118e9438f167044f9e83bd8ccaf191d96f341c0ad358cf15c2feb392fed",
+      "inputs": [
+        "AgentMakefile",
+        "shared.yml"
+      ],
+      "path": ".agentmf/fragments/agents/review.task.md",
+      "policies": [
+        "shared_policy",
+        "review_policy"
+      ],
+      "skills": [
+        "superpowers:review-skill"
+      ],
+      "target": "review.task",
+      "target_closure": [
+        "base.task",
+        "review.task"
+      ]
+    }
+  ],
+  "version": 1
+}
