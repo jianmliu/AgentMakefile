@@ -1,0 +1,21 @@
+version: "0.1"
+
+include:
+  - path: ../../modules/superpowers/AgentMakefile
+
+metadata:
+  name: superpowers-methodology-demo
+  description: Demo that composes the reusable Superpowers methodology module.
+
+compile:
+  targets:
+    - claude-md
+    - agents-md
+    - cursor-rule
+
+artifacts:
+  cursor-rule:
+    path: .cursor/rules/superpowers-methodology.mdc
+    frontmatter:
+      description: Superpowers methodology rules.
+      alwaysApply: true

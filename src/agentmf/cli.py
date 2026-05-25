@@ -57,16 +57,20 @@ def _compile(args: argparse.Namespace) -> int:
         all_backends=args.all_backends,
         write=args.write,
         force=args.force,
+        trace=args.trace,
     )
     if args.format == "json":
+        payload = {
+            "ok": result.ok,
+            "files": [file.path for file in result.files],
+            "wrote": [str(path) for path in result.wrote],
+            "diagnostics": result.diagnostics.to_list(),
+        }
+        if args.trace:
+            payload["trace"] = [event.to_dict() for event in result.trace]
         print(
             json.dumps(
-                {
-                    "ok": result.ok,
-                    "files": [file.path for file in result.files],
-                    "wrote": [str(path) for path in result.wrote],
-                    "diagnostics": result.diagnostics.to_list(),
-                },
+                payload,
                 indent=2,
             )
         )
@@ -81,6 +85,10 @@ def _compile(args: argparse.Namespace) -> int:
                 print(f"  {file.path}")
             if not args.write:
                 print("\nRun with --write to write files.")
+        if args.trace:
+            print("\nTrace:")
+            for event in result.trace:
+                print(f"  {event.format()}")
     return 1 if not result.ok else 0
 
 

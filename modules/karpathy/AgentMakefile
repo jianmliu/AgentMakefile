@@ -1,0 +1,161 @@
+# AgentMakefile module: Karpathy-style coding guidelines
+version: 0.1
+
+metadata:
+  name: karpathy-coding-guidelines
+  description: Makefile-style agent rules to reduce common LLM coding mistakes.
+  source_style: karpathy-inspired
+  default_apply: true
+  module_type: rule-pack
+
+policies:
+  think_before_coding:
+    description: Do not assume or hide uncertainty. Surface assumptions, ambiguity, and tradeoffs before coding.
+    applies_to:
+      - code.write
+      - code.review
+      - code.debug
+      - code.refactor
+      - architecture.discuss
+    guards:
+      - state_assumptions_explicitly
+      - ask_when_uncertain
+      - present_multiple_interpretations_when_ambiguous
+      - identify_simpler_options
+      - push_back_when_request_is_overcomplicated
+
+  simplicity_first:
+    description: Prefer the minimum code that solves the actual problem.
+    applies_to:
+      - code.write
+      - code.refactor
+      - code.fix_bug
+    guards:
+      - avoid_unrequested_features
+      - avoid_speculative_abstractions
+      - avoid_single_use_abstractions
+      - prefer_clear_code_over_clever_code
+      - remove_unnecessary_complexity
+
+  surgical_changes:
+    description: Touch only what the task requires.
+    applies_to:
+      - code.edit
+      - code.fix_bug
+      - code.refactor
+      - code.review
+    guards:
+      - avoid_drive_by_refactors
+      - preserve_existing_style
+      - do_not_rewrite_unrelated_code
+      - do_not_delete_dead_code_unless_asked
+      - ensure_every_changed_line_traces_to_user_request
+
+  goal_driven_execution:
+    description: Convert coding work into verifiable goals and close the loop with testing or explicit verification.
+    applies_to:
+      - code.write
+      - code.fix_bug
+      - code.refactor
+      - code.review
+    steps:
+      - define_success_criteria
+      - identify_verification_method
+      - implement_minimal_change
+      - run_tests_or_explain_why_not
+      - summarize_result_against_success_criteria
+
+targets:
+  code.task:
+    phony: true
+    priority: 70
+    match:
+      user_intent:
+        - write code
+        - fix bug
+        - debug code
+        - refactor code
+        - review code
+        - discuss architecture
+        - write tests
+    policies:
+      - think_before_coding
+      - simplicity_first
+      - surgical_changes
+      - goal_driven_execution
+    steps:
+      - action: clarify_task_if_needed
+      - action: state_assumptions_and_success_criteria
+      - action: inspect_relevant_context
+      - action: make_minimal_change_or_recommendation
+      - action: verify_or_explain_verification_gap
+      - action: summarize_changes_and_risks
+    output_format:
+      - assumptions_or_clarifications
+      - plan_or_success_criteria
+      - minimal_solution
+      - verification_result
+      - changed_files_if_applicable
+
+  code.quick_fix:
+    phony: true
+    priority: 80
+    match:
+      user_intent:
+        - typo fix
+        - one line fix
+        - small obvious fix
+    policies:
+      - surgical_changes
+      - simplicity_first
+    guards:
+      - skip_full_rigor_for_trivial_tasks
+      - do_not_over_explain
+      - make_smallest_safe_change
+    output_format:
+      - concise_fix
+      - verification_if_relevant
+
+permissions:
+  bash:
+    "git status": allow
+    "git diff*": allow
+    "npm test": ask
+    "npm run test*": ask
+    "npm install*": ask
+    "pnpm install*": ask
+    "yarn install*": ask
+    "rm -rf *": deny
+    "*": ask
+
+  file_write:
+    "src/**": allow
+    "tests/**": allow
+    "package.json": ask
+    "package-lock.json": ask
+    ".env": deny
+    "**/*secret*": deny
+
+validation:
+  code.task:
+    must_include_when_nontrivial:
+      - assumptions_or_clarifications
+      - success_criteria
+      - verification_result
+    must_not_include:
+      - unrelated_refactors
+      - unrequested_features
+      - silent_assumptions
+      - speculative_abstractions
+
+compiler_hints:
+  markdown:
+    title: Karpathy-Inspired Coding Guidelines
+    include_tradeoff_note: true
+    tradeoff_note: These rules bias toward caution over speed. For trivial tasks, use judgment and avoid unnecessary ceremony.
+
+  skill:
+    trigger: Use this skill whenever writing, reviewing, debugging, refactoring, testing, or discussing code.
+
+  cursor:
+    alwaysApply: true

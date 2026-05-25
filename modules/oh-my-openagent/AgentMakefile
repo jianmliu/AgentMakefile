@@ -1,0 +1,278 @@
+# AgentMakefile module: Oh My OpenAgent orchestration framework
+version: 0.1
+
+metadata:
+  name: oh-my-openagent-framework
+  description: Reusable rules for multi-model agent orchestration inspired by Oh My OpenAgent.
+  module_type: orchestration-framework
+  source_repo: code-yeongyu/oh-my-openagent
+  source_url: https://github.com/code-yeongyu/oh-my-openagent
+
+policies:
+  route_by_intent:
+    description: Classify the user's real intent before choosing an agent, category, or execution mode.
+    steps:
+      - identify_user_goal
+      - classify_task_category
+      - choose_orchestrator_or_specialist
+      - state_routing_decision
+    output_format:
+      - intent
+      - selected_agent_or_category
+      - routing_reason
+
+  orchestrate_before_parallel_work:
+    description: Use a lead orchestrator for complex work and delegate scoped tasks to specialists.
+    guards:
+      - do_not_bundle_multiple_independent_goals_into_one_deep_task
+      - keep_delegated_tasks_single_goal_single_deliverable
+      - collect_results_before_final_claims
+
+  plan_then_execute:
+    description: Use interview-style planning for complex or ambiguous work, then execute through a todo-oriented orchestrator.
+    steps:
+      - clarify_scope
+      - produce_plan
+      - review_plan_for_gaps
+      - execute_tasks_systematically
+      - verify_completion_independently
+
+  match_model_to_work:
+    description: Choose model families by work style rather than raw capability alone.
+    guards:
+      - use_claude_like_models_for_nested_instruction_following
+      - use_gpt_like_models_for_deep_autonomous_reasoning
+      - use_gemini_like_models_for_visual_and_frontend_work
+      - use_fast_models_for_quick_or_retrieval_tasks
+
+  use_read_only_consultants:
+    description: Keep architecture review, documentation lookup, and code exploration agents read-only unless explicitly escalated.
+    guards:
+      - oracle_is_read_only
+      - librarian_is_read_only
+      - explore_is_read_only
+      - do_not_delegate_from_read_only_consultants
+
+  verify_orchestrated_results:
+    description: Every orchestrated or background result must be independently checked before being treated as complete.
+    guards:
+      - retrieve_background_outputs_before_using_them
+      - verify_claims_against_files_or_tests
+      - report_incomplete_or_conflicting_results
+
+skills:
+  ultrawork:
+    namespace: omo
+    description: Full automatic mode for exploring, planning, implementing, and verifying a development task.
+    match:
+      user_intent:
+        - ultrawork
+        - just do it
+        - autonomous implementation
+    steps:
+      - inspect_codebase
+      - research_patterns
+      - plan_work
+      - delegate_or_execute
+      - verify_with_diagnostics
+
+  prometheus-planning:
+    namespace: omo
+    description: Interview-style strategic planning for complex work.
+    match:
+      user_intent:
+        - plan
+        - prometheus
+        - clarify scope
+    steps:
+      - ask_clarifying_questions
+      - identify_ambiguities
+      - build_detailed_plan
+      - handoff_to_execution
+
+  atlas-execution:
+    namespace: omo
+    description: Todo-oriented execution and coordination of planned tasks.
+    match:
+      user_intent:
+        - start work
+        - execute plan
+        - coordinate tasks
+    steps:
+      - load_plan
+      - split_todos
+      - assign_specialists
+      - accumulate_learnings
+      - verify_completion
+
+  oracle-consultation:
+    namespace: omo
+    description: Read-only architecture, debugging, and review consultation.
+    match:
+      user_intent:
+        - architecture review
+        - design decision
+        - debug consultation
+    guards:
+      - read_only
+      - do_not_write
+      - do_not_delegate
+
+  librarian-research:
+    namespace: omo
+    description: Multi-repo and documentation research with evidence-based answers.
+    match:
+      user_intent:
+        - documentation lookup
+        - OSS example
+        - multi repo analysis
+    guards:
+      - read_only
+      - cite_evidence
+      - do_not_write
+
+  explore-codebase:
+    namespace: omo
+    description: Fast codebase exploration, contextual grep, and pattern discovery.
+    match:
+      user_intent:
+        - explore codebase
+        - find pattern
+        - grep
+    guards:
+      - read_only
+      - do_not_edit
+
+  category-routing:
+    namespace: omo
+    description: Route delegated work to category presets such as visual-engineering, ultrabrain, deep, quick, or writing.
+    match:
+      user_intent:
+        - choose category
+        - delegate specialist
+        - model matching
+    steps:
+      - classify_work_type
+      - choose_category
+      - choose_model_family
+      - assign_single_goal
+
+  team-mode:
+    namespace: omo
+    description: Coordinate a bounded multi-agent team with lead/member roles, shared tasks, and optional worktrees.
+    match:
+      user_intent:
+        - team mode
+        - multi-agent team
+        - parallel workers
+    guards:
+      - cap_team_size
+      - use_shared_task_list
+      - avoid_file_conflicts
+      - verify_each_member_result
+
+targets:
+  omo.default:
+    phony: true
+    priority: 70
+    description: Default Oh My OpenAgent-style orchestration workflow.
+    policies:
+      - route_by_intent
+      - match_model_to_work
+      - verify_orchestrated_results
+    skills:
+      - omo:category-routing
+      - omo:explore-codebase
+      - omo:oracle-consultation
+    output_format:
+      - routing_decision
+      - selected_specialist
+      - verification_result
+
+  omo.ultrawork:
+    phony: true
+    priority: 95
+    description: Autonomous end-to-end execution for a development task.
+    policies:
+      - route_by_intent
+      - orchestrate_before_parallel_work
+      - verify_orchestrated_results
+    skills:
+      - omo:ultrawork
+      - omo:category-routing
+    output_format:
+      - plan
+      - delegated_work
+      - implementation_summary
+      - verification_result
+
+  omo.plan:
+    phony: true
+    priority: 90
+    description: Prometheus-style planning followed by Atlas-style execution readiness.
+    policies:
+      - plan_then_execute
+      - use_read_only_consultants
+    skills:
+      - omo:prometheus-planning
+      - omo:oracle-consultation
+      - omo:atlas-execution
+    output_format:
+      - clarified_scope
+      - plan
+      - execution_handoff
+
+  omo.research:
+    phony: true
+    priority: 80
+    description: Read-only research, codebase exploration, and architecture consultation.
+    policies:
+      - use_read_only_consultants
+      - verify_orchestrated_results
+    skills:
+      - omo:librarian-research
+      - omo:explore-codebase
+      - omo:oracle-consultation
+    output_format:
+      - evidence
+      - findings
+      - recommendations
+
+  omo.team_mode:
+    phony: true
+    priority: 85
+    description: Bounded team-mode parallel execution with a lead and specialist members.
+    policies:
+      - orchestrate_before_parallel_work
+      - verify_orchestrated_results
+    skills:
+      - omo:team-mode
+      - omo:atlas-execution
+    output_format:
+      - team_spec
+      - task_assignments
+      - verification_result
+
+permissions:
+  bash:
+    "opencode models*": allow
+    "opencode auth list*": allow
+    "bunx oh-my-opencode doctor*": ask
+    "bunx oh-my-opencode*": ask
+    "opencode auth login*": ask
+    "rm -rf *": deny
+    "*": ask
+
+  file_write:
+    "oh-my-openagent.json": ask
+    "oh-my-openagent.jsonc": ask
+    "oh-my-opencode.json": ask
+    "oh-my-opencode.jsonc": ask
+    ".env": deny
+    "**/*secret*": deny
+
+compiler_hints:
+  markdown:
+    title: Oh My OpenAgent Orchestration Rules
+  cursor:
+    alwaysApply: false

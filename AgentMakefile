@@ -1,0 +1,332 @@
+version: "0.1"
+
+include:
+  - path: modules/superpowers/AgentMakefile
+
+metadata:
+  name: agentmakefile-self-hosting
+  description: AgentMakefile rules for developing AgentMakefile with its own compiler and Superpowers-style workflows.
+  methodology: superpowers-inspired
+  self_hosting: true
+
+compile:
+  targets:
+    - claude-md
+    - agents-md
+    - cursor-rule
+
+artifacts:
+  claude-md:
+    path: CLAUDE.md
+  agents-md:
+    path: AGENTS.md
+  cursor-rule:
+    path: .cursor/rules/agentmakefile-self-hosting.mdc
+    frontmatter:
+      description: Self-hosting AgentMakefile development rules.
+      alwaysApply: true
+
+policies:
+  use_relevant_skills:
+    description: Before acting, identify and use the most relevant project or Superpowers-style skill.
+    guards:
+      - inspect_task_for_skill_match
+      - state_selected_skill_or_reason_none_applies
+      - prefer_specialized_workflow_over_ad_hoc_reasoning
+
+  spec_driven_development:
+    description: Treat docs/agentsfile_design_spec.md as the source of truth for behavior and scope.
+    guards:
+      - map_changes_to_design_spec_sections
+      - update_docs_when_behavior_changes
+      - preserve_staged_mvp_boundaries_unless_explicitly_changed
+
+  plan_before_multi_step_work:
+    description: For non-trivial work, break the request into small, ordered, testable tasks before implementation.
+    steps:
+      - define_goal_and_success_criteria
+      - inspect_relevant_context
+      - identify_files_to_create_or_modify
+      - write_bite_sized_tasks_with_verification
+      - execute_tasks_in_order
+
+  test_first_for_behavior:
+    description: Use red-green-refactor for behavior changes, bug fixes, and refactors.
+    guards:
+      - write_or_update_failing_test_before_production_change
+      - run_targeted_test_to_observe_failure
+      - implement_minimal_code_to_pass
+      - rerun_tests_before_claiming_success
+
+  verify_before_completion:
+    description: Do not claim completion without fresh verification evidence.
+    guards:
+      - identify_command_that_proves_the_claim
+      - run_the_full_command
+      - read_exit_code_and_output
+      - report_actual_result
+
+  self_hosting_loop:
+    description: Use AgentMakefile to improve AgentMakefile while keeping generated guidance reproducible.
+    steps:
+      - update_root_agentmakefile_when_project_workflows_change
+      - run_agentmf_validate_on_root_agentmakefile
+      - run_agentmf_compile_to_refresh_project_guidance_when_needed
+      - keep_generated_blocks_managed
+
+skills:
+  using-superpowers:
+    namespace: superpowers
+    description: Use at task start to select the relevant specialized workflow.
+    match:
+      user_intent:
+        - any development task
+        - choose workflow
+        - use superpowers
+    steps:
+      - inspect_available_project_and_installed_skills
+      - select_relevant_skill
+      - follow_skill_before_taking_action
+
+  writing-plans:
+    namespace: superpowers
+    description: Use when a spec or requirements require multi-step implementation.
+    match:
+      user_intent:
+        - plan
+        - break down spec
+        - multi-step feature
+    steps:
+      - map_files_and_responsibilities
+      - create_small_ordered_tasks
+      - include_test_and_verification_steps
+      - save_plan_under_docs_when_useful
+    output_format:
+      - goal
+      - architecture
+      - tasks
+      - verification
+
+  test-driven-development:
+    namespace: superpowers
+    description: Use for feature work, bug fixes, refactors, and behavior changes.
+    match:
+      user_intent:
+        - implement
+        - fix
+        - refactor
+        - behavior change
+    steps:
+      - write_failing_test
+      - run_test_and_confirm_failure
+      - implement_minimal_change
+      - run_test_and_confirm_pass
+      - refactor_while_green
+
+  systematic-debugging:
+    namespace: superpowers
+    description: Use for failing tests, unexpected compiler behavior, or regressions.
+    match:
+      user_intent:
+        - debug
+        - failing test
+        - regression
+        - unexpected behavior
+    steps:
+      - reproduce_failure
+      - inspect_recent_changes
+      - form_hypotheses
+      - test_hypotheses_one_at_a_time
+      - identify_root_cause
+      - add_regression_test
+      - implement_fix
+
+  verification-before-completion:
+    namespace: superpowers
+    description: Use before claiming work is complete.
+    match:
+      user_intent:
+        - complete task
+        - commit
+        - push
+        - final summary
+    steps:
+      - identify_verification_command
+      - run_verification_command
+      - inspect_output_and_exit_code
+      - summarize_evidence
+
+  receiving-code-review:
+    namespace: superpowers
+    description: Use when reviewing feedback or re-reviewing implementation quality.
+    match:
+      user_intent:
+        - review
+        - re-review
+        - address feedback
+    steps:
+      - read_feedback_completely
+      - evaluate_technical_correctness
+      - identify_actionable_findings
+      - implement_or_push_back_with_reasoning
+      - verify_changes
+
+targets:
+  project.default:
+    phony: true
+    priority: 70
+    description: Default workflow for developing AgentMakefile itself.
+    match:
+      user_intent:
+        - work on AgentMakefile
+        - implement feature
+        - update compiler
+        - update docs
+    policies:
+      - use_relevant_skills
+      - spec_driven_development
+      - verify_before_completion
+      - self_hosting_loop
+    skills:
+      - superpowers:using-superpowers
+      - superpowers:verification-before-completion
+    steps:
+      - action: inspect_design_spec_and_current_code
+      - action: define_success_criteria
+      - action: make_minimal_scoped_change
+      - action: run_tests_or_explain_gap
+      - action: update_self_hosting_guidance_if_workflow_changed
+    output_format:
+      - goal
+      - changed_files
+      - verification_result
+
+  spec.breakdown:
+    phony: true
+    priority: 80
+    description: Break the design spec into implementation tasks.
+    match:
+      user_intent:
+        - break down spec
+        - plan roadmap
+        - decompose design
+    policies:
+      - use_relevant_skills
+      - plan_before_multi_step_work
+      - spec_driven_development
+    skills:
+      - superpowers:writing-plans
+    steps:
+      - action: read_mvp_sections
+      - action: compare_spec_to_current_implementation
+      - action: write_ordered_backlog
+      - action: define_acceptance_criteria
+    output_format:
+      - current_status
+      - task_breakdown
+      - next_recommended_task
+
+  code.change:
+    phony: true
+    priority: 90
+    description: Implement compiler, CLI, backend, schema, or test changes.
+    match:
+      user_intent:
+        - implement code
+        - fix bug
+        - add backend
+        - change schema
+    policies:
+      - use_relevant_skills
+      - test_first_for_behavior
+      - spec_driven_development
+      - verify_before_completion
+    skills:
+      - superpowers:test-driven-development
+      - superpowers:systematic-debugging
+      - superpowers:verification-before-completion
+    steps:
+      - action: write_or_update_test_first_when_behavior_changes
+      - action: run_targeted_test
+      - action: implement_minimal_change
+      - action: run_full_test_suite
+      - action: update_docs_or_fixtures_if_needed
+    output_format:
+      - failing_test_if_applicable
+      - implementation_summary
+      - verification_result
+
+  review.task:
+    phony: true
+    priority: 85
+    description: Review code, docs, generated output, or spec consistency.
+    match:
+      user_intent:
+        - review
+        - re-review
+        - audit
+        - find findings
+    policies:
+      - use_relevant_skills
+      - spec_driven_development
+      - verify_before_completion
+    skills:
+      - superpowers:receiving-code-review
+      - superpowers:verification-before-completion
+    steps:
+      - action: inspect_relevant_files
+      - action: compare_behavior_to_spec
+      - action: report_findings_by_severity
+      - action: fix_requested_findings
+      - action: rerun_verification
+    output_format:
+      - findings
+      - fixes
+      - residual_risk
+
+permissions:
+  bash:
+    "git status*": allow
+    "git diff*": allow
+    "git log*": allow
+    "python3 -m pytest*": allow
+    "PYTHONPATH=src python3 -m pytest*": allow
+    "python3 -m compileall*": allow
+    "agentmf validate*": allow
+    "agentmf compile*": ask
+    "python3 -m pip install*": ask
+    "gh repo*": ask
+    "gh pr*": ask
+    "rm -rf *": deny
+    "*": ask
+
+  file_write:
+    "src/**": allow
+    "tests/**": allow
+    "docs/**": allow
+    "demos/**": allow
+    "AgentMakefile": allow
+    "README.md": allow
+    "AGENTS.md": allow
+    "CLAUDE.md": allow
+    ".cursor/rules/**": allow
+    ".env": deny
+    "**/*secret*": deny
+
+validation:
+  project.default:
+    must_include_when_nontrivial:
+      - goal
+      - verification_result
+      - changed_files
+    must_not_include:
+      - unverified_completion_claims
+      - unrelated_refactors
+      - hidden_spec_changes
+
+compiler_hints:
+  markdown:
+    title: AgentMakefile Self-Hosting Development Rules
+    include_skill_selection_table: true
+  cursor:
+    alwaysApply: true

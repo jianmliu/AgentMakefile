@@ -1,0 +1,21 @@
+version: "0.1"
+
+include:
+  - path: ../../../modules/oh-my-openagent/AgentMakefile
+
+metadata:
+  name: oh-my-openagent-framework
+  description: Fixture that composes the reusable Oh My OpenAgent orchestration framework module.
+
+compile:
+  targets:
+    - claude-md
+    - agents-md
+    - cursor-rule
+
+artifacts:
+  cursor-rule:
+    path: .cursor/rules/oh-my-openagent-framework.mdc
+    frontmatter:
+      description: Oh My OpenAgent orchestration framework rules.
+      alwaysApply: false

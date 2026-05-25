@@ -1,35 +1,136 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
 from agentmf.compiler import BEGIN_MARKER, compile_agentmakefile
+from agentmf.cli import main
 from agentmf.ir import normalize
 from agentmf.loader import load_source, load_source_with_diagnostics
 from agentmf.diagnostics import Diagnostics
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
+MODULE_DIR = Path(__file__).parents[1] / "modules"
+DEMO_DIR = Path(__file__).parents[1] / "demos"
 KARPATHY_FIXTURE = FIXTURE_DIR / "karpathy" / "AgentMakefile"
 SUPERPOWERS_FIXTURE = FIXTURE_DIR / "superpowers_minimal" / "AgentMakefile"
+OH_MY_OPENAGENT_FIXTURE = FIXTURE_DIR / "oh_my_openagent" / "AgentMakefile"
 UNKNOWN_REPO_SECURITY_FIXTURE = FIXTURE_DIR / "unknown_repo_security" / "AgentMakefile"
-KARPATHY_DEMO = Path(__file__).parents[1] / "demos" / "karpathy" / "AgentMakefile"
+KARPATHY_DEMO = DEMO_DIR / "karpathy" / "AgentMakefile"
+SUPERPOWERS_DEMO = DEMO_DIR / "superpowers" / "AgentMakefile"
+OH_MY_OPENAGENT_DEMO = DEMO_DIR / "oh-my-openagent" / "AgentMakefile"
+KARPATHY_MODULE = MODULE_DIR / "karpathy" / "AgentMakefile"
+SUPERPOWERS_MODULE = MODULE_DIR / "superpowers" / "AgentMakefile"
+OH_MY_OPENAGENT_MODULE = MODULE_DIR / "oh-my-openagent" / "AgentMakefile"
+SUPERPOWERS_SKILLS = {
+    "brainstorming",
+    "dispatching-parallel-agents",
+    "executing-plans",
+    "finishing-a-development-branch",
+    "receiving-code-review",
+    "requesting-code-review",
+    "subagent-driven-development",
+    "systematic-debugging",
+    "test-driven-development",
+    "using-git-worktrees",
+    "using-superpowers",
+    "verification-before-completion",
+    "writing-plans",
+    "writing-skills",
+}
+
+SIMPLE_AGENTMAKEFILE = """\
+version: "0.1"
+
+metadata:
+  name: superpowers-methodology
+  description: A minimal standalone AgentMakefile used by temp-file tests.
+
+compile:
+  targets:
+    - claude-md
+    - agents-md
+    - cursor-rule
+
+artifacts:
+  cursor-rule:
+    path: .cursor/rules/agentmakefile-generated.mdc
+    frontmatter:
+      description: Superpowers methodology bootstrap rules.
+      alwaysApply: true
+
+policies:
+  always_use_relevant_skill:
+    description: Before acting, identify whether a specialized skill applies and use it.
+    guards:
+      - inspect_task_for_skill_match
+
+skills:
+  systematic-debugging:
+    namespace: superpowers
+    description: Debug methodically.
+    steps:
+      - reproduce_failure
+
+targets:
+  code.task:
+    phony: true
+    priority: 70
+    match:
+      user_intent:
+        - write code
+        - fix bug
+    policies:
+      - always_use_relevant_skill
+    skills:
+      - superpowers:systematic-debugging
+    steps:
+      - action: inspect_relevant_context
+      - action: verify_or_explain_gap
+    output_format:
+      - verification_result
+
+permissions:
+  bash:
+    "git status": allow
+    "npm install*": ask
+"""
 
 
 def write_agentmakefile(tmp_path: Path, content: Optional[str] = None, name: str = "AgentMakefile") -> Path:
     path = tmp_path / name
     if content is None:
-        content = SUPERPOWERS_FIXTURE.read_text()
+        content = SIMPLE_AGENTMAKEFILE
     path.write_text(content)
     return path
 
 
 def test_validate_valid_files() -> None:
-    for path in [KARPATHY_FIXTURE, SUPERPOWERS_FIXTURE, UNKNOWN_REPO_SECURITY_FIXTURE, KARPATHY_DEMO]:
+    for path in [
+        KARPATHY_MODULE,
+        SUPERPOWERS_MODULE,
+        OH_MY_OPENAGENT_MODULE,
+        KARPATHY_FIXTURE,
+        SUPERPOWERS_FIXTURE,
+        OH_MY_OPENAGENT_FIXTURE,
+        UNKNOWN_REPO_SECURITY_FIXTURE,
+        KARPATHY_DEMO,
+        SUPERPOWERS_DEMO,
+        OH_MY_OPENAGENT_DEMO,
+    ]:
         source, diagnostics = load_source_with_diagnostics(path)
 
         assert source is not None, path
         assert not diagnostics.has_errors, diagnostics.format()
+
+
+def test_superpowers_module_covers_installed_superpowers_skills() -> None:
+    source = load_source(SUPERPOWERS_MODULE)
+
+    assert set(source.skills) == SUPERPOWERS_SKILLS
+    assert {skill.namespace for skill in source.skills.values()} == {"superpowers"}
 
 
 def test_validate_numeric_version_is_normalized(tmp_path: Path) -> None:
@@ -94,6 +195,96 @@ targets:
 
     assert result.ok
     assert "included_policy" in result.files[0].content
+
+
+def test_include_as_prefixes_included_names_and_internal_references(tmp_path: Path) -> None:
+    (tmp_path / "framework.yml").write_text(
+        """\
+version: "0.1"
+policies:
+  base_policy:
+    guards:
+      - base_guard
+skills:
+  helper_skill:
+    description: Included helper skill.
+targets:
+  helper.task:
+    policies:
+      - base_policy
+    skills:
+      - helper_skill
+  code.task:
+    policies:
+      - base_policy
+    skills:
+      - helper_skill
+    deps:
+      - helper.task
+"""
+    )
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+include:
+  - path: framework.yml
+    as: framework
+policies:
+  local_policy:
+    guards:
+      - local_guard
+targets:
+  local.code:
+    extends: framework.code.task
+    add_policies:
+      - local_policy
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert result.ok, result.diagnostics.format()
+    content = result.files[0].content
+    assert "### framework.base_policy" in content
+    assert "### framework.helper_skill" in content
+    assert "### framework.code.task" in content
+    assert "- framework.base_policy" in content
+    assert "- framework.helper_skill" in content
+    assert "- framework.helper.task" in content
+    assert "### local.code" in content
+    assert "- local_policy" in content
+
+
+def test_include_as_allows_local_target_to_extend_namespaced_karpathy_module(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        f"""\
+version: "0.1"
+include:
+  - path: {KARPATHY_MODULE}
+    as: karpathy
+policies:
+  local_policy:
+    guards:
+      - local_guard
+targets:
+  local.code.task:
+    extends: karpathy.code.task
+    add_policies:
+      - local_policy
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert result.ok, result.diagnostics.format()
+    content = result.files[0].content
+    assert "### karpathy.code.task" in content
+    assert "### local.code.task" in content
+    assert "- karpathy.think_before_coding" in content
+    assert "- karpathy.simplicity_first" in content
+    assert "- local_policy" in content
 
 
 def test_validate_package_include_disabled(tmp_path: Path) -> None:
@@ -222,6 +413,72 @@ def test_karpathy_demo_compiles_with_mvp0_targets() -> None:
     ]
 
 
+def test_framework_module_demos_compile_with_mvp0_targets() -> None:
+    for path, cursor_output in [
+        (SUPERPOWERS_DEMO, ".cursor/rules/superpowers-methodology.mdc"),
+        (OH_MY_OPENAGENT_DEMO, ".cursor/rules/oh-my-openagent-framework.mdc"),
+    ]:
+        result = compile_agentmakefile(path, targets=["claude-md", "agents-md", "cursor-rule"])
+
+        assert result.ok, result.diagnostics.format()
+        assert [file.path for file in result.files] == ["CLAUDE.md", "AGENTS.md", cursor_output]
+
+
+def test_compile_trace_records_phases() -> None:
+    result = compile_agentmakefile(KARPATHY_DEMO, targets=["agents-md"], trace=True)
+
+    assert result.ok, result.diagnostics.format()
+    assert [event.phase for event in result.trace] == [
+        "start",
+        "load_source",
+        "select_targets",
+        "normalize_ir",
+        "emit_backend",
+        "finish",
+    ]
+    assert result.trace[4].data["backend"] == "agents-md"
+    assert result.trace[4].data["files"] == ["AGENTS.md"]
+
+
+def test_cli_compile_trace_text(capsys) -> None:
+    exit_code = main(["compile", "--file", str(KARPATHY_DEMO), "--target", "agents-md", "--trace"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Trace:" in captured.out
+    assert "  start: compile started" in captured.out
+    assert "  load_source: source loaded" in captured.out
+    assert "  emit_backend: emitted backend agents-md" in captured.out
+
+
+def test_cli_compile_trace_json(capsys) -> None:
+    exit_code = main(
+        [
+            "compile",
+            "--file",
+            str(KARPATHY_DEMO),
+            "--target",
+            "agents-md",
+            "--trace",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert [event["phase"] for event in payload["trace"]] == [
+        "start",
+        "load_source",
+        "select_targets",
+        "normalize_ir",
+        "emit_backend",
+        "finish",
+    ]
+
+
 def test_managed_block_insert(tmp_path: Path) -> None:
     path = write_agentmakefile(tmp_path)
     out = tmp_path / "out"
@@ -249,3 +506,21 @@ def test_managed_block_update(tmp_path: Path) -> None:
     assert "footer" in updated
     assert "old" not in updated
     assert "code.task" in updated
+
+
+def test_write_preflight_prevents_partial_writes_when_later_artifact_is_blocked(tmp_path: Path) -> None:
+    path = write_agentmakefile(tmp_path)
+    out = tmp_path / "out"
+    agents = out / "AGENTS.md"
+    cursor = out / ".cursor/rules/agentmakefile-generated.mdc"
+    agents.parent.mkdir(parents=True)
+    cursor.parent.mkdir(parents=True)
+    agents.write_text(f"{BEGIN_MARKER}\nold agents\n<!-- END GENERATED BY agentmf -->\n")
+    cursor.write_text("human cursor rule\n")
+
+    result = compile_agentmakefile(path, out_dir=out, targets=["agents-md", "cursor-rule"], write=True)
+
+    assert not result.ok
+    assert any(item.code == "AMF110" for item in result.diagnostics.items)
+    assert agents.read_text() == f"{BEGIN_MARKER}\nold agents\n<!-- END GENERATED BY agentmf -->\n"
+    assert cursor.read_text() == "human cursor rule\n"

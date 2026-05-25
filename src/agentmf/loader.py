@@ -7,7 +7,7 @@ import yaml
 from pydantic import ValidationError
 
 from agentmf.diagnostics import Diagnostic, Diagnostics
-from agentmf.models import AgentMakefileSource, IncludeSpec, PermissionSpec
+from agentmf.models import AgentMakefileSource, IncludeSpec, PermissionSpec, SkillSpec, TargetSpec
 
 
 class AgentMakefileError(Exception):
@@ -58,6 +58,8 @@ def _load_source(path: Path, diagnostics: Diagnostics, stack: Set[Path]) -> Opti
         child_source = _load_source(child_path, diagnostics, stack)
         if child_source is None:
             continue
+        if isinstance(include, IncludeSpec) and include.as_:
+            child_source = _namespace_source(child_source, include.as_)
         merged = child_source if merged is None else _merge_sources(merged, child_source)
     stack.remove(resolved)
 
@@ -104,6 +106,84 @@ def _include_path(include: Union[str, IncludeSpec]) -> str:
         return include
     assert include.path is not None
     return include.path
+
+
+def _namespace_source(source: AgentMakefileSource, namespace: str) -> AgentMakefileSource:
+    policy_names = set(source.policies)
+    skill_references = _skill_references(source.skills)
+    target_names = set(source.targets)
+
+    data = source.model_dump()
+    data["policies"] = {
+        _namespace_name(namespace, name): policy.model_dump()
+        for name, policy in source.policies.items()
+    }
+    data["skills"] = {
+        _namespace_name(namespace, name): skill.model_copy(update={"namespace": None}).model_dump()
+        for name, skill in source.skills.items()
+    }
+    data["targets"] = {
+        _namespace_name(namespace, name): _namespace_target(
+            target,
+            namespace,
+            policy_names,
+            skill_references,
+            target_names,
+        ).model_dump()
+        for name, target in source.targets.items()
+    }
+    data["validation"] = {
+        _namespace_reference(name, namespace, target_names): value
+        for name, value in source.validation.items()
+    }
+    return AgentMakefileSource.model_validate(data)
+
+
+def _namespace_target(
+    target: TargetSpec,
+    namespace: str,
+    policy_names: Set[str],
+    skill_references: Set[str],
+    target_names: Set[str],
+) -> TargetSpec:
+    data = target.model_dump()
+    data["policies"] = [
+        _namespace_reference(name, namespace, policy_names)
+        for name in target.policies
+    ]
+    data["add_policies"] = [
+        _namespace_reference(name, namespace, policy_names)
+        for name in target.add_policies
+    ]
+    data["skills"] = [
+        _namespace_reference(name, namespace, skill_references)
+        for name in target.skills
+    ]
+    data["deps"] = [
+        _namespace_reference(name, namespace, target_names)
+        for name in target.deps
+    ]
+    if target.extends:
+        data["extends"] = _namespace_reference(target.extends, namespace, target_names)
+    return TargetSpec.model_validate(data)
+
+
+def _skill_references(skills: Dict[str, SkillSpec]) -> Set[str]:
+    references = set(skills)
+    for name, skill in skills.items():
+        if skill.namespace:
+            references.add(f"{skill.namespace}:{name}")
+    return references
+
+
+def _namespace_reference(name: str, namespace: str, local_names: Set[str]) -> str:
+    if name not in local_names:
+        return name
+    return _namespace_name(namespace, name)
+
+
+def _namespace_name(namespace: str, name: str) -> str:
+    return f"{namespace}.{name}"
 
 
 def _merge_sources(base: AgentMakefileSource, overlay: AgentMakefileSource) -> AgentMakefileSource:
