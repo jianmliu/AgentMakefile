@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import yaml
+
+from agentmf.backends import render_skill_markdown, skill_output_path
 from agentmf.compiler import BEGIN_MARKER, END_MARKER, compile_agentmakefile
 from agentmf.cli import main
 from agentmf.ir import normalize
@@ -14,8 +17,11 @@ from agentmf.selector import create_link_plan
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
+SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
+README = Path(__file__).parents[1] / "README.md"
 MODULE_DIR = Path(__file__).parents[1] / "modules"
 DEMO_DIR = Path(__file__).parents[1] / "demos"
+CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "test.yml"
 KARPATHY_FIXTURE = FIXTURE_DIR / "karpathy" / "AgentMakefile"
 SUPERPOWERS_FIXTURE = FIXTURE_DIR / "superpowers_minimal" / "AgentMakefile"
 OH_MY_OPENAGENT_FIXTURE = FIXTURE_DIR / "oh_my_openagent" / "AgentMakefile"
@@ -111,6 +117,158 @@ def write_agentmakefile(tmp_path: Path, content: Optional[str] = None, name: str
         content = SIMPLE_AGENTMAKEFILE
     path.write_text(content)
     return path
+
+
+def assert_matches_snapshot(content: str, name: str) -> None:
+    assert content == (SNAPSHOT_DIR / name).read_text()
+
+
+def test_github_actions_workflow_runs_supported_python_matrix() -> None:
+    assert CI_WORKFLOW.exists()
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text())
+
+    assert set(workflow["on"]) == {"push", "pull_request"}
+    assert workflow["permissions"] == {"contents": "read"}
+
+    job = workflow["jobs"]["test"]
+    assert job["runs-on"] == "ubuntu-latest"
+    assert job["strategy"]["fail-fast"] is False
+    assert job["strategy"]["matrix"]["python-version"] == ["3.9", "3.14"]
+
+    steps = job["steps"]
+    assert any(step.get("uses") == "actions/checkout@v6" for step in steps)
+    assert any(step.get("uses") == "actions/setup-python@v6" for step in steps)
+
+    run_commands = "\n".join(step.get("run", "") for step in steps)
+    assert 'python -m pip install -e ".[test]"' in run_commands
+    assert "PYTHONPATH=src python -m pytest -q" in run_commands
+    assert "python -m compileall -q src" in run_commands
+
+
+def test_readme_documents_quickstart_and_default_demo_path() -> None:
+    readme = README.read_text()
+
+    assert "## Quickstart" in readme
+    assert "python3 -m venv .venv" in readme
+    assert "python -m pip install -e ." in readme
+    assert 'python -m pip install -e ".[test]"' in readme
+    assert "PYTHONPATH=src python3 -m pytest -q" in readme
+    assert "python3 -m compileall -q src" in readme
+
+    assert "docs/spec_breakdown.md" in readme
+    assert "agentmf validate --file demos/karpathy/AgentMakefile" in readme
+    assert "agentmf compile --file demos/karpathy/AgentMakefile" in readme
+    assert ".claude/skills/karpathy-guidelines/SKILL.md" in readme
+    assert "claude-skill" in readme
+    assert "codex-skill" in readme
+
+
+def test_karpathy_demo_default_compile_emits_all_configured_outputs() -> None:
+    result = compile_agentmakefile(KARPATHY_DEMO)
+
+    assert result.ok, result.diagnostics.format()
+    assert [file.path for file in result.files] == [
+        "CLAUDE.md",
+        ".claude/skills/karpathy-guidelines/SKILL.md",
+        ".cursor/rules/karpathy-guidelines.mdc",
+        "AGENTS.md",
+        ".codex/skills/karpathy-guidelines/SKILL.md",
+    ]
+
+    claude_skill = next(file for file in result.files if file.path.startswith(".claude/skills/"))
+    codex_skill = next(file for file in result.files if file.path.startswith(".codex/skills/"))
+    for skill_file in [claude_skill, codex_skill]:
+        assert "name: karpathy-guidelines" in skill_file.content
+        assert "think_before_coding" in skill_file.content
+        assert "surgical_changes" in skill_file.content
+        assert "verify_or_explain_verification_gap" in skill_file.content
+
+
+def test_shared_skill_renderer_emits_complete_skill_markdown(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  systematic-debugging:
+    namespace: superpowers
+    description: Debug failures by reproducing them and finding root cause before fixing.
+    match:
+      user_intent:
+        - debug
+        - failing test
+    guards:
+      - no_fix_before_reproduction
+    steps:
+      - reproduce_failure
+      - inspect_recent_changes
+      - identify_root_cause
+      - add_regression_test
+    output_format:
+      - reproduction
+      - root_cause
+      - verification_result
+""",
+    )
+    source = load_source(path)
+    ir = normalize(source, Diagnostics())
+    skill = ir.skills[0]
+
+    content = render_skill_markdown(skill)
+
+    assert content == """\
+---
+name: superpowers:systematic-debugging
+description: Debug failures by reproducing them and finding root cause before fixing.
+---
+
+# superpowers:systematic-debugging
+
+## Overview
+
+Debug failures by reproducing them and finding root cause before fixing.
+
+## When To Use
+
+- `user_intent`: debug, failing test
+
+## Guards
+
+- no_fix_before_reproduction
+
+## Procedure
+
+- reproduce_failure
+- inspect_recent_changes
+- identify_root_cause
+- add_regression_test
+
+## Output Requirements
+
+- reproduction
+- root_cause
+- verification_result
+"""
+
+
+def test_skill_output_path_slugifies_namespace_for_filesystem_paths(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  "Review Skill":
+    namespace: "Super Powers"
+    description: Review carefully.
+""",
+    )
+    source = load_source(path)
+    ir = normalize(source, Diagnostics())
+    skill = ir.skills[0]
+
+    assert skill_output_path(".claude/skills", skill) == ".claude/skills/super-powers-review-skill/SKILL.md"
+    assert skill_output_path(".codex/skills", skill) == ".codex/skills/super-powers-review-skill/SKILL.md"
+    assert "Super Powers:Review Skill" in render_skill_markdown(skill)
 
 
 def test_validate_valid_files() -> None:
@@ -713,6 +871,109 @@ targets:
     ]
 
 
+def test_target_priority_rejects_string_numbers(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.task:
+    priority: "90"
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert not result.ok
+    assert [
+        (item.code, item.location)
+        for item in result.diagnostics.items
+        if item.code == "AMF102"
+    ] == [("AMF102", f"{path}:targets.code.task.priority")]
+    assert "integer" in result.diagnostics.items[0].message
+
+
+def test_target_priority_rejects_values_outside_supported_range(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.task:
+    priority: 101
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert not result.ok
+    assert [
+        (item.code, item.location)
+        for item in result.diagnostics.items
+        if item.code == "AMF102"
+    ] == [("AMF102", f"{path}:targets.code.task.priority")]
+    assert "less than or equal to 100" in result.diagnostics.items[0].message
+
+
+def test_target_dependencies_report_unknown_targets(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    deps:
+      - missing.task
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert not result.ok
+    assert [
+        (item.code, item.message, item.location)
+        for item in result.diagnostics.items
+        if item.code == "AMF122"
+    ] == [
+        (
+            "AMF122",
+            "target review.task depends on unknown target missing.task",
+            "targets.review.task.deps",
+        )
+    ]
+
+
+def test_target_dependencies_report_cycles(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  alpha.task:
+    deps:
+      - beta.task
+  beta.task:
+    deps:
+      - alpha.task
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert not result.ok
+    assert [
+        (item.code, item.message, item.location)
+        for item in result.diagnostics.items
+        if item.code == "AMF123"
+    ] == [
+        (
+            "AMF123",
+            "circular target dependency: alpha.task -> beta.task -> alpha.task",
+            "targets.alpha.task.deps",
+        )
+    ]
+
+
 def test_validate_package_include_disabled(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -923,13 +1184,12 @@ tool_rules:
     assert "web_search" in ir.tool_rules
 
 
-def test_compile_claude_md_snapshot(tmp_path: Path) -> None:
+def test_compile_claude_md_snapshot() -> None:
     result = compile_agentmakefile(KARPATHY_FIXTURE, targets=["claude-md"])
 
-    assert result.ok
+    assert result.ok, result.diagnostics.format()
     assert result.files[0].path == "CLAUDE.md"
-    assert "# karpathy-coding-guidelines - Claude Code" in result.files[0].content
-    assert "think_before_coding" in result.files[0].content
+    assert_matches_snapshot(result.files[0].content, "karpathy.claude.md")
 
 
 def test_compile_claude_code_emits_native_permission_settings() -> None:
@@ -948,6 +1208,122 @@ def test_compile_claude_code_emits_native_permission_settings() -> None:
             ],
         }
     }
+
+
+def test_soft_permission_backends_emit_downgrade_warnings() -> None:
+    result = compile_agentmakefile(UNKNOWN_REPO_SECURITY_FIXTURE, targets=["agents-md", "cursor-rule", "claude-skill"])
+
+    assert result.ok, result.diagnostics.format()
+    assert [
+        (item.severity, item.code, item.message, item.location)
+        for item in result.diagnostics.items
+        if item.code == "AMF121"
+    ] == [
+        (
+            "warning",
+            "AMF121",
+            "permissions were compiled as soft instructions because backend agents-md does not support hard enforcement",
+            "compile.targets.agents-md",
+        ),
+        (
+            "warning",
+            "AMF121",
+            "permissions were compiled as soft instructions because backend cursor-rule does not support hard enforcement",
+            "compile.targets.cursor-rule",
+        ),
+        (
+            "warning",
+            "AMF121",
+            "permissions were compiled as soft instructions because backend claude-skill does not support hard enforcement",
+            "compile.targets.claude-skill",
+        ),
+    ]
+
+
+def test_hook_unsupported_backends_emit_downgrade_warnings(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+hooks:
+  before_tool_call:
+    - name: block_installs
+      run: echo blocked
+targets:
+  review.task:
+    steps:
+      - inspect_context
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["claude-md", "cursor-rule", "claude-code"])
+
+    assert result.ok, result.diagnostics.format()
+    assert [
+        (item.severity, item.code, item.message, item.location)
+        for item in result.diagnostics.items
+        if item.code == "AMF124"
+    ] == [
+        (
+            "warning",
+            "AMF124",
+            "hooks were compiled as soft instructions because backend claude-md does not support native hooks",
+            "compile.targets.claude-md",
+        ),
+        (
+            "warning",
+            "AMF124",
+            "hooks were compiled as soft instructions because backend cursor-rule does not support native hooks",
+            "compile.targets.cursor-rule",
+        ),
+    ]
+
+
+def test_markdown_permission_guidance_uses_formal_tables() -> None:
+    result = compile_agentmakefile(UNKNOWN_REPO_SECURITY_FIXTURE, targets=["agents-md"])
+
+    assert result.ok, result.diagnostics.format()
+    content = result.files[0].content
+    assert "| --- | --- |" in content
+    assert "### Rules" in content
+    assert "| Tool | Pattern | Action |" in content
+    assert "| bash | npm install* | deny |" in content
+    assert "| bash | pnpm install* | deny |" in content
+    assert "| bash | yarn install* | deny |" in content
+    assert "- `bash` `npm install*`: deny" not in content
+
+
+def test_skill_permission_guidance_uses_formal_tables(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  secure-review:
+    description: Review safely.
+    steps:
+      - inspect_manifests
+permissions:
+  defaults:
+    bash: ask
+  rules:
+    bash:
+      "npm install*": deny
+      "git status": allow
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["claude-skill"])
+
+    assert result.ok, result.diagnostics.format()
+    content = result.files[0].content
+    assert "## Permission Guidance" in content
+    assert "### Defaults" in content
+    assert "| Tool | Action |" in content
+    assert "| bash | ask |" in content
+    assert "| Tool | Pattern | Action |" in content
+    assert "| bash | npm install* | deny |" in content
+    assert "| bash | git status | allow |" in content
 
 
 def test_compile_claude_code_emits_hook_files_and_settings_references(tmp_path: Path) -> None:
@@ -1015,13 +1391,130 @@ def test_compile_opencode_emits_config_with_permissions_and_agents() -> None:
     assert "safe_next_steps" in prompt
 
 
-def test_compile_agents_md_snapshot(tmp_path: Path) -> None:
+def test_compile_claude_skill_emits_one_skill_file_per_skill_entry(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  systematic-debugging:
+    namespace: superpowers
+    description: Debug methodically.
+    match:
+      user_intent:
+        - debug
+    steps:
+      - reproduce_failure
+    output_format:
+      - root_cause
+  local-review:
+    description: Review local changes.
+    guards:
+      - inspect_diff_first
+    steps:
+      - report_findings
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["claude-skill"])
+
+    assert result.ok, result.diagnostics.format()
+    assert [file.path for file in result.files] == [
+        ".claude/skills/local-review/SKILL.md",
+        ".claude/skills/superpowers-systematic-debugging/SKILL.md",
+    ]
+    assert [file.backend for file in result.files] == ["claude-skill", "claude-skill"]
+    assert all(file.managed_block is False for file in result.files)
+    assert all(file.overwrite is False for file in result.files)
+
+    systematic = next(file for file in result.files if "superpowers-systematic-debugging" in file.path)
+    assert "name: superpowers:systematic-debugging" in systematic.content
+    assert "## When To Use" in systematic.content
+    assert "- `user_intent`: debug" in systematic.content
+    assert "## Procedure" in systematic.content
+    assert "- reproduce_failure" in systematic.content
+    assert "## Output Requirements" in systematic.content
+    assert "- root_cause" in systematic.content
+
+
+def test_compile_claude_skill_fixtures_are_supported() -> None:
+    karpathy = compile_agentmakefile(KARPATHY_FIXTURE, targets=["claude-skill"])
+    superpowers = compile_agentmakefile(SUPERPOWERS_FIXTURE, targets=["claude-skill"])
+
+    assert karpathy.ok, karpathy.diagnostics.format()
+    assert [file.path for file in karpathy.files] == [".claude/skills/karpathy-guidelines/SKILL.md"]
+    assert "name: karpathy-guidelines" in karpathy.files[0].content
+    assert superpowers.ok, superpowers.diagnostics.format()
+    assert ".claude/skills/superpowers-systematic-debugging/SKILL.md" in [
+        file.path for file in superpowers.files
+    ]
+
+
+def test_compile_codex_skill_emits_one_skill_file_per_skill_entry(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  systematic-debugging:
+    namespace: superpowers
+    description: Debug methodically.
+    match:
+      user_intent:
+        - debug
+    steps:
+      - reproduce_failure
+    output_format:
+      - root_cause
+  local-review:
+    description: Review local changes.
+    guards:
+      - inspect_diff_first
+    steps:
+      - report_findings
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["codex-skill"])
+
+    assert result.ok, result.diagnostics.format()
+    assert [file.path for file in result.files] == [
+        ".codex/skills/local-review/SKILL.md",
+        ".codex/skills/superpowers-systematic-debugging/SKILL.md",
+    ]
+    assert [file.backend for file in result.files] == ["codex-skill", "codex-skill"]
+    assert all(file.managed_block is False for file in result.files)
+    assert all(file.overwrite is False for file in result.files)
+
+    systematic = next(file for file in result.files if "superpowers-systematic-debugging" in file.path)
+    assert "name: superpowers:systematic-debugging" in systematic.content
+    assert "## When To Use" in systematic.content
+    assert "- `user_intent`: debug" in systematic.content
+    assert "## Procedure" in systematic.content
+    assert "- reproduce_failure" in systematic.content
+    assert "## Output Requirements" in systematic.content
+    assert "- root_cause" in systematic.content
+
+
+def test_compile_codex_skill_fixtures_are_supported() -> None:
+    karpathy = compile_agentmakefile(KARPATHY_FIXTURE, targets=["codex-skill"])
+    superpowers = compile_agentmakefile(SUPERPOWERS_FIXTURE, targets=["codex-skill"])
+
+    assert karpathy.ok, karpathy.diagnostics.format()
+    assert [file.path for file in karpathy.files] == [".codex/skills/karpathy-guidelines/SKILL.md"]
+    assert "name: karpathy-guidelines" in karpathy.files[0].content
+    assert superpowers.ok, superpowers.diagnostics.format()
+    assert ".codex/skills/superpowers-systematic-debugging/SKILL.md" in [
+        file.path for file in superpowers.files
+    ]
+
+
+def test_compile_agents_md_snapshot() -> None:
     result = compile_agentmakefile(KARPATHY_FIXTURE, targets=["agents-md"])
 
-    assert result.ok
+    assert result.ok, result.diagnostics.format()
     assert result.files[0].path == "AGENTS.md"
-    assert "# karpathy-coding-guidelines - Generic Coding Agents" in result.files[0].content
-    assert "code.task" in result.files[0].content
+    assert_matches_snapshot(result.files[0].content, "karpathy.agents.md")
 
 
 def test_compile_agents_fragments_emits_target_fragments_with_dependency_closure(tmp_path: Path) -> None:
@@ -1426,13 +1919,12 @@ targets:
     ]
 
 
-def test_compile_cursor_rule_snapshot(tmp_path: Path) -> None:
+def test_compile_cursor_rule_snapshot() -> None:
     result = compile_agentmakefile(KARPATHY_FIXTURE, targets=["cursor-rule"])
 
-    assert result.ok
+    assert result.ok, result.diagnostics.format()
     assert result.files[0].path == ".cursor/rules/karpathy-guidelines.mdc"
-    assert result.files[0].content.startswith("---\nalwaysApply: true\n")
-    assert "Behavioral guidelines" in result.files[0].content
+    assert_matches_snapshot(result.files[0].content, "karpathy.cursor.mdc")
 
 
 def test_karpathy_demo_compiles_with_mvp0_targets() -> None:
@@ -1553,7 +2045,7 @@ def test_existing_unmanaged_shared_outputs_fail_without_force(tmp_path: Path) ->
     result = compile_agentmakefile(path, out_dir=out, targets=["claude-md", "agents-md"], write=True)
 
     assert not result.ok
-    assert [item.code for item in result.diagnostics.items] == ["AMF111", "AMF111"]
+    assert [item.code for item in result.diagnostics.items if item.severity == "error"] == ["AMF111", "AMF111"]
     assert claude.read_text() == "human claude guidance\n"
     assert agents.read_text() == "human agents guidance\n"
     assert result.wrote == []
@@ -1573,7 +2065,7 @@ def test_duplicate_managed_block_markers_are_rejected(tmp_path: Path) -> None:
     result = compile_agentmakefile(path, out_dir=out, targets=["agents-md"], write=True)
 
     assert not result.ok
-    assert [item.code for item in result.diagnostics.items] == ["AMF112"]
+    assert [item.code for item in result.diagnostics.items if item.severity == "error"] == ["AMF112"]
     assert agents.read_text() == original
     assert result.wrote == []
 
@@ -1588,7 +2080,7 @@ def test_cursor_rule_existing_file_requires_force(tmp_path: Path) -> None:
     result = compile_agentmakefile(path, out_dir=out, targets=["cursor-rule"], write=True)
 
     assert not result.ok
-    assert [item.code for item in result.diagnostics.items] == ["AMF110"]
+    assert [item.code for item in result.diagnostics.items if item.severity == "error"] == ["AMF110"]
     assert cursor.read_text() == "human cursor rule\n"
 
 
