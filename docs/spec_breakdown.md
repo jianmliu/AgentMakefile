@@ -33,6 +33,16 @@ Implemented:
 - The Superpowers module covers all currently installed project Superpowers skills as AgentMakefile skill entries.
 - Include namespacing with `as` for local file includes, covering policy, target, skill, dependency, `extends`, `add_policies`, and validation target keys.
 - Duplicate policy, skill, and target names across multiple included files are reported with stable diagnostics.
+- Locked policies cannot be weakened by later overlays that remove guards, steps, output formats, or locked metadata.
+- Target composition preserves explicit overrides and detects circular `extends`.
+- The local composition demo combines Karpathy and unknown-repository security modules with namespaced includes.
+- The design spec now frames generated agent guidance as cache-friendly prompt-prefix build artifacts.
+- The design spec distinguishes static compatibility artifacts from runtime-native dynamic prompt-prefix assembly.
+- The design spec defines target fragments as compiled prompt objects.
+- Target fragments, fragment manifest hashes, unchanged-write skipping, and JSON link plans are implemented.
+- Permission conflicts are normalized with `deny > ask > allow`.
+- Permission tool names and simple glob syntax are validated during IR normalization.
+- Generated file ownership tests cover unmanaged shared outputs, malformed managed blocks, Cursor rule overwrite protection, and atomic preflight writes.
 
 Known gaps:
 
@@ -41,7 +51,7 @@ Known gaps:
 - The Karpathy module is reusable, and the Karpathy demo composes it. The demo default `compile.targets` includes MVP 1 backends, so it currently requires explicit MVP 0 targets.
 - Backend capability warnings are not implemented.
 - Permission output is included as guidance, but not yet emitted as a formal soft permission table with downgrade warnings.
-- Locked policy weakening validation is not implemented.
+- Dependency-aware invalidation is implemented only as content-based unchanged write skipping, not as a separate build graph scheduler.
 
 ## P0: Stabilize MVP 0
 
@@ -68,11 +78,20 @@ Acceptance:
 
 Goal: make overwrite safety hard to regress.
 
+Status: implemented.
+
 Implementation:
 
 - Add tests for existing unmanaged `CLAUDE.md` / `AGENTS.md` without `--force`.
 - Add tests for malformed managed blocks.
 - Add tests for existing `.cursor/rules/*.mdc` without and with `--force`.
+
+Implemented scope:
+
+- Existing unmanaged `CLAUDE.md` and `AGENTS.md` fail with `AMF111` and remain unchanged.
+- Duplicate or otherwise malformed managed block markers fail with `AMF112`.
+- Existing Cursor rule files fail with `AMF110` unless `--force` is provided.
+- Write preflight prevents earlier generated files from being updated when a later artifact is blocked.
 
 Acceptance:
 
@@ -297,11 +316,21 @@ Acceptance:
 
 Goal: prevent included locked policies from being weakened silently.
 
+Status: implemented for guards, steps, output formats, and locked metadata.
+
 Implementation:
 
-- Define weakening for guards, steps, output requirements, and locked metadata.
+- Define weakening for guards, steps, output_format requirements, and locked metadata.
 - Validate overlay changes against locked policies.
 - Emit an actionable diagnostic for rejected changes.
+
+Implemented scope:
+
+- A policy with `locked: true` cannot be overlaid with `locked: false`.
+- A locked policy overlay must retain all existing `guards`, `steps`, and `output_format` entries.
+- Adding stricter `guards`, `steps`, or `output_format` entries remains allowed.
+- A stricter overlay that omits `locked` inherits the locked status instead of weakening it.
+- Violations emit `AMF114` with stable policy field locations.
 
 Acceptance:
 
@@ -312,11 +341,20 @@ Acceptance:
 
 Goal: make `extends`, `add_policies`, `add_steps`, `add_output_format`, and `override` robust.
 
+Status: implemented for parent/child composition, additive fields, explicit empty overrides, and circular `extends` diagnostics.
+
 Implementation:
 
 - Add tests for parent and child target composition.
 - Detect circular target extension.
 - Preserve explicit false, zero, empty list, and empty mapping overrides.
+
+Implemented scope:
+
+- Child targets inherit parent fields unless the child explicitly sets a replacement.
+- `add_policies`, `add_steps`, and `add_output_format` append to the composed target after explicit replacements.
+- Explicit `false`, `0`, `[]`, and `{}` values are preserved as overrides.
+- Circular target extension emits stable `AMF108` diagnostics.
 
 Acceptance:
 
@@ -326,19 +364,90 @@ Acceptance:
 
 Goal: prove MVP 2 behavior with a realistic project example.
 
+Status: implemented with `demos/local-composition/AgentMakefile` and `modules/unknown-repo-security/AgentMakefile`.
+
 Implementation:
 
 - Add `demos/local-composition/`.
 - Include Karpathy and unknown repo security packs.
-- Compile into Claude, Codex, and Cursor outputs.
+- Compile into Claude, Codex-compatible `AGENTS.md`, and Cursor outputs.
+
+Implemented scope:
+
+- `modules/unknown-repo-security/AgentMakefile` provides reusable unknown-repository review rails.
+- `demos/local-composition/AgentMakefile` composes Karpathy and security modules using `include.as`.
+- The demo validates and compiles with `claude-md`, `agents-md`, and `cursor-rule`.
 
 Acceptance:
 
 - Demo validates and compiles with supported MVP 2 targets.
 
+## MVP 2.5: Prompt Fragment Objects
+
+MVP 2.5 bridges static Markdown artifacts and runtime-native prompt assembly. It treats each target-specific prompt prefix as a compiled prompt object that can be regenerated independently, cached by hash, and loaded selectively.
+
+### AMF-M2.5-001 Add Target Fragment Backend
+
+Status: implemented.
+
+Goal: compile per-target prompt fragments instead of only all-in-one `AGENTS.md` / `CLAUDE.md` files.
+
+Implementation:
+
+- Add `agents-fragments` and `claude-fragments` backends.
+- Emit one Markdown fragment per normalized target under `.agentmf/fragments/<backend>/<target>.md`.
+- Render only each target's dependency closure: inherited target fields, policies, skills, deps, guards, steps, permissions, and output format.
+- Keep fragment ordering deterministic and paths stable.
+
+Acceptance:
+
+- `agentmf compile --target agents-fragments` emits one fragment per target.
+- A `code.review` fragment includes review-related policies but excludes unrelated target-only guidance.
+- The fragment backend does not replace existing all-in-one backends.
+
+### AMF-M2.5-002 Add Fragment Manifest and Hashes
+
+Status: implemented.
+
+Goal: make prompt fragments incrementally rebuildable.
+
+Implementation:
+
+- Emit `.agentmf/fragments/manifest.json` or `.agentmf/fragments/manifest.yml`.
+- Record fragment path, backend, target, dependency closure, source file inputs, compiler version, and content hash.
+- Compute fragment hashes from normalized IR content rather than raw file timestamps.
+- Use the manifest to skip rewriting unchanged fragments.
+
+Acceptance:
+
+- Re-running fragment compilation without source changes reports unchanged fragments.
+- Changing an unrelated module does not rewrite unaffected target fragments.
+- Manifest entries are deterministic and snapshot-tested.
+
+### AMF-M2.5-003 Add Fragment Selection and Link Plan
+
+Status: implemented.
+
+Goal: select which prompt objects should be loaded for a user request.
+
+Implementation:
+
+- Add a dry-run selector that matches user intent against target `match` rules.
+- Output a link plan listing selected fragments and their dependency order.
+- Support explicit target selection for deterministic testing.
+- Do not require runtime-native prompt assembly yet.
+
+Acceptance:
+
+- Given a review-like request, the selector returns the review target fragment and required deps.
+- Given an explicit target, the selector returns that target's fragment closure.
+- Link plan output is stable JSON for integration by future runtimes.
+
 ## MVP 3: Hard Rails Compiler Targets
 
 ### AMF-M3-001 Implement Permission Conflict Resolution
+
+Status: implemented.
 
 Goal: normalize permission conflicts according to `deny > ask > allow`.
 
@@ -354,6 +463,8 @@ Acceptance:
 
 ### AMF-M3-002 Validate Permission Glob Patterns
 
+Status: implemented for empty tool names, whitespace in tool names, empty patterns, and unterminated glob character classes.
+
 Goal: catch invalid or unsupported permission patterns before emission.
 
 Implementation:
@@ -366,6 +477,8 @@ Acceptance:
 - Invalid permission pattern emits a stable diagnostic.
 
 ### AMF-M3-003 Implement `claude-code` Backend
+
+Status: implemented for `.claude/settings.json` permission emission and generated shell hook files.
 
 Goal: generate platform-native Claude Code settings and hook artifacts where feasible.
 
@@ -381,6 +494,8 @@ Acceptance:
 
 ### AMF-M3-004 Implement `opencode` Backend
 
+Status: implemented for `opencode.json` permission configuration and target-derived agent definitions.
+
 Goal: generate OpenCode configuration.
 
 Implementation:
@@ -393,6 +508,8 @@ Acceptance:
 - Unknown repo security fixture compiles to `opencode.json`.
 
 ### AMF-M3-005 Add Unknown Repo Hard Rails Demo
+
+Status: implemented with `demos/unknown-repo-security/AgentMakefile`.
 
 Goal: prove MVP 3 end to end.
 
@@ -426,14 +543,13 @@ Completed:
 
 Next:
 
-1. AMF-P0-002 ownership tests.
-2. AMF-P0-004 CI.
-3. AMF-P0-005 README.
-4. AMF-M1-002 shared skill rendering.
-5. AMF-M1-003 `claude-skill`.
-6. AMF-M1-004 `codex-skill`.
-7. AMF-M1-005 soft permission tables.
-8. AMF-M1-006 Karpathy default compile.
-9. AMF-M2-001 namespaced includes.
+1. AMF-P0-004 CI.
+2. AMF-P0-005 README.
+3. AMF-M1-002 shared skill rendering.
+4. AMF-M1-003 `claude-skill`.
+5. AMF-M1-004 `codex-skill`.
+6. AMF-M1-005 soft permission tables.
+7. AMF-M1-006 Karpathy default compile.
+8. AMF-M2-001 namespaced includes.
 
 This order keeps the compiler usable while moving from the current MVP 0 prototype to the MVP 1 success criterion.

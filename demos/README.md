@@ -31,3 +31,21 @@ The Oh My OpenAgent rules are a reusable module at `modules/oh-my-openagent/Agen
 agentmf validate --file demos/oh-my-openagent/AgentMakefile
 agentmf compile --file demos/oh-my-openagent/AgentMakefile
 ```
+
+## Local Composition
+
+The local composition demo combines `modules/karpathy/AgentMakefile` with `modules/unknown-repo-security/AgentMakefile` using namespaced includes.
+
+```bash
+agentmf validate --file demos/local-composition/AgentMakefile
+agentmf compile --file demos/local-composition/AgentMakefile
+```
+
+## Unknown Repository Hard Rails
+
+The unknown repository security demo composes `modules/unknown-repo-security/AgentMakefile` and adds native hard rails for risky install commands.
+
+```bash
+agentmf validate --file demos/unknown-repo-security/AgentMakefile
+agentmf compile --file demos/unknown-repo-security/AgentMakefile
+```

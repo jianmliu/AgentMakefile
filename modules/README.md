@@ -7,5 +7,6 @@ A module should describe reusable rules, policies, skills, permissions, and vali
 Current modules:
 
 - `karpathy/AgentMakefile`: Karpathy-style coding guidelines as a reusable rule module.
+- `unknown-repo-security/AgentMakefile`: unknown repository security review rails as a reusable security policy pack.
 - `superpowers/AgentMakefile`: Superpowers-style methodology workflows as a reusable methodology module.
 - `oh-my-openagent/AgentMakefile`: Oh My OpenAgent-style multi-model orchestration rules as a reusable framework module.

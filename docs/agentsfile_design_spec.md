@@ -4,9 +4,13 @@
 
 **AgentMakefile** is a cross-platform source format and compiler layer for AI agent skills and rails. It defines reusable skills, policies, targets, permissions, hooks, output contracts, validation rules, and fallback behavior once, then compiles them into platform-native artifacts for Claude Code, OpenCode, Codex, Cursor, and future agent runtimes.
 
+At runtime, most platform-native instruction artifacts ultimately become part of a prompt prefix. `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `SKILL.md`, and runtime-specific rule files are different packaging formats for stable agent guidance that is prepended to task-specific context. AgentMakefile treats those prompt prefixes as build artifacts produced from structured inputs.
+
+Static generated files are the compatibility layer. The deeper integration point is runtime prompt-prefix assembly from AgentMakefile IR: a runtime can select the current task target, resolve dependencies, choose the required policies and skills, reuse stable prefix chunks, and append volatile task context immediately before the model call.
+
 The goal is **not** to build another coding agent runtime. Instead, AgentMakefile acts as a **single portable source of truth** for agent skills and rails, similar to how an API specification can act as the source for generated SDKs, CLIs, documentation, or MCP servers.
 
-In the same way that a `Makefile` tells a build system how to produce targets from dependencies, an `AgentMakefile` tells agent runtimes how to execute task-specific workflows and enforce project-specific guardrails.
+In the same way that a `Makefile` tells a build system how to produce targets from dependencies, an `AgentMakefile` tells agent runtimes how to execute task-specific workflows and enforce project-specific guardrails. This also gives AgentMakefile a path to avoid unnecessary recompilation: unchanged modules, targets, skills, and backend settings should be reusable across builds, while only affected prompt-prefix artifacts are regenerated.
 
 Concise positioning:
 
@@ -14,7 +18,7 @@ Concise positioning:
 
 Expanded positioning:
 
-> **AgentMakefile brings the SDK-generation model to agent behavior: define reusable skills, policies, permissions, hooks, and output contracts once, then compile them into each agent platform's native format.**
+> **AgentMakefile brings the SDK-generation model to agent behavior: define reusable skills, policies, permissions, hooks, and output contracts once, then compile them into cache-friendly prompt prefixes and each agent platform's native format.**
 
 Short slogans:
 
@@ -31,6 +35,10 @@ Short slogans:
 * **Agent Rule IR**: the normalized intermediate representation produced from AgentMakefile before backend emission.
 * **Backend**: a platform-specific emitter that generates native artifacts for Claude Code, Codex, Cursor, OpenCode, or another agent runtime.
 * **Generated artifact**: a platform-native output such as `CLAUDE.md`, `AGENTS.md`, `.cursor/rules/*.mdc`, `SKILL.md`, `.claude/settings.json`, hooks, or OpenCode configuration.
+* **Prompt prefix artifact**: generated guidance that is expected to appear before volatile task context in a model request, either directly as prompt text or indirectly through a platform-native file such as `AGENTS.md`, `CLAUDE.md`, Cursor rules, or `SKILL.md`.
+* **Target fragment**: a small, target-specific prompt prefix artifact generated from one target's dependency closure. A target fragment is analogous to a compiled object file: it can be regenerated independently, cached by hash, and linked with other fragments at request time.
+* **Prompt object**: a compiled fragment of stable prompt-prefix material. Prompt objects may represent targets, policies, skills, permissions, output contracts, or reusable modules.
+* **Prompt link step**: the runtime or compiler phase that selects prompt objects for a request and concatenates them into the final prompt prefix before volatile task context is appended.
 * **artifacts**: backend-specific generated artifact configuration, such as output paths, frontmatter, or managed-block behavior.
 * **output_format**: a response or skill output contract, such as required sections or final answer shape.
 * **Soft rail**: a rule compiled into instructions, checklists, or generated guidance. It relies on the target agent to follow it.
@@ -80,6 +88,25 @@ Makefile provides a useful abstraction because it separates:
 * **How to organize reusable workflows**: phony targets, variables, includes, pattern rules
 
 AgentMakefile adapts these ideas for AI agents and adds a compiler layer so the same source file can generate native skills, rules, instructions, permissions, hooks, and rails for multiple agent ecosystems.
+
+For prompt construction, the useful build-system split is:
+
+* **Stable prefix inputs**: AgentMakefile sources, included modules, skill definitions, policy packs, permission rules, backend settings, and compiler version.
+* **Stable prefix outputs**: deterministic prompt-prefix artifacts such as `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, Cursor rules, or runtime-native instruction payloads.
+* **Volatile suffix inputs**: the current user request, active files, current diff, tool observations, and runtime state.
+
+Keeping the stable prefix deterministic and ahead of volatile task context improves prompt-cache hit rates and lets runtimes avoid reloading unrelated rules.
+
+The intermediate representation can also be lowered into **target fragments**: small Markdown or runtime-native prompt objects such as:
+
+```text
+.agentmf/fragments/agents/code.review.md
+.agentmf/fragments/agents/code.change.md
+.agentmf/fragments/agents/repo.security_review.md
+.agentmf/fragments/claude/code.review.md
+```
+
+These fragments are not the final all-in-one `AGENTS.md` or `CLAUDE.md`. They are compiled prompt objects. Each one should contain only the target's resolved dependency closure: the target, inherited fields, relevant policies, relevant skills, permission guidance, guards, steps, and output contracts. A runtime can then load only the fragments needed for the current request.
 
 A useful analogy is the API tooling model: an OpenAPI-like source can generate SDKs, CLIs, documentation, or MCP servers. AgentMakefile applies a similar source-to-artifact model to agent behavior:
 
@@ -1178,6 +1205,105 @@ AgentMakefile can support Makefile-like incremental behavior.
 
 Caching is future-facing and is not required for MVP 0–2.
 
+The main cache target is the compiled prompt prefix. AgentMakefile should be able to avoid rebuilding or reinjecting prefix content when its structured inputs have not changed. This is especially important because agent-native files such as `AGENTS.md`, `CLAUDE.md`, Cursor rules, and `SKILL.md` normally become prompt-prefix material before a model call.
+
+Prompt-prefix caching should separate stable and volatile inputs:
+
+```text
+stable prefix:
+  AgentMakefile
+  included modules
+  selected targets
+  selected skills and policies
+  permission and output contracts
+  backend emitter version
+
+volatile suffix:
+  user request
+  active file contents
+  current diff
+  tool outputs
+  runtime observations
+```
+
+If only volatile inputs change, the compiler should not need to rebuild the stable prefix. If a module changes, only targets depending on that module should be invalidated. If the selected task target changes, unrelated target prefixes should remain reusable.
+
+### 12.1 Prompt Fragment Object Model
+
+AgentMakefile should treat target-specific prompt fragments like compiled object files.
+
+At compile time:
+
+```text
+AgentMakefile source
+  -> normalized Agent Rule IR
+  -> target dependency closure
+  -> prompt object fragments
+  -> fragment manifest
+```
+
+At request time:
+
+```text
+user request
+  -> target selection
+  -> prompt object selection
+  -> prompt link step
+  -> final prompt prefix
+  -> volatile task context
+```
+
+Each target fragment should be deterministic and content-addressed:
+
+```text
+fragment_hash = hash(
+  compiler_version,
+  backend_name,
+  target_name,
+  target_closure,
+  selected_policy_hashes,
+  selected_skill_hashes,
+  permission_hashes,
+  output_contract_hashes
+)
+```
+
+If the fragment hash is unchanged, the compiler can skip regeneration. If a source module changes, only fragments whose dependency closure includes that module should be invalidated.
+
+The fragment manifest should record enough dependency information for incremental rebuilds and runtime selection:
+
+```yaml
+fragments:
+  agents/code.review.md:
+    backend: agents
+    target: code.review
+    inputs:
+      - AgentMakefile
+      - modules/karpathy/AgentMakefile
+      - modules/superpowers/AgentMakefile
+    policies:
+      - review_feedback_rigorously
+      - verify_before_completion
+    skills:
+      - superpowers:receiving-code-review
+    deps:
+      - methodology.bootstrap
+    hash: sha256:...
+```
+
+The all-in-one `AGENTS.md` and `CLAUDE.md` outputs remain useful compatibility artifacts. Target fragments are a lower-level build product that can reduce prompt size before full runtime-native AgentMakefile support exists.
+
+The initial fragment backends are:
+
+* `agents-fragments`: emits Markdown prompt objects under `.agentmf/fragments/agents/`.
+* `claude-fragments`: emits Markdown prompt objects under `.agentmf/fragments/claude/`.
+
+Each emitted fragment should be scoped to one normalized target and that target's dependency closure. Manifest generation, content-addressed skip decisions, and runtime link plans are separate layers built on top of these fragment outputs.
+
+The initial manifest artifact is `.agentmf/fragments/manifest.json`. It records fragment path, backend, selected target, target dependency closure, source input paths, selected policy and skill names, compiler version, and a `sha256:` content hash. When writing artifacts, unchanged fragment files and unchanged manifests should be reported as unchanged and left untouched on disk.
+
+The initial request-time bridge is a dry-run selector exposed as `agentmf select`. It can select fragments from explicit targets for deterministic integration tests or match a request against target `match` rules, choose the highest-priority matching target, resolve its dependency closure, and emit a stable JSON link plan. The selector does not assemble the final runtime prompt or execute any agent workflow; it only describes which compiled prompt objects a runtime should link.
+
 Example:
 
 ```yaml
@@ -1195,6 +1321,9 @@ cache:
 
 Use cases:
 
+* Prompt-prefix reuse across repeated agent turns
+* Target-specific rule loading to reduce token volume
+* Backend-specific artifact reuse when only unrelated modules change
 * Repeated rubric review
 * Repeated file summarization
 * Codebase analysis
@@ -1548,12 +1677,19 @@ The analogy is:
 | Stainless-style API tooling                   | AgentMakefile                                                                                    |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | API spec is the source                        | AgentMakefile is the skill / rails source                                                        |
-| SDKs are generated outputs                    | Platform-native skills and rules are generated outputs                                           |
+| SDKs are generated outputs                    | Platform-native skills, rules, and prompt prefixes are generated outputs                         |
 | CLI / MCP server / docs can be generated      | `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, Cursor rules, hooks, and OpenCode configs can be generated |
 | Solves API integration fragmentation          | Solves agent skill / rule fragmentation                                                          |
 | Targets programming languages and API clients | Targets agent platforms and coding-agent runtimes                                                |
 
 This framing is important because AgentMakefile is not merely a better prompt file. It is a **source format plus compiler toolchain**.
+
+It is also not limited to file generation. The same normalized source can generate in-memory prompt prefixes for runtimes that assemble requests directly. File backends are compatibility artifacts for platforms whose prompt-prefix layer is configured through project files.
+
+The design supports two integration modes:
+
+* **Static compatibility mode**: compile `AgentMakefile` into files such as `AGENTS.md`, `CLAUDE.md`, Cursor rules, and `SKILL.md`.
+* **Runtime-native mode**: load AgentMakefile IR inside the agent runtime and assemble the prompt prefix dynamically for each request.
 
 The intended pattern is:
 
@@ -1571,6 +1707,10 @@ Generated platform-native artifacts
   ├── .claude/settings.json
   ├── .claude/hooks/*
   └── opencode.json
+
+Runtime prompt layout
+  ├── linked stable prompt objects
+  └── volatile task context
 ```
 
 This makes AgentMakefile closer to an SDK generator for agent behavior than to a conventional configuration file, by analogy rather than by implementation domain.
@@ -2175,6 +2315,8 @@ Example mapping:
 | `guards`              | instructions, permissions, or hooks      |
 | `output_format`       | response instructions or skill checklist |
 
+Initial implementation scope: the `claude-code` backend emits `.claude/settings.json` with native permission entries grouped by `allow`, `ask`, and `deny`. It also emits generated shell hook files under `.claude/hooks/<event>/` and references them from settings. Claude Code skill directory generation remains a separate backend milestone.
+
 ---
 
 ### 21.2 OpenCode Backend
@@ -2200,6 +2342,8 @@ Example mapping:
 | `permissions`         | tool permission config                |
 | `guards`              | permission rules / prompt constraints |
 | `hooks`               | runtime hooks where supported         |
+
+Initial implementation scope: the `opencode` backend emits `opencode.json` with the OpenCode schema URL, a `permission` section lowered from normalized AgentMakefile permissions, and an `agent` section derived from normalized targets. Each target becomes a subagent with a deterministic name, description, prompt, and permission configuration.
 
 ---
 
@@ -2703,6 +2847,10 @@ AgentMakefile can be positioned as:
 
 > A cross-platform source format and compiler for AI agent skills and rails.
 
+Or in Makefile terms:
+
+> AgentMakefile is a build system for agent prompt prefixes.
+
 Or more formally:
 
 > AgentMakefile is a declarative source format that defines reusable agent skills, task targets, dependencies, tool permissions, hooks, guardrails, output contracts, and fallback behavior, then compiles them into native skill and rule formats for Claude Code, OpenCode, Codex, Cursor, and other agent runtimes.
@@ -2714,6 +2862,8 @@ Short versions:
 > Write agent skills once. Compile everywhere.
 
 > Agent behavior as generated artifacts.
+
+> Prompt prefixes as build artifacts.
 
 > One source file for Claude Code, OpenCode, Codex, and future agents.
 
@@ -2740,7 +2890,11 @@ It introduces:
 * Traceability
 * Compiler backends
 
-The key design decision is that AgentMakefile should not initially compete with existing coding agents. Instead, it should become a portable source format that compiles into their native skill and rule formats.
+The key design decision is that AgentMakefile should not initially compete with existing coding agents. Instead, it should become a portable source format that compiles into their native skill and rule formats, which in most systems are eventually loaded as prompt-prefix material.
+
+Static artifacts are therefore compatibility outputs. AgentMakefile's deeper runtime role is to provide the structured IR needed for dynamic, dependency-aware prompt-prefix assembly.
+
+Between those two layers, AgentMakefile can emit target fragments as compiled prompt objects. This gives existing file-based agents a practical bridge: they can read a small target-specific fragment instead of loading an all-in-one `AGENTS.md` or `CLAUDE.md`, while future runtimes can skip the Markdown artifact and link equivalent prompt objects directly from IR.
 
 This creates a middle layer between simple instruction files such as `AGENTS.md` / `CLAUDE.md` and heavy workflow frameworks such as LangGraph.
 
