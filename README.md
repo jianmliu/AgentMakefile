@@ -42,3 +42,37 @@ agentmf compile --file AgentMakefile --target opencode
 agentmf select --file AgentMakefile --request "review code" --backend agents-fragments
 agentmf compile --file AgentMakefile --write
 ```
+
+## Quickstart
+
+From a fresh checkout:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+agentmf validate --file AgentMakefile
+agentmf compile --file AgentMakefile --target claude-md --target agents-md --target cursor-rule
+```
+
+For development and tests:
+
+```bash
+python -m pip install -e ".[test]"
+PYTHONPATH=src python3 -m pytest -q
+python3 -m compileall -q src
+```
+
+The staged roadmap and acceptance criteria are tracked in [docs/spec_breakdown.md](docs/spec_breakdown.md).
+
+## Demo Compile
+
+The Karpathy / Andrej demo is the smallest useful end-to-end compile path:
+
+```bash
+agentmf validate --file demos/karpathy/AgentMakefile
+agentmf compile --file demos/karpathy/AgentMakefile
+```
+
+The default compile target list emits `CLAUDE.md`, `AGENTS.md`, `.cursor/rules/karpathy-guidelines.mdc`, `.claude/skills/karpathy-guidelines/SKILL.md`, and `.codex/skills/karpathy-guidelines/SKILL.md`. The `claude-skill` and `codex-skill` outputs are soft prompt-package artifacts; hard runtime enforcement remains backend-specific.
