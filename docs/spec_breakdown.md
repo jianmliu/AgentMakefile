@@ -43,14 +43,21 @@ Implemented:
 - Permission conflicts are normalized with `deny > ask > allow`.
 - Permission tool names and simple glob syntax are validated during IR normalization.
 - Generated file ownership tests cover unmanaged shared outputs, malformed managed blocks, Cursor rule overwrite protection, and atomic preflight writes.
+- Target priority validation rejects non-integer priorities and values outside 0..100, and target dependency validation rejects unknown or cyclic `deps`.
+- Snapshot fixtures cover full generated `claude-md`, `agents-md`, and `cursor-rule` content for the Karpathy fixture.
+- GitHub Actions CI runs tests and compile checks on Python 3.9 and 3.14.
+- README quickstart documents install, editable development setup, tests, and the default Karpathy demo compile path.
+- Shared `SKILL.md` rendering covers namespaced skill content and deterministic filesystem-safe skill paths.
+- The `claude-skill` backend emits one Claude `SKILL.md` package per unique skill entry.
+- The `codex-skill` backend emits one Codex `SKILL.md` package per unique skill entry.
+- Backend capability warnings cover permission hard-to-soft downgrades and unsupported native hooks.
+- Soft permission guidance is rendered as Markdown tables, and soft backends emit `AMF121` downgrade warnings.
+- The Karpathy module exposes a `karpathy-guidelines` skill, so the Karpathy demo default compile emits Markdown, Cursor, Claude skill, and Codex skill outputs.
 
 Known gaps:
 
 - `--trace` now produces text and JSON compile trace output.
-- MVP 1 skill backends are not implemented.
-- The Karpathy module is reusable, and the Karpathy demo composes it. The demo default `compile.targets` includes MVP 1 backends, so it currently requires explicit MVP 0 targets.
-- Backend capability warnings are not implemented.
-- Permission output is included as guidance, but not yet emitted as a formal soft permission table with downgrade warnings.
+- MVP 1 skill backends are implemented for explicit skill entries, but target-to-skill package generation remains future-facing.
 - Dependency-aware invalidation is implemented only as content-based unchanged write skipping, not as a separate build graph scheduler.
 
 ## P0: Stabilize MVP 0
@@ -103,12 +110,21 @@ Acceptance:
 
 Goal: enforce the MVP 0 validation surface.
 
+Status: implemented.
+
 Implementation:
 
 - Validate priority type and range.
 - Validate `deps` references point to known targets when used as target dependencies.
 - Report dependency cycles.
 - Keep compiler-only mode from executing dependency selection.
+
+Implemented scope:
+
+- Target priority schema validation requires a strict integer in the inclusive range 0..100.
+- Target dependency validation emits `AMF122` for unknown `deps`.
+- Target dependency validation emits `AMF123` for circular `deps` with a stable cycle path.
+- Compiler-only mode still only validates and renders target metadata; it does not execute dependency selection.
 
 Acceptance:
 
@@ -120,11 +136,20 @@ Acceptance:
 
 Goal: make repository health visible on push.
 
+Status: implemented.
+
 Implementation:
 
 - Add `.github/workflows/test.yml`.
 - Run tests on Python 3.9 and a current Python version.
 - Run `python -m compileall -q src`.
+
+Implemented scope:
+
+- The workflow runs on push and pull request events.
+- The matrix covers Python 3.9 and Python 3.14.
+- Each matrix entry installs the package with test extras, runs `PYTHONPATH=src python -m pytest -q`, and runs `python -m compileall -q src`.
+- Tests assert the workflow keeps the expected triggers, version matrix, and verification commands.
 
 Acceptance:
 
@@ -135,11 +160,20 @@ Acceptance:
 
 Goal: make the prototype runnable by someone opening the repo fresh.
 
+Status: implemented.
+
 Implementation:
 
 - Expand README with install, editable install, test, and demo commands.
-- Document why the Karpathy demo needs explicit MVP 0 targets until MVP 1 lands.
+- Document the Karpathy demo default compile path.
 - Link this breakdown from README.
+
+Implemented scope:
+
+- README includes a fresh-checkout quickstart with virtualenv setup, editable install, root validation, and default demo compile commands.
+- README includes development commands for test extras, `PYTHONPATH=src python3 -m pytest -q`, and `python3 -m compileall -q src`.
+- README documents the Karpathy demo validate/compile path and lists the Markdown, Cursor, Claude skill, and Codex skill outputs.
+- Tests assert the README keeps the required quickstart and demo guidance.
 
 Acceptance:
 
@@ -149,11 +183,19 @@ Acceptance:
 
 Goal: make generated Markdown changes deliberate.
 
+Status: implemented.
+
 Implementation:
 
 - Add snapshot files for `claude-md`, `agents-md`, and `cursor-rule`.
 - Compare full generated content instead of selected substrings.
 - Keep snapshots deterministic.
+
+Implemented scope:
+
+- Added full-content snapshots under `tests/snapshots/` for the Karpathy fixture's `claude-md`, `agents-md`, and `cursor-rule` outputs.
+- Replaced selected substring assertions with exact snapshot comparisons.
+- Snapshot tests fail when generated Markdown or Cursor rule content changes.
 
 Acceptance:
 
@@ -165,11 +207,20 @@ Acceptance:
 
 Goal: warn when a backend cannot enforce a requested rail.
 
+Status: implemented.
+
 Implementation:
 
 - Use `BackendCapabilities` for each backend.
 - Add diagnostics for permission/hook downgrades.
 - Keep warnings non-fatal for Markdown and skill backends.
+
+Implemented scope:
+
+- Backends declare capabilities for Markdown, skills, permissions, hooks, and hard enforcement.
+- Permission hard-to-soft downgrades emit warning diagnostic `AMF121`.
+- Hook downgrades emit warning diagnostic `AMF124` when hooks are compiled for a backend without native hook support.
+- Native hard-rail backends such as `claude-code` and `opencode` do not emit permission or hook downgrade warnings for supported capabilities.
 
 Acceptance:
 
@@ -180,11 +231,20 @@ Acceptance:
 
 Goal: create one renderer for Claude and Codex skill packages.
 
+Status: implemented.
+
 Implementation:
 
 - Render skill name, description, when-to-use, guards, procedure, and output requirements.
 - Slugify skill names deterministically.
 - Preserve namespaces in content but use filesystem-safe paths.
+
+Implemented scope:
+
+- `render_skill_markdown` emits a complete `SKILL.md` body from an `IRSkill`.
+- The renderer preserves qualified skill names such as `superpowers:systematic-debugging` in frontmatter and content.
+- `skill_output_path` and deterministic slugging convert namespaced skill names into filesystem-safe paths such as `.claude/skills/superpowers-systematic-debugging/SKILL.md`.
+- Tests cover complete rendering and namespace-safe output paths.
 
 Acceptance:
 
@@ -195,11 +255,20 @@ Acceptance:
 
 Goal: generate Claude skill packages.
 
+Status: implemented.
+
 Implementation:
 
 - Add backend name `claude-skill`.
 - Emit `.claude/skills/<slug>/SKILL.md`.
 - Generate one file per skill entry.
+
+Implemented scope:
+
+- `claude-skill` is a supported backend target.
+- It reuses the shared skill renderer and emits one `.claude/skills/<slug>/SKILL.md` file per unique normalized skill.
+- Skill outputs are deterministic by sorted qualified skill name.
+- Karpathy and Superpowers minimal fixtures compile with explicit `--target claude-skill`.
 
 Acceptance:
 
@@ -210,11 +279,20 @@ Acceptance:
 
 Goal: generate Codex skill packages.
 
+Status: implemented.
+
 Implementation:
 
 - Add backend name `codex-skill`.
 - Emit `.codex/skills/<slug>/SKILL.md`.
 - Reuse shared skill rendering with Codex-neutral wording.
+
+Implemented scope:
+
+- `codex-skill` is a supported backend target.
+- It reuses the shared skill renderer and emits one `.codex/skills/<slug>/SKILL.md` file per unique normalized skill.
+- Skill outputs are deterministic by sorted qualified skill name.
+- Karpathy and Superpowers minimal fixtures compile with explicit `--target codex-skill`.
 
 Acceptance:
 
@@ -225,11 +303,20 @@ Acceptance:
 
 Goal: make permission guidance predictable in generated Markdown and skills.
 
+Status: implemented.
+
 Implementation:
 
 - Render permission defaults and rules as tables.
 - Include action values `allow`, `ask`, and `deny`.
 - Emit backend downgrade warning when enforcement is soft.
+
+Implemented scope:
+
+- Markdown outputs render permission defaults and rules as tables instead of ad hoc bullets.
+- Skill package outputs include the same formal permission table when the source has permissions.
+- Soft permission backends emit warning diagnostic `AMF121` when permissions are lowered to soft instructions.
+- Native hard-rail backends such as `claude-code` and `opencode` continue to emit native permission config without soft downgrade warnings.
 
 Acceptance:
 
@@ -240,9 +327,17 @@ Acceptance:
 
 Goal: remove the need for explicit MVP 0 targets in the Karpathy demo.
 
+Status: implemented.
+
 Implementation:
 
 - After `claude-skill` and `codex-skill` are implemented, run `agentmf compile --file demos/karpathy/AgentMakefile`.
+
+Implemented scope:
+
+- `modules/karpathy/AgentMakefile` defines a `karpathy-guidelines` skill that packages the existing Karpathy-style policies for skill backends.
+- Karpathy coding targets reference the `karpathy-guidelines` skill.
+- The Karpathy demo default compile emits `CLAUDE.md`, `.claude/skills/karpathy-guidelines/SKILL.md`, `.cursor/rules/karpathy-guidelines.mdc`, `AGENTS.md`, and `.codex/skills/karpathy-guidelines/SKILL.md`.
 
 Acceptance:
 
@@ -540,16 +635,14 @@ These tasks should not block compiler milestones:
 Completed:
 
 - AMF-P0-001 trace output.
+- AMF-P0-003 target metadata and dependency validation.
+- AMF-P0-006 snapshot fixtures.
+- AMF-M1-001 backend capability warnings.
+- AMF-M1-002 shared skill rendering.
+- AMF-M1-006 Karpathy default compile.
 
 Next:
 
-1. AMF-P0-004 CI.
-2. AMF-P0-005 README.
-3. AMF-M1-002 shared skill rendering.
-4. AMF-M1-003 `claude-skill`.
-5. AMF-M1-004 `codex-skill`.
-6. AMF-M1-005 soft permission tables.
-7. AMF-M1-006 Karpathy default compile.
-8. AMF-M2-001 namespaced includes.
+1. AMF-M1-003 `claude-skill` backend.
 
-This order keeps the compiler usable while moving from the current MVP 0 prototype to the MVP 1 success criterion.
+This order continues closing the MVP 1 skill compiler tasks that are already represented in code and tests.

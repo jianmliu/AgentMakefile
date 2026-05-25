@@ -1141,7 +1141,7 @@ AgentMakefile → Agent Rule IR → Claude Code / OpenCode / Codex / Cursor / Ge
 
 ## 10. Target Selection
 
-In compiler-only mode, target priority is metadata. The compiler should validate that priorities are well-formed and render them into generated guidance when useful, but it does not perform live target selection.
+In compiler-only mode, target priority is metadata. The compiler should validate that priorities are strict integers in the inclusive range `0..100` and render them into generated guidance when useful, but it does not perform live target selection.
 
 In runtime mode, when multiple targets match a live user request, the target selector should resolve conflicts using priority.
 
@@ -3406,7 +3406,7 @@ class SkillSpec(StrictModel):
 
 class TargetSpec(StrictModel):
     phony: bool = True
-    priority: int = 50
+    priority: int = Field(default=50, ge=0, le=100)
     description: str | None = None
     inputs: InputSpec = Field(default_factory=InputSpec)
     match: dict[str, Any] = Field(default_factory=dict)
