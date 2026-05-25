@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional, Set
 
 from agentmf.diagnostics import Diagnostics
@@ -19,10 +20,11 @@ def normalize(source: AgentMakefileSource, diagnostics: Diagnostics) -> Optional
     policies = _normalize_policies(source)
     skills = _normalize_skills(source)
     targets = _normalize_targets(source, policies, skills, diagnostics)
+    permissions = _permission_spec(source)
+    _validate_permissions(permissions, diagnostics)
     if diagnostics.has_errors:
         return None
 
-    permissions = _permission_spec(source)
     return AgentRuleIR(
         version=source.version,
         metadata=source.metadata,
@@ -145,9 +147,9 @@ def _compose_target(
         if key in explicitly_set:
             data[key] = value
 
-    data["policies"] = list(parent.policies) + list(target.add_policies or target.policies)
-    data["steps"] = list(parent.steps) + list(target.steps) + list(target.add_steps)
-    data["output_format"] = list(parent.output_format) + list(target.output_format) + list(target.add_output_format)
+    data["policies"] = list(data["policies"]) + list(target.add_policies)
+    data["steps"] = list(data["steps"]) + list(target.add_steps)
+    data["output_format"] = list(data["output_format"]) + list(target.add_output_format)
     data.update(target.override)
     data["extends"] = None
     data["add_policies"] = []
@@ -160,6 +162,8 @@ def _compose_target(
 def _permission_spec(source: AgentMakefileSource) -> PermissionSpec:
     if isinstance(source.permissions, PermissionSpec):
         return source.permissions
+    if "defaults" in source.permissions or "rules" in source.permissions:
+        return PermissionSpec.model_validate(source.permissions)
     return PermissionSpec(rules=source.permissions)
 
 
@@ -169,3 +173,42 @@ def _flatten_permissions(permissions: PermissionSpec) -> List[IRPermission]:
         for pattern in sorted(permissions.rules[tool]):
             flattened.append(IRPermission(tool=tool, pattern=pattern, action=permissions.rules[tool][pattern]))
     return flattened
+
+
+def _validate_permissions(permissions: PermissionSpec, diagnostics: Diagnostics) -> None:
+    for tool in sorted(set(permissions.defaults).union(permissions.rules)):
+        if not _valid_permission_tool(tool):
+            diagnostics.error(
+                "AMF120",
+                f"invalid permission tool name: {tool}",
+                f"permissions.{tool}",
+                "use a non-empty tool name without whitespace",
+            )
+    for tool in sorted(permissions.rules):
+        for pattern in sorted(permissions.rules[tool]):
+            hint = _permission_pattern_error_hint(pattern)
+            if hint:
+                diagnostics.error(
+                    "AMF119",
+                    f"invalid permission glob pattern: {pattern}",
+                    f"permissions.{tool}.{pattern}",
+                    hint,
+                )
+
+
+def _valid_permission_tool(tool: str) -> bool:
+    return bool(tool) and re.search(r"\s", tool) is None
+
+
+def _permission_pattern_error_hint(pattern: str) -> Optional[str]:
+    if not pattern:
+        return "use a non-empty glob pattern"
+    open_class = False
+    for character in pattern:
+        if character == "[" and not open_class:
+            open_class = True
+        elif character == "]" and open_class:
+            open_class = False
+    if open_class:
+        return "close '[' character classes with ']' or remove the character class"
+    return None

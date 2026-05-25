@@ -1,0 +1,44 @@
+version: "0.1"
+
+include:
+  - path: ../../modules/karpathy/AgentMakefile
+    as: karpathy
+  - path: ../../modules/unknown-repo-security/AgentMakefile
+    as: security
+
+metadata:
+  name: local-composition-security-review
+  description: Demo project that composes Karpathy-style coding rules with unknown-repository security review rails.
+
+compile:
+  targets:
+    - claude-md
+    - agents-md
+    - cursor-rule
+
+artifacts:
+  cursor-rule:
+    path: .cursor/rules/local-composition-security-review.mdc
+    frontmatter:
+      description: Local composition demo for coding and unknown-repo security review.
+      alwaysApply: true
+
+targets:
+  repo.secure_code_review:
+    extends: karpathy.code.task
+    priority: 90
+    match:
+      user_intent:
+        - review unknown repo safely
+        - inspect unfamiliar codebase
+        - security-focused code review
+    add_policies:
+      - security.no_untrusted_execution
+    add_steps:
+      - action: inspect_dependency_manifests
+      - action: inspect_package_scripts_before_running_commands
+      - action: summarize_safe_next_steps
+    add_output_format:
+      - risky_scripts
+      - dependency_risks
+      - safe_next_steps

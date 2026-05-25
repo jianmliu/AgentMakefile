@@ -1,0 +1,55 @@
+version: "0.1"
+
+include:
+  - path: ../../modules/unknown-repo-security/AgentMakefile
+    as: security
+
+metadata:
+  name: unknown-repo-hard-rails-demo
+  description: Demo project for reviewing unknown repositories with soft guidance and native hard rails.
+
+compile:
+  targets:
+    - claude-md
+    - agents-md
+    - cursor-rule
+    - claude-code
+    - opencode
+
+artifacts:
+  cursor-rule:
+    path: .cursor/rules/unknown-repo-security.mdc
+    frontmatter:
+      description: Unknown repository security review rails.
+      alwaysApply: true
+
+targets:
+  repo.unknown_repo_hard_rails:
+    extends: security.repo.security_review
+    priority: 95
+    match:
+      user_intent:
+        - review unknown repository safely
+        - inspect unfamiliar repository
+        - hard rails security review
+    add_steps:
+      - action: inspect_package_manager_scripts_before_installing
+      - action: prefer_static_analysis_before_runtime_execution
+      - action: use_native_hard_rails_for_risky_tool_calls
+      - action: provide_soft_fallback_guidance_when_runtime_enforcement_is_unavailable
+    add_output_format:
+      - hard_rails_applied
+      - blocked_commands
+      - soft_fallback_guidance
+
+hooks:
+  before_tool_call:
+    - name: block_untrusted_installs
+      when:
+        tool: bash
+        command_matches:
+          - "npm install*"
+          - "pnpm install*"
+          - "yarn install*"
+      action: deny
+      message: "Blocked: inspect package scripts before installing dependencies."

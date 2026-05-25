@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
@@ -7,7 +8,7 @@ import yaml
 from pydantic import ValidationError
 
 from agentmf.diagnostics import Diagnostic, Diagnostics
-from agentmf.models import AgentMakefileSource, IncludeSpec, PermissionSpec, SkillSpec, TargetSpec
+from agentmf.models import AgentMakefileSource, IncludeSpec, PermissionAction, PermissionSpec, PolicySpec, SkillSpec, TargetSpec
 
 
 class AgentMakefileError(Exception):
@@ -30,7 +31,21 @@ def load_source_with_diagnostics(path: Union[Path, str]) -> Tuple[Optional[Agent
     return source, diagnostics
 
 
-def _load_source(path: Path, diagnostics: Diagnostics, stack: Set[Path]) -> Optional[AgentMakefileSource]:
+def load_source_with_diagnostics_and_paths(
+    path: Union[Path, str],
+) -> Tuple[Optional[AgentMakefileSource], Diagnostics, List[Path]]:
+    diagnostics = Diagnostics()
+    loaded_paths: List[Path] = []
+    source = _load_source(Path(path), diagnostics, set(), loaded_paths)
+    return source, diagnostics, loaded_paths
+
+
+def _load_source(
+    path: Path,
+    diagnostics: Diagnostics,
+    stack: Set[Path],
+    loaded_paths: Optional[List[Path]] = None,
+) -> Optional[AgentMakefileSource]:
     resolved = path.resolve()
     if resolved in stack:
         diagnostics.error("AMF104", "circular include detected", str(path))
@@ -38,6 +53,8 @@ def _load_source(path: Path, diagnostics: Diagnostics, stack: Set[Path]) -> Opti
     if not resolved.exists():
         diagnostics.error("AMF101", "AgentMakefile does not exist", str(path))
         return None
+    if loaded_paths is not None and resolved not in loaded_paths:
+        loaded_paths.append(resolved)
 
     raw = _read_yaml(resolved, diagnostics)
     if raw is None:
@@ -55,7 +72,7 @@ def _load_source(path: Path, diagnostics: Diagnostics, stack: Set[Path]) -> Opti
     for include in source.include:
         include_path = _include_path(include)
         child_path = (resolved.parent / include_path).resolve()
-        child_source = _load_source(child_path, diagnostics, stack)
+        child_source = _load_source(child_path, diagnostics, stack, loaded_paths)
         if child_source is None:
             continue
         if isinstance(include, IncludeSpec) and include.as_:
@@ -71,7 +88,7 @@ def _load_source(path: Path, diagnostics: Diagnostics, stack: Set[Path]) -> Opti
     local_without_includes = source.model_copy(update={"include": []})
     if merged is None:
         return local_without_includes
-    return _merge_sources(merged, local_without_includes)
+    return _merge_sources(merged, local_without_includes, diagnostics=diagnostics)
 
 
 def _read_yaml(path: Path, diagnostics: Diagnostics) -> Optional[Dict[str, Any]]:
@@ -120,7 +137,7 @@ def _namespace_source(source: AgentMakefileSource, namespace: str) -> AgentMakef
 
     data = source.model_dump()
     data["policies"] = {
-        _namespace_name(namespace, name): policy.model_dump()
+        _namespace_name(namespace, name): _dump_policy_for_merge(policy)
         for name, policy in source.policies.items()
     }
     data["skills"] = {
@@ -197,16 +214,19 @@ def _merge_sources(
     diagnostics: Optional[Diagnostics] = None,
     report_duplicates: bool = False,
 ) -> AgentMakefileSource:
+    if diagnostics is not None:
+        _report_locked_policy_weakening(base, overlay, diagnostics)
     if report_duplicates and diagnostics is not None:
         _report_duplicate_definitions(base, overlay, diagnostics)
 
     base_permissions = _permission_spec(base)
     overlay_permissions = _permission_spec(overlay)
     permissions = PermissionSpec(
-        defaults={**base_permissions.defaults, **overlay_permissions.defaults},
+        defaults=_merge_permission_defaults(base_permissions.defaults, overlay_permissions.defaults),
         rules=_merge_nested_permission_rules(base_permissions.rules, overlay_permissions.rules),
     )
 
+    policies = _merge_policies(base, overlay)
     data = {
         "version": overlay.version or base.version,
         "metadata": {**base.metadata, **overlay.metadata},
@@ -215,7 +235,7 @@ def _merge_sources(
         "compile": {"targets": overlay.compile.targets or base.compile.targets},
         "artifacts": {**base.artifacts, **base.outputs, **overlay.artifacts, **overlay.outputs},
         "outputs": {},
-        "policies": {**base.policies, **overlay.policies},
+        "policies": policies,
         "skills": {**base.skills, **overlay.skills},
         "targets": {**base.targets, **overlay.targets},
         "permissions": permissions,
@@ -227,6 +247,89 @@ def _merge_sources(
         "compiler_hints": {**base.compiler_hints, **overlay.compiler_hints},
     }
     return AgentMakefileSource.model_validate(data)
+
+
+def _merge_policies(base: AgentMakefileSource, overlay: AgentMakefileSource) -> Dict[str, Any]:
+    policies: Dict[str, Any] = {name: _dump_policy_for_merge(policy) for name, policy in base.policies.items()}
+    for name, policy in overlay.policies.items():
+        data = _dump_policy_for_merge(policy)
+        base_policy = base.policies.get(name)
+        if base_policy is not None and base_policy.locked and "locked" not in policy.model_fields_set:
+            data["locked"] = True
+        policies[name] = data
+    return policies
+
+
+def _dump_policy_for_merge(policy: PolicySpec) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    for field_name in ("description", "applies_to", "guards", "steps", "output_format", "output_schema"):
+        value = getattr(policy, field_name)
+        if value or field_name in policy.model_fields_set:
+            data[field_name] = value
+    if policy.locked or "locked" in policy.model_fields_set:
+        data["locked"] = policy.locked
+    return data
+
+
+def _report_locked_policy_weakening(
+    base: AgentMakefileSource,
+    overlay: AgentMakefileSource,
+    diagnostics: Diagnostics,
+) -> None:
+    for name in sorted(set(base.policies).intersection(overlay.policies)):
+        base_policy = base.policies[name]
+        overlay_policy = overlay.policies[name]
+        if not base_policy.locked:
+            continue
+        if "locked" in overlay_policy.model_fields_set and not overlay_policy.locked:
+            diagnostics.error(
+                "AMF114",
+                f"locked policy {name} cannot be unlocked",
+                f"policies.{name}.locked",
+                "keep the locked policy requirements or add a stricter policy under a new name",
+            )
+        _report_removed_locked_items(name, "guard", "guards", base_policy.guards, overlay_policy.guards, diagnostics)
+        _report_removed_locked_items(name, "step", "steps", base_policy.steps, overlay_policy.steps, diagnostics)
+        _report_removed_locked_items(
+            name,
+            "output format",
+            "output_format",
+            base_policy.output_format,
+            overlay_policy.output_format,
+            diagnostics,
+        )
+
+
+def _report_removed_locked_items(
+    policy_name: str,
+    item_label: str,
+    field_name: str,
+    base_items: List[Union[str, Dict[str, Any]]],
+    overlay_items: List[Union[str, Dict[str, Any]]],
+    diagnostics: Diagnostics,
+) -> None:
+    overlay_keys = {_canonical_value(item) for item in overlay_items}
+    for item in base_items:
+        if _canonical_value(item) in overlay_keys:
+            continue
+        diagnostics.error(
+            "AMF114",
+            f"locked policy {policy_name} cannot remove {item_label}: {_format_locked_item(item)}",
+            f"policies.{policy_name}.{field_name}",
+            "keep the locked policy requirements or add a stricter policy under a new name",
+        )
+
+
+def _canonical_value(value: Union[str, Dict[str, Any]]) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _format_locked_item(value: Union[str, Dict[str, Any]]) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, sort_keys=True)
 
 
 def _report_duplicate_definitions(
@@ -252,17 +355,38 @@ def _permission_spec(source: AgentMakefileSource) -> PermissionSpec:
     permissions = source.permissions
     if isinstance(permissions, PermissionSpec):
         return permissions
+    if "defaults" in permissions or "rules" in permissions:
+        return PermissionSpec.model_validate(permissions)
     return PermissionSpec(rules=permissions)
 
 
+def _merge_permission_defaults(
+    base: Dict[str, PermissionAction],
+    overlay: Dict[str, PermissionAction],
+) -> Dict[str, PermissionAction]:
+    merged = dict(base)
+    for tool, action in overlay.items():
+        existing = merged.get(tool)
+        merged[tool] = action if existing is None else _most_restrictive_permission(existing, action)
+    return merged
+
+
 def _merge_nested_permission_rules(
-    base: Dict[str, Dict[str, str]],
-    overlay: Dict[str, Dict[str, str]],
-) -> Dict[str, Dict[str, str]]:
+    base: Dict[str, Dict[str, PermissionAction]],
+    overlay: Dict[str, Dict[str, PermissionAction]],
+) -> Dict[str, Dict[str, PermissionAction]]:
     merged = {tool: dict(rules) for tool, rules in base.items()}
     for tool, rules in overlay.items():
-        merged.setdefault(tool, {}).update(rules)
+        merged.setdefault(tool, {})
+        for pattern, action in rules.items():
+            existing = merged[tool].get(pattern)
+            merged[tool][pattern] = action if existing is None else _most_restrictive_permission(existing, action)
     return merged
+
+
+def _most_restrictive_permission(first: PermissionAction, second: PermissionAction) -> PermissionAction:
+    rank = {"allow": 0, "ask": 1, "deny": 2}
+    return first if rank[first] >= rank[second] else second
 
 
 def _merge_hooks(

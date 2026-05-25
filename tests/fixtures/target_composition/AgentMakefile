@@ -1,0 +1,48 @@
+version: "0.1"
+
+metadata:
+  name: target-composition-fixture
+  description: Fixture covering target inheritance, additive fields, and explicit empty overrides.
+
+policies:
+  parent_policy:
+    guards:
+      - parent_guard
+  child_policy:
+    guards:
+      - child_guard
+
+targets:
+  parent.task:
+    phony: true
+    priority: 90
+    description: Parent task.
+    match:
+      user_intent:
+        - parent
+    policies:
+      - parent_policy
+    steps:
+      - parent_step
+    output_format:
+      - parent_output
+    fallback:
+      blocked:
+        - parent_fallback
+  child.task:
+    extends: parent.task
+    phony: false
+    priority: 0
+    description: Child task.
+    match: {}
+    policies: []
+    add_policies:
+      - child_policy
+    steps: []
+    add_steps:
+      - child_step
+    output_format: []
+    add_output_format:
+      - child_output
+    override:
+      fallback: {}

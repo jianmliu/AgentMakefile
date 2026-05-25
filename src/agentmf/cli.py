@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from agentmf.compiler import compile_agentmakefile
 from agentmf.loader import load_source_with_diagnostics
+from agentmf.selector import create_link_plan
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -29,11 +30,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     compile_cmd.add_argument("--format", choices=["text", "json"], default="text")
     compile_cmd.add_argument("--trace", action="store_true")
 
+    select_cmd = subparsers.add_parser("select", help="select AgentMakefile prompt fragments for a request")
+    select_cmd.add_argument("--file", default="AgentMakefile")
+    select_cmd.add_argument("--request")
+    select_cmd.add_argument("--target", action="append", dest="targets")
+    select_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    select_cmd.add_argument("--format", choices=["text", "json"], default="json")
+
     args = parser.parse_args(argv)
     if args.command == "validate":
         return _validate(args)
     if args.command == "compile":
         return _compile(args)
+    if args.command == "select":
+        return _select(args)
     return 2
 
 
@@ -64,6 +74,7 @@ def _compile(args: argparse.Namespace) -> int:
             "ok": result.ok,
             "files": [file.path for file in result.files],
             "wrote": [str(path) for path in result.wrote],
+            "unchanged": [str(path) for path in result.unchanged],
             "diagnostics": result.diagnostics.to_list(),
         }
         if args.trace:
@@ -83,12 +94,45 @@ def _compile(args: argparse.Namespace) -> int:
             print(header)
             for file in result.files:
                 print(f"  {file.path}")
+            if args.write and result.unchanged:
+                print("\nUnchanged:")
+                for path in result.unchanged:
+                    print(f"  {path}")
             if not args.write:
                 print("\nRun with --write to write files.")
         if args.trace:
             print("\nTrace:")
             for event in result.trace:
                 print(f"  {event.format()}")
+    return 1 if not result.ok else 0
+
+
+def _select(args: argparse.Namespace) -> int:
+    result = create_link_plan(
+        path=Path(args.file),
+        request=args.request,
+        target_names=args.targets,
+        backend=args.backend,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "link_plan": result.plan,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.plan:
+            print("Selected fragments:")
+            for fragment in result.plan["fragments"]:
+                print(f"  {fragment['path']}")
     return 1 if not result.ok else 0
 
 
