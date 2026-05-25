@@ -287,6 +287,119 @@ targets:
     assert "- local_policy" in content
 
 
+def test_duplicate_names_after_include_merge_report_stable_diagnostics(tmp_path: Path) -> None:
+    (tmp_path / "first.yml").write_text(
+        """\
+version: "0.1"
+policies:
+  repeated_policy:
+    guards:
+      - first_guard
+skills:
+  repeated_skill:
+    description: First skill.
+targets:
+  repeated.task:
+    steps:
+      - first_step
+"""
+    )
+    (tmp_path / "second.yml").write_text(
+        """\
+version: "0.1"
+policies:
+  repeated_policy:
+    guards:
+      - second_guard
+skills:
+  repeated_skill:
+    description: Second skill.
+targets:
+  repeated.task:
+    steps:
+      - second_step
+"""
+    )
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+include:
+  - path: first.yml
+  - path: second.yml
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert not result.ok
+    duplicates = [item for item in result.diagnostics.items if item.code == "AMF113"]
+    assert [(item.message, item.location) for item in duplicates] == [
+        ("duplicate policy after include merge: repeated_policy", "policies.repeated_policy"),
+        ("duplicate skill after include merge: repeated_skill", "skills.repeated_skill"),
+        ("duplicate target after include merge: repeated.task", "targets.repeated.task"),
+    ]
+    assert all(item.hint == "rename one definition or include a reusable module with an alias using include.as" for item in duplicates)
+
+
+def test_local_agentmakefile_overlay_can_override_included_names(tmp_path: Path) -> None:
+    (tmp_path / "base.yml").write_text(
+        """\
+version: "0.1"
+policies:
+  overridable_policy:
+    guards:
+      - base_guard
+skills:
+  overridable_skill:
+    description: Base skill.
+targets:
+  overridable.task:
+    policies:
+      - overridable_policy
+    skills:
+      - overridable_skill
+    steps:
+      - base_step
+"""
+    )
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+include:
+  - path: base.yml
+policies:
+  overridable_policy:
+    guards:
+      - local_guard
+skills:
+  overridable_skill:
+    description: Local skill.
+targets:
+  overridable.task:
+    policies:
+      - overridable_policy
+    skills:
+      - overridable_skill
+    steps:
+      - local_step
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-md"])
+
+    assert result.ok, result.diagnostics.format()
+    assert not any(item.code == "AMF113" for item in result.diagnostics.items)
+    content = result.files[0].content
+    assert "local_guard" in content
+    assert "Local skill." in content
+    assert "local_step" in content
+    assert "base_guard" not in content
+    assert "Base skill." not in content
+    assert "base_step" not in content
+
+
 def test_validate_package_include_disabled(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,

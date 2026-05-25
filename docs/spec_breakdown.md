@@ -32,6 +32,7 @@ Implemented:
 - Superpowers and Oh My OpenAgent represented as separate reusable framework modules under `modules/`.
 - The Superpowers module covers all currently installed project Superpowers skills as AgentMakefile skill entries.
 - Include namespacing with `as` for local file includes, covering policy, target, skill, dependency, `extends`, `add_policies`, and validation target keys.
+- Duplicate policy, skill, and target names across multiple included files are reported with stable diagnostics.
 
 Known gaps:
 
@@ -41,7 +42,6 @@ Known gaps:
 - Backend capability warnings are not implemented.
 - Permission output is included as guidance, but not yet emitted as a formal soft permission table with downgrade warnings.
 - Locked policy weakening validation is not implemented.
-- Duplicate names after include merge are not reported with dedicated diagnostics.
 
 ## P0: Stabilize MVP 0
 
@@ -275,11 +275,19 @@ Acceptance:
 
 Goal: report include conflicts clearly.
 
+Status: implemented for duplicate policy, skill, and target names across multiple included files.
+
 Implementation:
 
 - Detect duplicate target, policy, and skill names after include merge.
 - Allow explicit override paths only where the spec allows them.
-- Include YAML path in diagnostics where possible.
+- Include stable YAML-style object paths in diagnostics.
+
+Implemented scope:
+
+- Multiple included files defining the same policy, skill, or target emit `AMF113`.
+- Diagnostics are emitted in deterministic policy, skill, target order with stable `policies.<name>`, `skills.<name>`, and `targets.<name>` locations.
+- The local AgentMakefile overlay remains allowed to override included definitions according to the current precedence model.
 
 Acceptance:
 

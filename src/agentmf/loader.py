@@ -60,7 +60,12 @@ def _load_source(path: Path, diagnostics: Diagnostics, stack: Set[Path]) -> Opti
             continue
         if isinstance(include, IncludeSpec) and include.as_:
             child_source = _namespace_source(child_source, include.as_)
-        merged = child_source if merged is None else _merge_sources(merged, child_source)
+        merged = child_source if merged is None else _merge_sources(
+            merged,
+            child_source,
+            diagnostics=diagnostics,
+            report_duplicates=True,
+        )
     stack.remove(resolved)
 
     local_without_includes = source.model_copy(update={"include": []})
@@ -186,7 +191,15 @@ def _namespace_name(namespace: str, name: str) -> str:
     return f"{namespace}.{name}"
 
 
-def _merge_sources(base: AgentMakefileSource, overlay: AgentMakefileSource) -> AgentMakefileSource:
+def _merge_sources(
+    base: AgentMakefileSource,
+    overlay: AgentMakefileSource,
+    diagnostics: Optional[Diagnostics] = None,
+    report_duplicates: bool = False,
+) -> AgentMakefileSource:
+    if report_duplicates and diagnostics is not None:
+        _report_duplicate_definitions(base, overlay, diagnostics)
+
     base_permissions = _permission_spec(base)
     overlay_permissions = _permission_spec(overlay)
     permissions = PermissionSpec(
@@ -214,6 +227,25 @@ def _merge_sources(base: AgentMakefileSource, overlay: AgentMakefileSource) -> A
         "compiler_hints": {**base.compiler_hints, **overlay.compiler_hints},
     }
     return AgentMakefileSource.model_validate(data)
+
+
+def _report_duplicate_definitions(
+    base: AgentMakefileSource,
+    overlay: AgentMakefileSource,
+    diagnostics: Diagnostics,
+) -> None:
+    for kind, plural, base_items, overlay_items in [
+        ("policy", "policies", base.policies, overlay.policies),
+        ("skill", "skills", base.skills, overlay.skills),
+        ("target", "targets", base.targets, overlay.targets),
+    ]:
+        for name in sorted(set(base_items).intersection(overlay_items)):
+            diagnostics.error(
+                "AMF113",
+                f"duplicate {kind} after include merge: {name}",
+                f"{plural}.{name}",
+                "rename one definition or include a reusable module with an alias using include.as",
+            )
 
 
 def _permission_spec(source: AgentMakefileSource) -> PermissionSpec:
