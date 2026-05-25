@@ -617,6 +617,48 @@ Acceptance:
 
 - Demo compiles into soft Markdown plus native hard rail artifacts.
 
+## MVP 4: Runtime Planning Skeleton
+
+### AMF-M4-001 Add Runtime Dry-Run Skeleton
+
+Status: implemented.
+
+Goal: establish a runtime-facing architecture without executing agent workflows yet.
+
+Implementation:
+
+- Add `agentmf.runtime.create_run_plan`.
+- Add `agentmf run --dry-run`.
+- Reuse the existing fragment selector and link plan.
+- Return selected targets, dependency closure, fragment paths, target contracts, policy contracts, and permission contracts.
+- Mark execution-only phases as `not_executed` so the skeleton cannot be mistaken for a full runtime.
+
+Acceptance:
+
+- `agentmf run --dry-run --request ... --format json` emits a stable runtime plan.
+- Dry-run output includes selected target fragments plus guards, steps, permissions, output formats, and fallback contracts.
+- Runtime execution remains unavailable outside dry-run mode.
+
+### AMF-M4-002 Add Prompt Link Step
+
+Status: implemented.
+
+Goal: assemble the selected target prompt fragments into a runtime prompt prefix without executing the workflow.
+
+Implementation:
+
+- Compile the selected fragment backend in memory during `agentmf run --dry-run`.
+- Link only selected target fragments because each target fragment already contains its dependency closure.
+- Return the linked prompt prefix content in the runtime plan.
+- Compare linked prefix size against the matching all-in-one backend (`agents-md` or `claude-md`).
+- Report character counts, approximate token counts, and estimated savings.
+
+Acceptance:
+
+- `agentmf run --dry-run --format json` includes `prompt_prefix.content`.
+- Linked prompt content excludes unrelated target-only guidance.
+- Runtime output reports linked-vs-all-in-one size and approximate token deltas.
+
 ## Post-MVP Runtime Work
 
 These tasks should not block compiler milestones:
@@ -660,9 +702,11 @@ Completed:
 - AMF-M3-003 `claude-code` backend.
 - AMF-M3-004 `opencode` backend.
 - AMF-M3-005 unknown repo hard rails demo.
+- AMF-M4-001 runtime dry-run skeleton.
+- AMF-M4-002 prompt link step.
 
 Next:
 
-1. No unreconciled implemented roadmap tasks remain in this breakdown.
+1. AMF-M4-003 guard evaluation dry-run.
 
-This order has reconciled the implemented compiler roadmap tasks currently listed in this breakdown.
+This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks. The next runtime task should evaluate guards in dry-run mode without executing steps.

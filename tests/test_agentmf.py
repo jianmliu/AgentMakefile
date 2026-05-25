@@ -13,6 +13,7 @@ from agentmf.cli import main
 from agentmf.ir import normalize
 from agentmf.loader import load_source, load_source_with_diagnostics
 from agentmf.diagnostics import Diagnostics
+from agentmf.runtime import create_run_plan
 from agentmf.selector import create_link_plan
 
 
@@ -1983,6 +1984,221 @@ targets:
             "path": ".agentmf/fragments/agents/review.task.md",
         },
     ]
+
+
+def test_runtime_dry_run_plan_summarizes_selected_runtime_contracts(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+policies:
+  review_policy:
+    guards:
+      - policy_guard
+    steps:
+      - policy_step
+targets:
+  base.task:
+    steps:
+      - action: inspect_base
+  review.task:
+    deps:
+      - base.task
+    match:
+      user_intent:
+        - review code
+    policies:
+      - review_policy
+    guards:
+      - target_guard
+    steps:
+      - action: review_code
+    output_format:
+      - findings
+    fallback:
+      blocked:
+        - summarize_blocker
+permissions:
+  defaults:
+    bash: ask
+  rules:
+    bash:
+      "git status": allow
+""",
+    )
+
+    result = create_run_plan(path, request="please review code", backend="agents-fragments", dry_run=True)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["mode"] == "dry_run"
+    assert result.plan["execution"]["enabled"] is False
+    assert result.plan["link_plan"]["target_closure"] == ["base.task", "review.task"]
+    assert result.plan["runtime_phases"] == [
+        {"name": "target_selection", "status": "resolved"},
+        {"name": "dependency_graph_resolution", "status": "resolved"},
+        {"name": "prompt_fragment_linking", "status": "linked"},
+        {"name": "guard_evaluation", "status": "not_executed"},
+        {"name": "permission_enforcement", "status": "not_executed"},
+        {"name": "step_execution", "status": "not_executed"},
+        {"name": "output_validation", "status": "not_executed"},
+        {"name": "fallback_handling", "status": "not_executed"},
+        {"name": "trace_logging", "status": "planned"},
+    ]
+    assert result.plan["target_contracts"] == [
+        {
+            "name": "base.task",
+            "deps": [],
+            "policies": [],
+            "skills": [],
+            "guards": [],
+            "steps": [{"action": "inspect_base"}],
+            "output_format": [],
+            "fallback": {},
+        },
+        {
+            "name": "review.task",
+            "deps": ["base.task"],
+            "policies": ["review_policy"],
+            "skills": [],
+            "guards": ["target_guard"],
+            "steps": [{"action": "review_code"}],
+            "output_format": ["findings"],
+            "fallback": {"blocked": ["summarize_blocker"]},
+        },
+    ]
+    assert result.plan["policy_contracts"] == [
+        {
+            "name": "review_policy",
+            "guards": ["policy_guard"],
+            "steps": ["policy_step"],
+            "output_format": [],
+        }
+    ]
+    assert result.plan["permission_contract"] == {
+        "defaults": {"bash": "ask"},
+        "rules": [{"tool": "bash", "pattern": "git status", "action": "allow"}],
+    }
+
+
+def test_runtime_execution_without_dry_run_is_rejected(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+""",
+    )
+
+    result = create_run_plan(path, target_names=["review.task"], dry_run=False)
+
+    assert not result.ok
+    assert [
+        (item.code, item.message, item.location, item.hint)
+        for item in result.diagnostics.items
+    ] == [
+        (
+            "AMF125",
+            "runtime execution is not implemented; use --dry-run to inspect the runtime plan",
+            "run",
+            "runtime mode currently supports dry-run planning and prompt linking only",
+        )
+    ]
+
+
+def test_runtime_dry_run_links_prompt_prefix_and_reports_size_comparison(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+metadata:
+  name: runtime-link-fixture
+targets:
+  base.task:
+    steps:
+      - action: inspect_base
+  review.task:
+    deps:
+      - base.task
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+  unrelated.task:
+    steps:
+      - action: unrelated_only
+""",
+    )
+
+    result = create_run_plan(path, request="please review code", backend="agents-fragments", dry_run=True)
+
+    assert result.ok, result.diagnostics.format()
+    prompt_prefix = result.plan["prompt_prefix"]
+    assert prompt_prefix["backend"] == "agents-fragments"
+    assert [fragment["path"] for fragment in prompt_prefix["fragments"]] == [
+        ".agentmf/fragments/agents/review.task.md",
+    ]
+    assert "# review.task - Generic Coding Agents Target Fragment" in prompt_prefix["content"]
+    assert "### base.task" in prompt_prefix["content"]
+    assert "### review.task" in prompt_prefix["content"]
+    assert "inspect_base" in prompt_prefix["content"]
+    assert "review_code" in prompt_prefix["content"]
+    assert "unrelated_only" not in prompt_prefix["content"]
+    comparison = prompt_prefix["comparison"]
+    assert comparison["linked"]["chars"] == len(prompt_prefix["content"])
+    assert comparison["linked"]["approx_tokens"] == (len(prompt_prefix["content"]) + 3) // 4
+    assert comparison["all_in_one"]["backend"] == "agents-md"
+    assert comparison["all_in_one"]["path"] == "AGENTS.md"
+    assert comparison["all_in_one"]["chars"] > comparison["linked"]["chars"]
+    assert comparison["savings"]["chars"] == comparison["all_in_one"]["chars"] - comparison["linked"]["chars"]
+    assert comparison["savings"]["approx_tokens"] == (
+        comparison["all_in_one"]["approx_tokens"] - comparison["linked"]["approx_tokens"]
+    )
+
+
+def test_cli_run_dry_run_outputs_runtime_plan_json(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "run",
+            "--file",
+            str(path),
+            "--request",
+            "please review code",
+            "--dry-run",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["runtime_plan"]["mode"] == "dry_run"
+    assert payload["runtime_plan"]["link_plan"]["selected_targets"] == ["review.task"]
+    assert payload["runtime_plan"]["target_contracts"][0]["steps"] == [{"action": "review_code"}]
+    assert payload["runtime_plan"]["prompt_prefix"]["content"].startswith(
+        "# review.task - Generic Coding Agents Target Fragment"
+    )
+    assert payload["runtime_plan"]["prompt_prefix"]["comparison"]["all_in_one"]["path"] == "AGENTS.md"
+    assert payload["diagnostics"] == []
 
 
 def test_compile_cursor_rule_snapshot() -> None:

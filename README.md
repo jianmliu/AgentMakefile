@@ -28,6 +28,7 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `claude-fragments` emits the same target-specific prompt objects for Claude-oriented prompt prefixes under `.agentmf/fragments/claude/`.
 - `.agentmf/fragments/manifest.json` records each fragment's backend, target, dependency closure, source inputs, compiler version, and content hash. Re-running `--write` skips unchanged fragment outputs.
 - `agentmf select` emits a stable JSON link plan that selects fragment paths either from an explicit target or from a request matched against target `match` rules.
+- `agentmf run --dry-run` emits the first runtime-facing plan: selected targets, dependency closure, linked prompt prefix, fragment paths, size/token comparison against the all-in-one baseline, guards, steps, permissions, output contracts, and fallback metadata without executing the workflow.
 - `claude-code` emits native Claude Code settings and hook artifacts under `.claude/` where feasible.
 - `opencode` emits `opencode.json` with permission configuration and target-derived agent definitions.
 
@@ -40,6 +41,7 @@ agentmf compile --file AgentMakefile --target agents-fragments
 agentmf compile --file AgentMakefile --target claude-code
 agentmf compile --file AgentMakefile --target opencode
 agentmf select --file AgentMakefile --request "review code" --backend agents-fragments
+agentmf run --file AgentMakefile --request "review code" --dry-run --format json
 agentmf compile --file AgentMakefile --write
 ```
 

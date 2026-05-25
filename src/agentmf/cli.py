@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from agentmf.compiler import compile_agentmakefile
 from agentmf.loader import load_source_with_diagnostics
+from agentmf.runtime import create_run_plan
 from agentmf.selector import create_link_plan
 
 
@@ -37,6 +38,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     select_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
     select_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
+    run_cmd = subparsers.add_parser("run", help="dry-run an AgentMakefile runtime plan")
+    run_cmd.add_argument("--file", default="AgentMakefile")
+    run_cmd.add_argument("--request")
+    run_cmd.add_argument("--target", action="append", dest="targets")
+    run_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    run_cmd.add_argument("--dry-run", action="store_true")
+    run_cmd.add_argument("--format", choices=["text", "json"], default="text")
+
     args = parser.parse_args(argv)
     if args.command == "validate":
         return _validate(args)
@@ -44,6 +53,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _compile(args)
     if args.command == "select":
         return _select(args)
+    if args.command == "run":
+        return _run(args)
     return 2
 
 
@@ -133,6 +144,53 @@ def _select(args: argparse.Namespace) -> int:
             print("Selected fragments:")
             for fragment in result.plan["fragments"]:
                 print(f"  {fragment['path']}")
+    return 1 if not result.ok else 0
+
+
+def _run(args: argparse.Namespace) -> int:
+    result = create_run_plan(
+        path=Path(args.file),
+        request=args.request,
+        target_names=args.targets,
+        backend=args.backend,
+        dry_run=args.dry_run,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "runtime_plan": result.plan,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.plan:
+            print("Runtime dry run:")
+            print(f"  mode: {result.plan['mode']}")
+            for target in result.plan["link_plan"]["selected_targets"]:
+                print(f"  selected target: {target}")
+            for fragment in result.plan["prompt_prefix"]["fragments"]:
+                print(f"  fragment: {fragment['path']}")
+            comparison = result.plan["prompt_prefix"]["comparison"]
+            print(
+                "  linked prompt: "
+                f"{comparison['linked']['chars']} chars, ~{comparison['linked']['approx_tokens']} tokens"
+            )
+            print(
+                "  all-in-one baseline: "
+                f"{comparison['all_in_one']['chars']} chars, ~{comparison['all_in_one']['approx_tokens']} tokens"
+            )
+            print(
+                "  estimated savings: "
+                f"{comparison['savings']['chars']} chars, ~{comparison['savings']['approx_tokens']} tokens"
+            )
+            print("  execution: not performed")
     return 1 if not result.ok else 0
 
 

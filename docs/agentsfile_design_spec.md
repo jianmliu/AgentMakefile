@@ -2830,6 +2830,14 @@ Command:
 agentmf run
 ```
 
+The first runtime milestone can be a non-executing dry run:
+
+```bash
+agentmf run --dry-run --request "review code" --format json
+```
+
+This skeleton should reuse target selection and fragment link planning, then report the selected target closure, fragment paths, guards, steps, permissions, output contracts, and fallback metadata without executing workflow steps or intercepting tools. The next prompt-link milestone should assemble the selected target fragments into a deterministic prompt prefix and compare its size against the matching all-in-one prompt artifact so users can see the token/cache benefit directly.
+
 The runtime can enforce hard rails directly through:
 
 * Tool-call interception
