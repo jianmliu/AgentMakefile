@@ -1,0 +1,57 @@
+version: "0.1"
+
+metadata:
+  name: superpowers-methodology
+  description: A minimal Superpowers-style methodology pack.
+
+compile:
+  targets:
+    - claude-md
+    - agents-md
+    - cursor-rule
+
+artifacts:
+  cursor-rule:
+    path: .cursor/rules/agentmakefile-generated.mdc
+    frontmatter:
+      description: Superpowers methodology bootstrap rules.
+      alwaysApply: true
+
+policies:
+  always_use_relevant_skill:
+    description: Before acting, identify whether a specialized skill applies and use it.
+    guards:
+      - inspect_task_for_skill_match
+      - prefer_specialized_skill_over_ad_hoc_reasoning
+
+skills:
+  systematic-debugging:
+    namespace: superpowers
+    description: Debug methodically.
+    steps:
+      - reproduce_failure
+      - inspect_recent_changes
+      - verify_fix
+
+targets:
+  code.task:
+    phony: true
+    priority: 70
+    match:
+      user_intent:
+        - write code
+        - fix bug
+    policies:
+      - always_use_relevant_skill
+    skills:
+      - superpowers:systematic-debugging
+    steps:
+      - action: inspect_relevant_context
+      - action: verify_or_explain_gap
+    output_format:
+      - verification_result
+
+permissions:
+  bash:
+    "git status": allow
+    "npm install*": ask

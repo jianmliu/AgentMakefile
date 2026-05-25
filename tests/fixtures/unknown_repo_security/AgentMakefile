@@ -1,0 +1,44 @@
+version: "0.1"
+
+metadata:
+  name: unknown-repo-security-review
+  description: Review an unknown repository without executing untrusted code.
+
+compile:
+  targets:
+    - claude-md
+    - agents-md
+    - cursor-rule
+
+policies:
+  no_untrusted_execution:
+    description: Inspect unknown code before running commands that may execute project scripts.
+    guards:
+      - inspect_package_scripts
+      - do_not_run_install_scripts_without_review
+      - avoid_wallet_or_secret_interactions
+
+targets:
+  repo.security_review:
+    priority: 80
+    match:
+      user_intent:
+        - review unknown repo
+        - security review
+    policies:
+      - no_untrusted_execution
+    steps:
+      - action: inspect_dependency_manifests
+      - action: inspect_scripts
+      - action: summarize_security_risks
+    output_format:
+      - risky_scripts
+      - dependency_risks
+      - safe_next_steps
+
+permissions:
+  bash:
+    "npm install*": deny
+    "pnpm install*": deny
+    "yarn install*": deny
+    "git status": allow
