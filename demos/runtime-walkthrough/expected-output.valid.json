@@ -1,0 +1,23 @@
+{
+  "summary": "Static review completed before running risky commands.",
+  "findings": [
+    {
+      "severity": "medium",
+      "message": "Package-manager scripts require inspection before install."
+    }
+  ],
+  "safe_next_steps": [
+    "Inspect package scripts",
+    "Run only read-only discovery commands first"
+  ],
+  "risky_scripts": [
+    "postinstall"
+  ],
+  "dependency_risks": [
+    "Lifecycle scripts may execute during install"
+  ],
+  "tool_interception": {
+    "status": "evaluated"
+  },
+  "validation_status": "valid"
+}

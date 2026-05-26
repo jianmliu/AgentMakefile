@@ -1,0 +1,11 @@
+{
+  "summary": "Short",
+  "findings": [
+    {
+      "severity": "critical",
+      "message": "bad",
+      "extra": true
+    }
+  ],
+  "safe_next_steps": []
+}

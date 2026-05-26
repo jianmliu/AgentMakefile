@@ -34,6 +34,9 @@ SUPERPOWERS_DEMO = DEMO_DIR / "superpowers" / "AgentMakefile"
 OH_MY_OPENAGENT_DEMO = DEMO_DIR / "oh-my-openagent" / "AgentMakefile"
 LOCAL_COMPOSITION_DEMO = DEMO_DIR / "local-composition" / "AgentMakefile"
 UNKNOWN_REPO_SECURITY_DEMO = DEMO_DIR / "unknown-repo-security" / "AgentMakefile"
+RUNTIME_WALKTHROUGH_DEMO = DEMO_DIR / "runtime-walkthrough" / "AgentMakefile"
+RUNTIME_WALKTHROUGH_VALID_OUTPUT = DEMO_DIR / "runtime-walkthrough" / "expected-output.valid.json"
+RUNTIME_WALKTHROUGH_INVALID_OUTPUT = DEMO_DIR / "runtime-walkthrough" / "expected-output.invalid.json"
 KARPATHY_MODULE = MODULE_DIR / "karpathy" / "AgentMakefile"
 SUPERPOWERS_MODULE = MODULE_DIR / "superpowers" / "AgentMakefile"
 OH_MY_OPENAGENT_MODULE = MODULE_DIR / "oh-my-openagent" / "AgentMakefile"
@@ -289,6 +292,7 @@ def test_validate_valid_files() -> None:
         OH_MY_OPENAGENT_DEMO,
         LOCAL_COMPOSITION_DEMO,
         UNKNOWN_REPO_SECURITY_DEMO,
+        RUNTIME_WALKTHROUGH_DEMO,
     ]:
         source, diagnostics = load_source_with_diagnostics(path)
 
@@ -511,6 +515,123 @@ def test_unknown_repo_hard_rails_demo_compiles_soft_and_native_outputs() -> None
     opencode = json.loads(next(file for file in result.files if file.path == "opencode.json").content)
     assert opencode["permission"]["bash"]["npm install*"] == "deny"
     assert "repo-unknown-repo-hard-rails" in opencode["agent"]
+
+
+def test_runtime_walkthrough_demo_exercises_runtime_features(tmp_path: Path) -> None:
+    invalid_output = json.loads(RUNTIME_WALKTHROUGH_INVALID_OUTPUT.read_text())
+    valid_output = json.loads(RUNTIME_WALKTHROUGH_VALID_OUTPUT.read_text())
+
+    invalid_plan = create_run_plan(
+        RUNTIME_WALKTHROUGH_DEMO,
+        request="show agentmakefile runtime",
+        dry_run=True,
+        proposed_tool_calls=[
+            {"tool": "bash", "input": "git status"},
+            {"tool": "bash", "input": "npm install"},
+            {"tool": "bash", "input": "printf safe"},
+        ],
+        proposed_output=invalid_output,
+    )
+
+    assert invalid_plan.ok, invalid_plan.diagnostics.format()
+    assert invalid_plan.plan["link_plan"]["selected_targets"] == ["demo.runtime_walkthrough"]
+    assert invalid_plan.plan["link_plan"]["target_closure"] == ["demo.runtime_walkthrough"]
+    assert invalid_plan.plan["target_contracts"][0]["skills"] == ["superpowers:using-superpowers"]
+    assert invalid_plan.plan["permission_evaluation"]["tool_calls"] == [
+        {
+            "tool": "bash",
+            "input": "git status",
+            "action": "allow",
+            "source": "rule",
+            "matched_rules": [{"tool": "bash", "pattern": "git status", "action": "allow"}],
+        },
+        {
+            "tool": "bash",
+            "input": "npm install",
+            "action": "deny",
+            "source": "rule",
+            "matched_rules": [{"tool": "bash", "pattern": "npm install*", "action": "deny"}],
+        },
+        {
+            "tool": "bash",
+            "input": "printf safe",
+            "action": "allow",
+            "source": "rule",
+            "matched_rules": [{"tool": "bash", "pattern": "printf *", "action": "allow"}],
+        },
+    ]
+    assert invalid_plan.plan["output_validation"]["status"] == "invalid"
+    demo_validation = next(
+        target
+        for target in invalid_plan.plan["output_validation"]["targets"]
+        if target["target"] == "demo.runtime_walkthrough"
+    )
+    assert demo_validation["missing_fields"] == [
+        "risky_scripts",
+        "dependency_risks",
+        "tool_interception",
+        "validation_status",
+    ]
+    schema_errors = demo_validation["schema_errors"]
+    assert [error["validator"] for error in schema_errors] == [
+        "additionalProperties",
+        "minLength",
+        "enum",
+        "minItems",
+        "minLength",
+    ]
+
+    valid_plan = create_run_plan(
+        RUNTIME_WALKTHROUGH_DEMO,
+        target_names=["demo.runtime_walkthrough"],
+        dry_run=True,
+        proposed_output=valid_output,
+    )
+
+    assert valid_plan.ok, valid_plan.diagnostics.format()
+    assert valid_plan.plan["output_validation"]["status"] == "valid"
+
+    from agentmf.tool_loop import create_exec_payload
+
+    exec_result = create_exec_payload(
+        path=RUNTIME_WALKTHROUGH_DEMO,
+        target_names=["demo.runtime_walkthrough"],
+        provider="echo",
+        tool_calls=[
+            {"id": "sandbox_block", "tool": "bash", "input": "touch should-not-exist.txt"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+        sandbox_profile="read-only",
+        execute_fallbacks=True,
+    )
+
+    assert exec_result.ok, exec_result.diagnostics.format()
+    assert not (tmp_path / "should-not-exist.txt").exists()
+    assert exec_result.payload["tool_results"][0]["reason"] == "sandbox_read_only"
+    assert exec_result.payload["tool_interception"]["provider"] == "echo"
+    assert exec_result.payload["tool_interception"]["tool_calls"][0] == {
+        "id": "sandbox_block",
+        "tool": "bash",
+        "input": "touch should-not-exist.txt",
+        "permission_action": "allow",
+        "sandbox_profile": "read-only",
+        "interception_decision": "block",
+        "block_reason": "sandbox_read_only",
+        "result_status": "blocked",
+    }
+    assert exec_result.payload["fallback_handling"]["status"] == "executed"
+
+
+def test_runtime_walkthrough_demo_default_compile_emits_skill_outputs() -> None:
+    result = compile_agentmakefile(RUNTIME_WALKTHROUGH_DEMO)
+
+    assert result.ok, result.diagnostics.format()
+    paths = [file.path for file in result.files]
+    assert ".claude/skills/superpowers-using-superpowers/SKILL.md" in paths
+    assert ".codex/skills/superpowers-using-superpowers/SKILL.md" in paths
+    assert ".claude/skills/superpowers-test-driven-development/SKILL.md" in paths
+    assert ".codex/skills/superpowers-test-driven-development/SKILL.md" in paths
 
 
 def test_duplicate_names_after_include_merge_report_stable_diagnostics(tmp_path: Path) -> None:

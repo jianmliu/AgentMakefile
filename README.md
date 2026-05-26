@@ -12,12 +12,13 @@ Design details live in [docs/agentsfile_design_spec.md](docs/agentsfile_design_s
 The proposed runtime CLI design lives in [docs/agentmf_runtime_cli_spec.md](docs/agentmf_runtime_cli_spec.md).
 The plugin-first adapter design lives in [docs/agentmf_plugin_adapter_spec.md](docs/agentmf_plugin_adapter_spec.md).
 Example host adapter flows live in [docs/agentmf_plugin_adapter_examples.md](docs/agentmf_plugin_adapter_examples.md).
+The current runtime walkthrough lives in [docs/agentmf_step_by_step_demo.md](docs/agentmf_step_by_step_demo.md).
 The staged implementation backlog lives in [docs/spec_breakdown.md](docs/spec_breakdown.md).
 This repository is self-hosted by the root [AgentMakefile](AgentMakefile), which compiles project development guidance into `AGENTS.md`, `CLAUDE.md`, and Cursor rules.
 
 Reusable rule modules live under [modules/](modules/). For example, the Karpathy / Andrej guidelines are represented as [modules/karpathy/AgentMakefile](modules/karpathy/AgentMakefile), unknown repository security rails are represented as [modules/unknown-repo-security/AgentMakefile](modules/unknown-repo-security/AgentMakefile), Superpowers is represented as [modules/superpowers/AgentMakefile](modules/superpowers/AgentMakefile), and Oh My OpenAgent is represented as [modules/oh-my-openagent/AgentMakefile](modules/oh-my-openagent/AgentMakefile). Demo files under [demos/](demos/) compose these modules and choose output backends.
 
-The [unknown repository security demo](demos/unknown-repo-security/AgentMakefile) proves the hard-rails path end to end by compiling soft Markdown guidance, Cursor rules, Claude Code settings and hooks, and OpenCode configuration from one AgentMakefile.
+The [unknown repository security demo](demos/unknown-repo-security/AgentMakefile) proves the hard-rails path end to end by compiling soft Markdown guidance, Cursor rules, Claude Code settings and hooks, and OpenCode configuration from one AgentMakefile. The [runtime walkthrough demo](demos/runtime-walkthrough/AgentMakefile) exercises prompt fragments, Claude/Codex skill-package outputs, runtime dry-run planning, JSON Schema output validation, plugin payloads, provider echo, tool interception, sandbox preflight, and fallback handling.
 
 This structure is intended to support target selection, dependency-aware rebuilds, and cache-friendly prompt layout: stable compiled guidance can stay byte-for-byte deterministic, while volatile task context such as the current user request, active files, and diffs can be appended later by the runtime.
 
@@ -50,6 +51,7 @@ agentmf compile --file AgentMakefile --target claude-md --target agents-md --tar
 agentmf compile --file AgentMakefile --target agents-fragments
 agentmf compile --file AgentMakefile --target claude-code
 agentmf compile --file AgentMakefile --target opencode
+agentmf compile --file AgentMakefile --target claude-skill --target codex-skill
 agentmf select --file AgentMakefile --request "review code" --backend agents-fragments
 agentmf run --file AgentMakefile --request "review code" --dry-run --format json
 agentmf run --file AgentMakefile --target project.default --dry-run --permission-check "bash:git status" --format json
