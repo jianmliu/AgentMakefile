@@ -259,6 +259,7 @@ skills:
     match:
       user_intent:
         - execute plan
+        - execute this written plan
         - implement plan
         - follow written plan
     steps:
@@ -306,6 +307,7 @@ skills:
       user_intent:
         - write skill
         - create skill
+        - create a skill
         - update skill
     steps:
       - define_pressure_scenario
@@ -332,6 +334,13 @@ targets:
     phony: true
     priority: 70
     description: Default Superpowers-style development workflow.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - general development task
+        - default workflow
+        - work on code
     policies:
       - use_relevant_skill
       - verify_before_completion
@@ -348,6 +357,13 @@ targets:
     phony: true
     priority: 85
     description: Break requirements into a concrete implementation plan.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - write plan
+        - implementation plan
+        - break down spec
     policies:
       - use_relevant_skill
       - plan_before_multi_step_work
@@ -363,6 +379,16 @@ targets:
     phony: true
     priority: 90
     description: Implement behavior changes using TDD and verification.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - implement code
+        - implement feature
+        - implement this feature
+        - fix bug
+        - refactor
+        - behavior change
     policies:
       - use_relevant_skill
       - test_driven_development
@@ -379,6 +405,13 @@ targets:
     phony: true
     priority: 90
     description: Debug failures through reproduction and root-cause analysis.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - debug
+        - failing test
+        - regression
     policies:
       - systematic_debugging
       - verify_before_completion
@@ -395,6 +428,13 @@ targets:
     phony: true
     priority: 85
     description: Review or address review feedback with technical rigor.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - review
+        - re-review
+        - address feedback
     policies:
       - review_feedback_rigorously
       - verify_before_completion
@@ -410,6 +450,11 @@ targets:
     phony: true
     priority: 95
     description: Select the relevant Superpowers workflow before beginning a task.
+    match:
+      user_intent:
+        - choose workflow
+        - use superpowers
+        - bootstrap skill selection
     policies:
       - use_superpowers_bootstrap
       - verify_before_completion
@@ -425,6 +470,13 @@ targets:
     phony: true
     priority: 85
     description: Dispatch independent work to parallel agents and integrate verified results.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - parallel agents
+        - independent tasks
+        - multiple failures
     policies:
       - dispatch_independent_work
       - verify_before_completion
@@ -440,6 +492,14 @@ targets:
     phony: true
     priority: 88
     description: Execute a written plan in order with verification at each checkpoint.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - execute plan
+        - execute this written plan
+        - implement plan
+        - follow written plan
     policies:
       - execute_written_plan
       - verify_before_completion
@@ -455,6 +515,14 @@ targets:
     phony: true
     priority: 80
     description: Finish a development branch after implementation and verification.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - finish branch
+        - merge work
+        - create pull request
+        - complete development
     policies:
       - finish_development_branch
       - verify_before_completion
@@ -469,6 +537,13 @@ targets:
     phony: true
     priority: 84
     description: Request and handle focused code review for completed implementation work.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - request review
+        - code review
+        - before merge
     policies:
       - request_code_review
       - review_feedback_rigorously
@@ -485,6 +560,13 @@ targets:
     phony: true
     priority: 75
     description: Prepare an isolated workspace for feature work when appropriate.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - start feature work
+        - isolated workspace
+        - worktree
     policies:
       - isolate_feature_work
     skills:
@@ -497,6 +579,14 @@ targets:
     phony: true
     priority: 82
     description: Create or update reusable skills with test-first process documentation.
+    deps:
+      - methodology.bootstrap
+    match:
+      user_intent:
+        - write skill
+        - create skill
+        - create a skill
+        - update skill
     policies:
       - write_skills_with_tdd
       - test_driven_development

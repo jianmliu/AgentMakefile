@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from agentmf.diagnostics import Diagnostics
 from agentmf.ir import normalize
 from agentmf.loader import load_source_with_diagnostics
+from agentmf.matcher import RequestProfile, build_request_profile, match_term
 from agentmf.models import IRTarget
 
 FRAGMENT_BACKEND_DIRS = {
@@ -52,11 +53,13 @@ def create_link_plan(
 
     targets_by_name = {target.name: target for target in ir.targets}
     requested_targets = list(target_names or [])
+    selection_trace: Dict[str, Any]
     if requested_targets:
         selected_targets = _explicit_targets(requested_targets, targets_by_name, diagnostics)
         selection_mode = "explicit_target"
+        selection_trace = _explicit_selection_trace(selected_targets, requested_targets)
     elif request:
-        selected_targets = _targets_for_request(request, ir.targets, diagnostics)
+        selected_targets, selection_trace = _targets_for_request(request, ir.targets, diagnostics)
         selection_mode = "request"
     else:
         diagnostics.error("AMF116", "select requires a request or at least one explicit target", "select")
@@ -66,6 +69,7 @@ def create_link_plan(
         return LinkPlanResult(diagnostics)
 
     closure = _target_closure(selected_targets, targets_by_name)
+    selection_trace = _with_dependency_closure(selection_trace, selected_targets, closure)
     fragment_dir = FRAGMENT_BACKEND_DIRS[backend]
     plan = {
         "version": 1,
@@ -75,6 +79,7 @@ def create_link_plan(
             "request": request if selection_mode == "request" else None,
             "targets": requested_targets,
         },
+        "selection_trace": selection_trace,
         "selected_targets": [target.name for target in selected_targets],
         "target_closure": [target.name for target in closure],
         "fragments": [
@@ -104,26 +109,93 @@ def _explicit_targets(
     return selected
 
 
-def _targets_for_request(request: str, targets: List[IRTarget], diagnostics: Diagnostics) -> List[IRTarget]:
-    matches = [
-        (target.priority, target.name, target)
-        for target in targets
-        if _target_matches_request(target, request)
-    ]
+def _targets_for_request(
+    request: str,
+    targets: List[IRTarget],
+    diagnostics: Diagnostics,
+) -> tuple[List[IRTarget], Dict[str, Any]]:
+    profile = build_request_profile(request)
+    matches = []
+    for target in targets:
+        match_details = _match_details(target, profile)
+        if match_details:
+            matches.append((target.priority, _match_score(match_details), target.name, target, match_details))
     if not matches:
         diagnostics.error("AMF118", "no target matched request", "request")
-        return []
-    matches.sort(key=lambda item: (-item[0], item[1]))
-    return [matches[0][2]]
+        return [], {}
+    matches.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    selected_target = matches[0][3]
+    selected_name = selected_target.name
+    candidates = [
+        {
+            "rank": index,
+            "target": target.name,
+            "priority": priority,
+            "matched_terms": [detail["term"] for detail in match_details],
+            "match_details": match_details,
+            "match_score": score,
+            "selected": target.name == selected_name,
+            "reason": _reason(match_details),
+        }
+        for index, (priority, score, _name, target, match_details) in enumerate(matches, start=1)
+    ]
+    trace = {
+        "mode": "request",
+        "algorithm": "normalize_translate_semantic_priority_score_name",
+        "request": request,
+        "normalized_request": profile.normalized,
+        "expanded_request_terms": profile.expanded_terms,
+        "requested_targets": [],
+        "selected": {
+            "target": selected_target.name,
+            "priority": selected_target.priority,
+            "matched_terms": [detail["term"] for detail in matches[0][4]],
+            "match_details": matches[0][4],
+            "match_score": matches[0][1],
+            "dependency_closure": [],
+        },
+        "candidates": candidates,
+    }
+    return [selected_target], trace
 
 
 def _target_matches_request(target: IRTarget, request: str) -> bool:
-    request_text = request.lower()
+    return bool(_match_details(target, build_request_profile(request)))
+
+
+def _match_details(target: IRTarget, profile: RequestProfile) -> List[dict]:
+    details = []
+    seen = set()
     for candidate in _match_strings(target.match.values()):
-        candidate_text = candidate.lower()
-        if candidate_text and candidate_text in request_text:
-            return True
-    return False
+        detail = match_term(profile, candidate)
+        if detail is None:
+            continue
+        key = (detail["term"], detail["method"])
+        if key in seen:
+            continue
+        seen.add(key)
+        details.append(detail)
+    details.sort(key=lambda item: (-item["score"], item["term"]))
+    return details
+
+
+def _match_score(match_details: List[dict]) -> int:
+    if not match_details:
+        return 0
+    return max(detail["score"] for detail in match_details)
+
+
+def _reason(match_details: List[dict]) -> str:
+    if not match_details:
+        return "no match"
+    method = match_details[0]["method"]
+    if method == "substring":
+        return "matched request substring(s)"
+    if method == "normalized_substring":
+        return "matched normalized request term(s)"
+    if method == "translated_substring":
+        return "matched translated request term(s)"
+    return "matched semantic token overlap"
 
 
 def _match_strings(values: Iterable[Any]) -> Iterable[str]:
@@ -153,6 +225,48 @@ def _target_closure(selected_targets: List[IRTarget], targets_by_name: Dict[str,
     for target in selected_targets:
         visit(target)
     return closure
+
+
+def _explicit_selection_trace(selected_targets: List[IRTarget], requested_targets: List[str]) -> Dict[str, Any]:
+    candidates = [
+        {
+            "rank": index,
+            "target": target.name,
+            "priority": target.priority,
+            "matched_terms": [],
+            "selected": True,
+            "reason": "explicit target",
+        }
+        for index, target in enumerate(selected_targets, start=1)
+    ]
+    return {
+        "mode": "explicit_target",
+        "algorithm": "explicit_target_order",
+        "request": None,
+        "requested_targets": requested_targets,
+        "selected": {
+            "target": selected_targets[0].name if selected_targets else None,
+            "targets": [target.name for target in selected_targets],
+            "dependency_closure": [],
+        },
+        "candidates": candidates,
+    }
+
+
+def _with_dependency_closure(
+    selection_trace: Dict[str, Any],
+    selected_targets: List[IRTarget],
+    closure: List[IRTarget],
+) -> Dict[str, Any]:
+    if not selection_trace:
+        return selection_trace
+    trace = dict(selection_trace)
+    selected = dict(trace.get("selected") or {})
+    selected["dependency_closure"] = [target.name for target in closure]
+    if selected_targets and "target" not in selected:
+        selected["target"] = selected_targets[0].name
+    trace["selected"] = selected
+    return trace
 
 
 def _fragment_file_name(target_name: str) -> str:

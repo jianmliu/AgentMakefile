@@ -35,12 +35,35 @@ user request + optional plan + repo state
 `AgentMakefile` is the source of stable agent behavior. The plan is task
 context, not part of the stable prefix.
 
+There is also a reverse-input mode for existing skill ecosystems:
+
+```text
+existing SKILL.md packages
+  -> agentmf skills scan
+  -> generated AgentMakefile skill-index module
+  -> agentmf plugin payload
+  -> selected skills + selection_trace + stable prefix
+  -> host-owned model/tool runtime
+```
+
+This mode makes skill selection optimization a first-class runtime use case.
+Instead of loading an all-in-one skill index, a host can ask AgentMakefile which
+skill-backed targets match the current request, inspect the explanation, and
+load only the relevant native skill artifacts.
+
 ## Goals
 
 - Let users and host agents invoke AgentMakefile as a prompt assembly layer, not
   only as a compiler.
+- Let hosts import existing `SKILL.md` package trees into generated
+  AgentMakefile skill-index modules.
 - Select relevant modules, targets, policies, skills, guards, and permissions
   from the current user request.
+- Return explainable skill selection data so hosts can debug and optimize
+  request-specific skill loading.
+- Match requests through deterministic normalization, built-in translation or
+  alias expansion, and lightweight semantic token overlap before falling back
+  to a no-match diagnostic.
 - Link only the prompt fragments needed for the selected target closure.
 - Keep stable prompt-prefix material deterministic and cache-friendly.
 - Keep volatile inputs such as the user request, implementation plan, active

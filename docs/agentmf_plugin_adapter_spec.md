@@ -94,6 +94,29 @@ The host agent remains responsible for:
 The plugin adapter is responsible only for producing structured prompt payloads
 and explaining how they were built.
 
+## Major Feature: Skill Import and Selection Optimization
+
+The plugin adapter is also the bridge from existing skill ecosystems into
+AgentMakefile. In the forward direction, an AgentMakefile source compiles into
+Claude/Codex `SKILL.md` packages and `skills/index.md`. In the reverse
+direction, a host can scan an existing `SKILL.md` tree into a generated
+AgentMakefile skill-index module, then call `agentmf plugin payload` for each
+user request.
+
+This makes AgentMakefile useful even before a team has hand-authored modules:
+
+- existing skills remain usable as native platform artifacts
+- generated AgentMakefile targets encode skill match terms
+- bootstrap skills become explicit dependency edges
+- `selected_skills` tells the host which native skill packages to load
+- `selection_trace` explains the matched terms, candidate ranking, priority,
+  and dependency closure
+- request matching is deterministic but layered: raw substring, normalized
+  substring, built-in translation/alias expansion, then semantic token overlap
+
+The goal is not to replace native skill packages. The goal is to provide a
+structured, explainable routing layer above them.
+
 ## Plugin Payload
 
 The adapter emits one JSON object:
@@ -105,6 +128,63 @@ The adapter emits one JSON object:
   "mode": "prompt_payload",
   "request": "review this repo",
   "selected_targets": ["repo.security_review"],
+  "selected_skills": [
+    "superpowers:verification-before-completion",
+    "superpowers:receiving-code-review"
+  ],
+  "selection_trace": {
+    "mode": "request",
+    "algorithm": "normalize_translate_semantic_priority_score_name",
+    "request": "review this repo",
+    "normalized_request": "review this repo",
+    "expanded_request_terms": ["review", "this", "repo"],
+    "requested_targets": [],
+    "selected": {
+      "target": "repo.security_review",
+      "priority": 90,
+      "matched_terms": ["review this repo"],
+      "match_details": [
+        {
+          "term": "review this repo",
+          "method": "substring",
+          "score": 100,
+          "evidence": "review this repo"
+        }
+      ],
+      "match_score": 100,
+      "dependency_closure": ["repo.inspect", "repo.security_review"]
+    },
+    "candidates": [
+      {
+        "rank": 1,
+        "target": "repo.security_review",
+        "priority": 90,
+        "matched_terms": ["review this repo"],
+        "match_details": [
+          {
+            "term": "review this repo",
+            "method": "substring",
+            "score": 100,
+            "evidence": "review this repo"
+          }
+        ],
+        "match_score": 100,
+        "selected": true,
+        "reason": "matched request substring(s)"
+      }
+    ]
+  },
+  "skill_artifacts": {
+    "skills_index": "skills/index.md",
+    "codex": [
+      ".codex/skills/superpowers-verification-before-completion/SKILL.md",
+      ".codex/skills/superpowers-receiving-code-review/SKILL.md"
+    ],
+    "claude": [
+      ".claude/skills/superpowers-verification-before-completion/SKILL.md",
+      ".claude/skills/superpowers-receiving-code-review/SKILL.md"
+    ]
+  },
   "stable_prefix": {
     "backend": "agents-fragments",
     "content": "# repo.security_review - Generic Coding Agents Target Fragment\n...",
@@ -128,6 +208,10 @@ The adapter emits one JSON object:
   },
   "trace": {
     "target_closure": ["repo.inspect", "repo.security_review"],
+    "selection": {
+      "mode": "request",
+      "algorithm": "normalize_translate_semantic_priority_score_name"
+    },
     "linked_fragments": [".agentmf/fragments/agents/repo.security_review.md"],
     "comparison": {
       "linked": {"chars": 4200, "approx_tokens": 1050},
@@ -142,6 +226,27 @@ The adapter emits one JSON object:
 The host can either concatenate `stable_prefix.content` and volatile fields into
 its own prompt format or use the fields directly if it has native cache-control
 or prompt-section support.
+
+`selected_skills` and `skill_artifacts` make skill routing explicit for hosts
+that can load generated `SKILL.md` files. Hosts that cannot load native skills
+can still rely on `stable_prefix.content`, which already includes the selected
+skill guidance.
+
+`selection_trace` explains why a target was selected. For request-based
+selection it records the normalized request, expanded request terms, matched
+`match.user_intent` terms, match details, candidate ranking, priority values,
+the selected target, and dependency closure. Match detail methods are:
+
+- `substring`: the raw request contains the match term
+- `normalized_substring`: punctuation, case, or hyphenation normalization made
+  the term match
+- `translated_substring`: built-in request alias or Chinese-to-English
+  development-intent translation made the term match
+- `semantic_token_overlap`: canonical token overlap matched related terms
+
+For explicit target selection it records the requested target names and their
+closure. Hosts can log this field to debug unexpected skill selection without
+parsing the rendered prompt text.
 
 ## Stable Prefix
 

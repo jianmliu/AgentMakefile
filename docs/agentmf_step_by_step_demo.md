@@ -12,6 +12,50 @@ The demo composes:
 
 Run the commands from the repository root.
 
+## 0. Import Skills and Optimize Selection
+
+This is now a primary AgentMakefile flow. The original flow starts from an
+AgentMakefile source and compiles platform-native skills. This flow starts from
+an existing `SKILL.md` tree, imports it into a generated AgentMakefile
+skill-index module, and lets the plugin payload optimize which skills should be
+loaded for a specific request.
+
+```bash
+agentmf skills scan \
+  --skills-dir ~/.codex/skills \
+  --namespace superpowers \
+  --bootstrap-skill using-superpowers \
+  --package-name scanned-superpowers \
+  --out /tmp/superpowers.AgentMakefile \
+  --write
+```
+
+The generated AgentMakefile contains one `skills:` entry and one `skill.*`
+target per scanned skill. When `--bootstrap-skill` is provided, every
+non-bootstrap skill target depends on that bootstrap target. This converts
+bootstrap rules such as `using-superpowers` into explicit dependency edges.
+A host can then use the same runtime selection path:
+
+```bash
+agentmf plugin payload \
+  --file /tmp/superpowers.AgentMakefile \
+  --host codex \
+  --request "implement this feature" \
+  --format json
+```
+
+The payload returns `selected_skills`, `skill_artifacts`, and
+`selection_trace`. That gives a host enough structure to load only the relevant
+skills, explain why they were selected, and keep using native `SKILL.md`
+packages as compatibility artifacts. In this mode AgentMakefile behaves like a
+SkillMakefile index with dependency-aware routing.
+
+Request matching is deterministic and layered. It first checks raw substrings,
+then normalized text such as hyphen-insensitive skill names, then built-in
+translation aliases for common development intents, and finally lightweight
+semantic token overlap. For example, a Chinese request such as `请实现这个功能`
+can route to a target whose English match term is `implement this feature`.
+
 ## 1. Validate the Demo
 
 ```bash
@@ -192,7 +236,11 @@ agentmf plugin payload \
 
 The host keeps responsibility for model calls, streaming, tool execution,
 approvals, and sandboxing. AgentMakefile supplies the selected prompt payload
-and trace.
+and trace. The payload also exposes `selected_skills` and `skill_artifacts`, so
+a Codex or Claude adapter can see which generated `SKILL.md` files correspond to
+the selected target closure. `selection_trace` explains why the target was
+selected, including matched request terms, ranked candidates, selected priority,
+and the resolved dependency closure.
 
 ## 9. Run the Echo Provider
 

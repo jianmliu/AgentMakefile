@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Dict, List, Optional, Union
 
+from agentmf.backends import skill_slug
 from agentmf.diagnostics import Diagnostics
 from agentmf.runtime import create_run_plan
 
@@ -108,12 +109,16 @@ def create_plugin_payload(
 
     prefix = run_result.plan["prompt_prefix"]
     content = prefix["content"]
+    selected_skills = _selected_skills(run_result.plan)
     payload = {
         "version": 1,
         "host": host,
         "mode": "prompt_payload",
         "request": request,
         "selected_targets": list(run_result.plan["link_plan"]["selected_targets"]),
+        "selected_skills": selected_skills,
+        "skill_artifacts": _skill_artifacts(selected_skills),
+        "selection_trace": run_result.plan["link_plan"].get("selection_trace", {}),
         "stable_prefix": {
             "backend": backend,
             "content": content,
@@ -130,12 +135,37 @@ def create_plugin_payload(
         "host_instructions": _host_instructions(host),
         "trace": {
             "target_closure": list(run_result.plan["link_plan"]["target_closure"]),
+            "selection": run_result.plan["link_plan"].get("selection_trace", {}),
             "linked_fragments": [fragment["path"] for fragment in prefix["fragments"]],
             "comparison": prefix["comparison"],
         },
         "diagnostics": diagnostics.to_list(),
     }
     return PluginPayloadResult(diagnostics, payload)
+
+
+def _selected_skills(run_plan: Dict[str, Any]) -> List[str]:
+    selected = []
+    seen = set()
+    for target_contract in run_plan.get("target_contracts", []):
+        for skill in target_contract.get("skills", []):
+            if skill in seen:
+                continue
+            seen.add(skill)
+            selected.append(skill)
+    return selected
+
+
+def _skill_artifacts(selected_skills: List[str]) -> Dict[str, Any]:
+    return {
+        "skills_index": "skills/index.md",
+        "codex": [_skill_artifact_path(".codex/skills", skill) for skill in selected_skills],
+        "claude": [_skill_artifact_path(".claude/skills", skill) for skill in selected_skills],
+    }
+
+
+def _skill_artifact_path(base_dir: str, skill: str) -> str:
+    return f"{base_dir}/{skill_slug(skill)}/SKILL.md"
 
 
 def _host_instructions(host: str) -> Dict[str, Any]:

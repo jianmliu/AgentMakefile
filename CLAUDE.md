@@ -351,7 +351,7 @@ Execute a written implementation plan in order with review checkpoints and expli
 
 #### Match
 
-- `user_intent`: execute plan, implement plan, follow written plan
+- `user_intent`: execute plan, execute this written plan, implement plan, follow written plan
 
 #### Steps
 
@@ -401,7 +401,7 @@ Create, edit, and verify reusable skills using a TDD-style process for process d
 
 #### Match
 
-- `user_intent`: write skill, create skill, update skill
+- `user_intent`: write skill, create skill, create a skill, update skill
 
 #### Steps
 
@@ -473,6 +473,10 @@ Select the relevant Superpowers workflow before beginning a task.
 - Priority: 95
 - Phony: true
 
+#### Match
+
+- `user_intent`: choose workflow, use superpowers, bootstrap skill selection
+
 #### Policies
 
 - use_superpowers_bootstrap
@@ -496,6 +500,10 @@ Implement behavior changes using TDD and verification.
 - Priority: 90
 - Phony: true
 
+#### Match
+
+- `user_intent`: implement code, implement feature, implement this feature, fix bug, refactor, behavior change
+
 #### Policies
 
 - use_relevant_skill
@@ -506,6 +514,10 @@ Implement behavior changes using TDD and verification.
 
 - superpowers:test-driven-development
 - superpowers:verification-before-completion
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -520,6 +532,10 @@ Debug failures through reproduction and root-cause analysis.
 - Priority: 90
 - Phony: true
 
+#### Match
+
+- `user_intent`: debug, failing test, regression
+
 #### Policies
 
 - systematic_debugging
@@ -529,6 +545,10 @@ Debug failures through reproduction and root-cause analysis.
 
 - superpowers:systematic-debugging
 - superpowers:verification-before-completion
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -544,6 +564,10 @@ Default Superpowers-style development workflow.
 - Priority: 70
 - Phony: true
 
+#### Match
+
+- `user_intent`: general development task, default workflow, work on code
+
 #### Policies
 
 - use_relevant_skill
@@ -554,6 +578,10 @@ Default Superpowers-style development workflow.
 - superpowers:brainstorming
 - superpowers:writing-plans
 - superpowers:verification-before-completion
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -568,6 +596,10 @@ Execute a written plan in order with verification at each checkpoint.
 - Priority: 88
 - Phony: true
 
+#### Match
+
+- `user_intent`: execute plan, execute this written plan, implement plan, follow written plan
+
 #### Policies
 
 - execute_written_plan
@@ -577,6 +609,10 @@ Execute a written plan in order with verification at each checkpoint.
 
 - superpowers:executing-plans
 - superpowers:finishing-a-development-branch
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -591,6 +627,10 @@ Finish a development branch after implementation and verification.
 - Priority: 80
 - Phony: true
 
+#### Match
+
+- `user_intent`: finish branch, merge work, create pull request, complete development
+
 #### Policies
 
 - finish_development_branch
@@ -599,6 +639,10 @@ Finish a development branch after implementation and verification.
 #### Skills
 
 - superpowers:finishing-a-development-branch
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -613,6 +657,10 @@ Dispatch independent work to parallel agents and integrate verified results.
 - Priority: 85
 - Phony: true
 
+#### Match
+
+- `user_intent`: parallel agents, independent tasks, multiple failures
+
 #### Policies
 
 - dispatch_independent_work
@@ -622,6 +670,10 @@ Dispatch independent work to parallel agents and integrate verified results.
 
 - superpowers:dispatching-parallel-agents
 - superpowers:verification-before-completion
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -636,6 +688,10 @@ Break requirements into a concrete implementation plan.
 - Priority: 85
 - Phony: true
 
+#### Match
+
+- `user_intent`: write plan, implementation plan, break down spec
+
 #### Policies
 
 - use_relevant_skill
@@ -644,6 +700,10 @@ Break requirements into a concrete implementation plan.
 #### Skills
 
 - superpowers:writing-plans
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -659,6 +719,10 @@ Request and handle focused code review for completed implementation work.
 - Priority: 84
 - Phony: true
 
+#### Match
+
+- `user_intent`: request review, code review, before merge
+
 #### Policies
 
 - request_code_review
@@ -669,6 +733,10 @@ Request and handle focused code review for completed implementation work.
 
 - superpowers:requesting-code-review
 - superpowers:receiving-code-review
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -683,6 +751,10 @@ Review or address review feedback with technical rigor.
 - Priority: 85
 - Phony: true
 
+#### Match
+
+- `user_intent`: review, re-review, address feedback
+
 #### Policies
 
 - review_feedback_rigorously
@@ -692,6 +764,10 @@ Review or address review feedback with technical rigor.
 
 - superpowers:receiving-code-review
 - superpowers:verification-before-completion
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -706,6 +782,10 @@ Create or update reusable skills with test-first process documentation.
 - Priority: 82
 - Phony: true
 
+#### Match
+
+- `user_intent`: write skill, create skill, create a skill, update skill
+
 #### Policies
 
 - write_skills_with_tdd
@@ -717,6 +797,10 @@ Create or update reusable skills with test-first process documentation.
 - superpowers:writing-skills
 - superpowers:test-driven-development
 - superpowers:verification-before-completion
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -731,6 +815,10 @@ Prepare an isolated workspace for feature work when appropriate.
 - Priority: 75
 - Phony: true
 
+#### Match
+
+- `user_intent`: start feature work, isolated workspace, worktree
+
 #### Policies
 
 - isolate_feature_work
@@ -738,6 +826,10 @@ Prepare an isolated workspace for feature work when appropriate.
 #### Skills
 
 - superpowers:using-git-worktrees
+
+#### Dependencies
+
+- methodology.bootstrap
 
 #### Output format
 
@@ -853,30 +945,34 @@ Break the design spec into implementation tasks.
 
 ## Permission Guidance
 
+These permissions are soft instructions unless the selected backend supports native enforcement.
+
 ### Rules
 
-- `bash` `*`: ask
-- `bash` `PYTHONPATH=src python3 -m pytest*`: allow
-- `bash` `agentmf compile*`: ask
-- `bash` `agentmf validate*`: allow
-- `bash` `gh pr*`: ask
-- `bash` `gh repo*`: ask
-- `bash` `git diff*`: allow
-- `bash` `git log*`: allow
-- `bash` `git status*`: allow
-- `bash` `python3 -m compileall*`: allow
-- `bash` `python3 -m pip install*`: ask
-- `bash` `python3 -m pytest*`: allow
-- `bash` `rm -rf *`: deny
-- `file_write` `**/*secret*`: deny
-- `file_write` `.cursor/rules/**`: allow
-- `file_write` `.env`: deny
-- `file_write` `AGENTS.md`: allow
-- `file_write` `AgentMakefile`: allow
-- `file_write` `CLAUDE.md`: allow
-- `file_write` `README.md`: allow
-- `file_write` `demos/**`: allow
-- `file_write` `docs/**`: allow
-- `file_write` `src/**`: allow
-- `file_write` `tests/**`: allow
+| Tool | Pattern | Action |
+| --- | --- | --- |
+| bash | * | ask |
+| bash | PYTHONPATH=src python3 -m pytest* | allow |
+| bash | agentmf compile* | ask |
+| bash | agentmf validate* | allow |
+| bash | gh pr* | ask |
+| bash | gh repo* | ask |
+| bash | git diff* | allow |
+| bash | git log* | allow |
+| bash | git status* | allow |
+| bash | python3 -m compileall* | allow |
+| bash | python3 -m pip install* | ask |
+| bash | python3 -m pytest* | allow |
+| bash | rm -rf * | deny |
+| file_write | **/*secret* | deny |
+| file_write | .cursor/rules/** | allow |
+| file_write | .env | deny |
+| file_write | AGENTS.md | allow |
+| file_write | AgentMakefile | allow |
+| file_write | CLAUDE.md | allow |
+| file_write | README.md | allow |
+| file_write | demos/** | allow |
+| file_write | docs/** | allow |
+| file_write | src/** | allow |
+| file_write | tests/** | allow |
 <!-- END GENERATED BY agentmf -->

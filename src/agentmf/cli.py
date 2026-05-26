@@ -13,6 +13,7 @@ from agentmf.plugin import create_plugin_payload
 from agentmf.prompt import create_prompt_payload
 from agentmf.runtime import create_run_plan
 from agentmf.selector import create_link_plan
+from agentmf.skill_scanner import render_agentmakefile_from_skill_dirs
 from agentmf.tool_loop import create_exec_payload
 
 
@@ -108,6 +109,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     plugin_payload_cmd.add_argument("--context-file", action="append", dest="context_files")
     plugin_payload_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
+    skills_cmd = subparsers.add_parser("skills", help="skill index commands")
+    skills_subcommands = skills_cmd.add_subparsers(dest="skills_command", required=True)
+    skills_scan_cmd = skills_subcommands.add_parser("scan", help="scan SKILL.md directories into an AgentMakefile")
+    skills_scan_cmd.add_argument("--skills-dir", action="append", dest="skills_dirs", required=True)
+    skills_scan_cmd.add_argument("--namespace")
+    skills_scan_cmd.add_argument("--package-name", default="scanned-skills")
+    skills_scan_cmd.add_argument("--package-description")
+    skills_scan_cmd.add_argument("--bootstrap-skill")
+    skills_scan_cmd.add_argument("--out")
+    skills_scan_cmd.add_argument("--write", action="store_true")
+
     args = parser.parse_args(argv)
     if args.command == "validate":
         return _validate(args)
@@ -125,6 +137,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _exec(args)
     if args.command == "plugin":
         return _plugin(args)
+    if args.command == "skills":
+        return _skills(args)
     return 2
 
 
@@ -469,6 +483,38 @@ def _plugin(args: argparse.Namespace) -> int:
     return 2
 
 
+def _skills(args: argparse.Namespace) -> int:
+    if args.skills_command == "scan":
+        return _skills_scan(args)
+    return 2
+
+
+def _skills_scan(args: argparse.Namespace) -> int:
+    try:
+        content = render_agentmakefile_from_skill_dirs(
+            [Path(path) for path in args.skills_dirs],
+            namespace=args.namespace,
+            package_name=args.package_name,
+            package_description=args.package_description,
+            bootstrap_skill=args.bootstrap_skill,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.write:
+        if not args.out:
+            print("error: --write requires --out", file=sys.stderr)
+            return 2
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(content)
+        print(f"Wrote {out_path}")
+    else:
+        print(content, end="")
+    return 0
+
+
 def _plugin_payload(args: argparse.Namespace) -> int:
     if args.request and args.request_positional:
         print("error: provide request either positionally or with --request, not both", file=sys.stderr)
@@ -505,6 +551,14 @@ def _plugin_payload(args: argparse.Namespace) -> int:
             print(f"  host: {result.payload['host']}")
             for target in result.payload["selected_targets"]:
                 print(f"  selected target: {target}")
+            for skill in result.payload["selected_skills"]:
+                print(f"  selected skill: {skill}")
+            selected = result.payload["selection_trace"].get("selected", {})
+            if selected.get("target"):
+                print(f"  selection reason: {selected['target']}")
+                matched_terms = selected.get("matched_terms") or []
+                if matched_terms:
+                    print(f"  matched terms: {', '.join(matched_terms)}")
             prefix = result.payload["stable_prefix"]
             print(f"  stable prefix: {prefix['chars']} chars, ~{prefix['approx_tokens']} tokens")
             print(f"  stable prefix hash: {prefix['hash']}")

@@ -1259,7 +1259,142 @@ Acceptance:
 - Docs show volatile context appended after the stable prefix.
 - Docs explain that the host still owns model calls, tool loops, approvals, and
   sandboxing.
+
+### AMF-PAD-007 Add Selected Skills to Plugin Payload
+
+Status: implemented.
+
+Goal: make plugin payloads usable as a skill-routing layer for hosts that can
+load generated Codex or Claude skill packages.
+
+Implementation:
+
+- Add `selected_skills` to `agentmf plugin payload`.
+- Preserve dependency-closure order and deduplicate repeated skill references.
+- Add `skill_artifacts` with `skills_index`, Codex `SKILL.md`, and Claude
+  `SKILL.md` paths for each selected skill.
+- Keep `stable_prefix.content` as the fallback for hosts that cannot load
+  native skill files.
+
+Acceptance:
+
+- A target with dependency skills returns all selected skills in closure order.
+- Duplicate skill references appear only once.
+- Codex and Claude artifact paths use the same deterministic slugging as the
+  skill backends.
 - Docs link from README and the plugin adapter spec.
+
+### AMF-PAD-007A Add Selection Trace to Plugin Payload
+
+Status: implemented.
+
+Goal: make plugin payload skill routing explainable enough for host adapters to
+debug and log unexpected target or skill choices.
+
+Implementation:
+
+- Add `selection_trace` to link plans and plugin payloads.
+- Record the selection mode and algorithm.
+- For request matching, record matched `match.user_intent` terms, ranked
+  candidates, target priority, selected target, and dependency closure.
+- For explicit target selection, record requested target names and selected
+  dependency closure.
+- Mirror the selection trace under `trace.selection` for host trace consumers.
+
+Acceptance:
+
+- Request-based selection exposes the matched terms that caused the chosen
+  target to win.
+- Candidate ranking shows priority/name tie-break behavior.
+- Plugin payloads include the same selection rationale without requiring hosts
+  to parse rendered prompt text.
+
+### AMF-PAD-008 Encode Superpowers Skill Routing Graph
+
+Status: implemented.
+
+Goal: make the Superpowers module usable as a structured replacement for the
+`using-superpowers` skill-selection index.
+
+Implementation:
+
+- Analyze the installed Superpowers skill set and keep every installed skill in
+  `modules/superpowers/AgentMakefile`.
+- Add request `match` rules to methodology targets so `agentmf select` can
+  choose workflows without relying only on model-side semantic judgment.
+- Add `methodology.bootstrap` as the explicit dependency root for each
+  non-bootstrap methodology target.
+- Preserve `using-superpowers` as the bootstrap skill while making its role a
+  graph edge instead of only prompt text.
+
+Acceptance:
+
+- Common Superpowers requests route to the expected methodology target.
+- Each routed methodology target has `methodology.bootstrap` first in its
+  target closure.
+- Plugin payloads include `superpowers:using-superpowers` before the selected
+  workflow skills.
+
+### AMF-PAD-009 Skill Import and Selection Optimization
+
+Status: implemented.
+
+Goal: make AgentMakefile usable as the structured routing and optimization
+layer for existing `SKILL.md` ecosystems. This is the reverse of the original
+compile path: instead of only treating AgentMakefile as the source of truth for
+generated skills, a plugin can import existing skills into a generated
+AgentMakefile and then use target selection to choose the right skill closure
+per request.
+
+Implementation:
+
+- Add `agentmf skills scan`.
+- Scan one or more `--skills-dir` roots for `*/SKILL.md`.
+- Parse YAML frontmatter `name` and `description`.
+- Infer request `match.user_intent` terms from skill names, descriptions, and
+  `## When to Use` bullets.
+- Emit a generated AgentMakefile with one `skills:` entry and one `skill.*`
+  target per scanned skill.
+- Support `--bootstrap-skill` so a bootstrap skill such as
+  `using-superpowers` becomes an explicit dependency for every other skill
+  target.
+- Use `agentmf plugin payload` on the generated AgentMakefile to return
+  `selected_skills`, native skill artifact paths, and `selection_trace`.
+
+Acceptance:
+
+- A scanned skill tree can be loaded by `agentmf validate`.
+- A request can route through the generated `skill.*` target.
+- Plugin payloads expose selected skills in bootstrap-first dependency order.
+- Plugin payloads explain why those skills were selected.
+- The scanner is usable as a self-hosting smoke path for installed Superpowers
+  skills.
+
+### AMF-PAD-010 Request Normalization and Semantic Matching
+
+Status: implemented.
+
+Goal: improve plugin skill selection for imported skill indexes when the user
+request does not exactly contain the English `match.user_intent` phrase.
+
+Implementation:
+
+- Add deterministic request normalization for case, punctuation, underscores,
+  and hyphenation.
+- Add a built-in translation/alias layer for common Chinese and English
+  development intents.
+- Add lightweight semantic token-overlap matching with canonicalized terms.
+- Record `normalized_request`, `expanded_request_terms`, `match_details`, and
+  `match_score` in `selection_trace`.
+- Preserve deterministic ranking by priority, match score, and target name.
+
+Acceptance:
+
+- Hyphenated skill names can match space-separated user requests.
+- A Chinese request such as `请实现这个功能` can match `implement this feature`.
+- Related English requests such as completion reporting can match verification
+  skills through semantic token overlap.
+- Selection traces show which matching layer caused each candidate to match.
 
 ## Post-MVP Runtime Work
 
@@ -1324,6 +1459,11 @@ Completed:
 - AMF-PAD-004 plan and context inputs.
 - AMF-PAD-005 host profiles.
 - AMF-PAD-006 example adapter docs.
+- AMF-PAD-007 selected skills in plugin payload.
+- AMF-PAD-007A selection trace in plugin payload.
+- AMF-PAD-008 Superpowers skill routing graph.
+- AMF-PAD-009 skill import and selection optimization.
+- AMF-PAD-010 request normalization and semantic matching.
 
 Next:
 

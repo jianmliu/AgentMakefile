@@ -246,6 +246,17 @@ Hosts can treat these fields as stable AgentMakefile build outputs:
 
 - `stable_prefix.content`
 - `stable_prefix.hash`
+- `selected_skills`
+- `skill_artifacts`
+- `selection_trace`
 - `host_instructions`
 - `trace.target_closure`
 - `trace.linked_fragments`
+
+`selection_trace` is the adapter-facing explanation layer: it contains the
+selection mode, matcher algorithm, normalized request, expanded request terms,
+matched request terms, ranked candidates, selected target, and dependency
+closure. Match details show whether a candidate was selected by raw substring,
+normalized substring, translated substring, or semantic token overlap. Hosts
+should log it alongside prompt hashes when debugging unexpected skill or target
+choices.

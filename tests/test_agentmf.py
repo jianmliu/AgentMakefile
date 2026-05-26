@@ -308,6 +308,466 @@ def test_superpowers_module_covers_installed_superpowers_skills() -> None:
     assert {skill.namespace for skill in source.skills.values()} == {"superpowers"}
 
 
+def test_superpowers_module_routes_skill_intents_through_bootstrap() -> None:
+    cases = [
+        ("write an implementation plan", "methodology.plan"),
+        ("implement this feature", "methodology.code_change"),
+        ("debug a failing test", "methodology.debug"),
+        ("review this change", "methodology.review"),
+        ("execute this written plan", "methodology.execute_plan"),
+        ("create a skill", "methodology.skill_authoring"),
+    ]
+
+    for request, expected_target in cases:
+        result = create_link_plan(SUPERPOWERS_MODULE, request=request)
+
+        assert result.ok, result.diagnostics.format()
+        assert result.plan["selected_targets"] == [expected_target]
+        assert result.plan["target_closure"][0] == "methodology.bootstrap"
+
+
+def test_link_plan_explains_request_selection_candidates(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.task:
+    priority: 90
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - action: write_code
+  docs.task:
+    priority: 80
+    match:
+      user_intent:
+        - feature
+    steps:
+      - action: inspect_docs
+  generic.task:
+    priority: 50
+    match:
+      user_intent:
+        - implement
+    steps:
+      - action: generic_work
+""",
+    )
+
+    result = create_link_plan(path, request="please implement feature")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["code.task"]
+    assert result.plan["selection_trace"] == {
+        "mode": "request",
+        "algorithm": "normalize_translate_semantic_priority_score_name",
+        "request": "please implement feature",
+        "normalized_request": "please implement feature",
+        "expanded_request_terms": ["please", "implement", "feature", "implement this feature"],
+        "requested_targets": [],
+        "selected": {
+            "target": "code.task",
+            "priority": 90,
+            "matched_terms": ["implement feature"],
+            "match_details": [
+                {
+                    "term": "implement feature",
+                    "method": "substring",
+                    "score": 100,
+                    "evidence": "implement feature",
+                }
+            ],
+            "match_score": 100,
+            "dependency_closure": ["code.task"],
+        },
+        "candidates": [
+            {
+                "rank": 1,
+                "target": "code.task",
+                "priority": 90,
+                "matched_terms": ["implement feature"],
+                "match_details": [
+                    {
+                        "term": "implement feature",
+                        "method": "substring",
+                        "score": 100,
+                        "evidence": "implement feature",
+                    }
+                ],
+                "match_score": 100,
+                "selected": True,
+                "reason": "matched request substring(s)",
+            },
+            {
+                "rank": 2,
+                "target": "docs.task",
+                "priority": 80,
+                "matched_terms": ["feature"],
+                "match_details": [
+                    {
+                        "term": "feature",
+                        "method": "substring",
+                        "score": 100,
+                        "evidence": "feature",
+                    }
+                ],
+                "match_score": 100,
+                "selected": False,
+                "reason": "matched request substring(s)",
+            },
+            {
+                "rank": 3,
+                "target": "generic.task",
+                "priority": 50,
+                "matched_terms": ["implement"],
+                "match_details": [
+                    {
+                        "term": "implement",
+                        "method": "substring",
+                        "score": 100,
+                        "evidence": "implement",
+                    }
+                ],
+                "match_score": 100,
+                "selected": False,
+                "reason": "matched request substring(s)",
+            },
+        ],
+    }
+
+
+def test_link_plan_matches_normalized_hyphenated_terms(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.test-driven-development:
+    priority: 70
+    match:
+      user_intent:
+        - test-driven-development
+    steps:
+      - action: use_tdd
+""",
+    )
+
+    result = create_link_plan(path, request="use test driven development")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.test-driven-development"]
+    assert result.plan["selection_trace"]["selected"]["match_details"] == [
+        {
+            "term": "test-driven-development",
+            "method": "normalized_substring",
+            "score": 95,
+            "evidence": "test driven development",
+        }
+    ]
+
+
+def test_link_plan_translates_chinese_request_to_skill_intent(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.using-superpowers:
+    priority: 95
+    match:
+      user_intent:
+        - use superpowers
+    steps:
+      - action: bootstrap
+  skill.test-driven-development:
+    priority: 70
+    deps:
+      - skill.using-superpowers
+    match:
+      user_intent:
+        - implement this feature
+    steps:
+      - action: use_tdd
+  skill.skill-installer:
+    priority: 70
+    deps:
+      - skill.using-superpowers
+    match:
+      user_intent:
+        - install a curated skill
+    steps:
+      - action: install_skill
+""",
+    )
+
+    implement_result = create_link_plan(path, request="请实现这个功能")
+    install_result = create_link_plan(path, request="安装一个技能")
+
+    assert implement_result.ok, implement_result.diagnostics.format()
+    assert implement_result.plan["selected_targets"] == ["skill.test-driven-development"]
+    assert implement_result.plan["target_closure"] == [
+        "skill.using-superpowers",
+        "skill.test-driven-development",
+    ]
+    assert implement_result.plan["selection_trace"]["selected"]["match_details"] == [
+        {
+            "term": "implement this feature",
+            "method": "translated_substring",
+            "score": 90,
+            "evidence": "implement this feature",
+        }
+    ]
+
+    assert install_result.ok, install_result.diagnostics.format()
+    assert install_result.plan["selected_targets"] == ["skill.skill-installer"]
+    assert install_result.plan["selection_trace"]["selected"]["match_details"] == [
+        {
+            "term": "install a curated skill",
+            "method": "semantic_token_overlap",
+            "score": 60,
+            "evidence": "install skill",
+        }
+    ]
+
+
+def test_link_plan_semantically_matches_related_english_terms(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.verification-before-completion:
+    priority: 70
+    match:
+      user_intent:
+        - about to claim work is complete
+    steps:
+      - action: verify
+""",
+    )
+
+    result = create_link_plan(path, request="finish task")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.verification-before-completion"]
+    assert result.plan["selection_trace"]["selected"]["match_details"] == [
+        {
+            "term": "about to claim work is complete",
+            "method": "semantic_token_overlap",
+            "score": 60,
+            "evidence": "complete task",
+        }
+    ]
+
+
+def test_link_plan_prefers_verification_for_completion_reports(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.finishing-a-development-branch:
+    priority: 70
+    match:
+      user_intent:
+        - finish a development branch
+        - implementation is complete
+    steps:
+      - action: finish_branch
+  skill.verification-before-completion:
+    priority: 70
+    match:
+      user_intent:
+        - about to claim work is complete
+    steps:
+      - action: verify
+""",
+    )
+
+    result = create_link_plan(path, request="finish task and report completion")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.verification-before-completion"]
+    assert result.plan["selection_trace"]["selected"]["match_details"][0] == {
+        "term": "about to claim work is complete",
+        "method": "translated_substring",
+        "score": 90,
+        "evidence": "about to claim work is complete",
+    }
+
+
+def test_superpowers_plugin_payload_selects_bootstrap_and_workflow_skills() -> None:
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=SUPERPOWERS_MODULE,
+        host="codex",
+        request="implement this feature",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["selected_targets"] == ["methodology.code_change"]
+    assert result.payload["selected_skills"] == [
+        "superpowers:using-superpowers",
+        "superpowers:verification-before-completion",
+        "superpowers:test-driven-development",
+    ]
+    selected = result.payload["selection_trace"]["selected"]
+    assert selected["target"] == "methodology.code_change"
+    assert selected["priority"] == 90
+    assert selected["matched_terms"][0] == "implement this feature"
+    assert selected["match_details"][0] == {
+        "term": "implement this feature",
+        "method": "substring",
+        "score": 100,
+        "evidence": "implement this feature",
+    }
+    assert selected["dependency_closure"] == ["methodology.bootstrap", "methodology.code_change"]
+
+
+def test_scan_skills_directory_generates_agentmakefile_with_bootstrap_dependency(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir,
+        "using-superpowers",
+        "Use when starting any development task and choosing the relevant skill.",
+        "## When to Use\n\n- Any development task\n- Choose workflow\n",
+    )
+    _write_skill(
+        skills_dir,
+        "test-driven-development",
+        "Use when implementing any feature or bugfix, before writing implementation code.",
+        "## When to Use\n\n- New features\n- Bug fixes\n- Refactoring\n- Behavior changes\n",
+    )
+
+    from agentmf.skill_scanner import render_agentmakefile_from_skill_dirs
+
+    content = render_agentmakefile_from_skill_dirs(
+        [skills_dir],
+        namespace="superpowers",
+        package_name="scanned-superpowers",
+        package_description="Scanned Superpowers skills.",
+        bootstrap_skill="using-superpowers",
+    )
+    agentmakefile = tmp_path / "AgentMakefile"
+    agentmakefile.write_text(content)
+
+    source = load_source(agentmakefile)
+    result = create_link_plan(agentmakefile, request="implement this feature")
+
+    assert set(source.skills) == {"using-superpowers", "test-driven-development"}
+    assert {skill.namespace for skill in source.skills.values()} == {"superpowers"}
+    assert source.targets["skill.test-driven-development"].deps == ["skill.using-superpowers"]
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.test-driven-development"]
+    assert result.plan["target_closure"] == [
+        "skill.using-superpowers",
+        "skill.test-driven-development",
+    ]
+
+
+def test_cli_skills_scan_writes_valid_agentmakefile_for_plugin_skill_selection(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir,
+        "using-superpowers",
+        "Use when starting any development task and choosing the relevant skill.",
+        "## When to Use\n\n- Any development task\n- Choose workflow\n",
+    )
+    _write_skill(
+        skills_dir,
+        "writing-plans",
+        "Use when you have a spec or requirements for a multi-step task, before touching code.",
+        "## When to Use\n\n- Implementation plans\n- Break down specs\n",
+    )
+    agentmakefile = tmp_path / "GeneratedAgentMakefile"
+
+    exit_code = main(
+        [
+            "skills",
+            "scan",
+            "--skills-dir",
+            str(skills_dir),
+            "--namespace",
+            "superpowers",
+            "--package-name",
+            "scanned-superpowers",
+            "--bootstrap-skill",
+            "using-superpowers",
+            "--out",
+            str(agentmakefile),
+            "--write",
+        ]
+    )
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=agentmakefile,
+        host="codex",
+        request="write an implementation plan",
+    )
+
+    assert exit_code == 0
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["selected_targets"] == ["skill.writing-plans"]
+    assert result.payload["selected_skills"] == [
+        "superpowers:using-superpowers",
+        "superpowers:writing-plans",
+    ]
+
+
+def test_skill_scan_keeps_feature_implementation_from_routing_to_review_skill(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir,
+        "using-superpowers",
+        "Use when starting any development task and choosing the relevant skill.",
+        "## When to Use\n\n- Any development task\n",
+    )
+    _write_skill(
+        skills_dir,
+        "test-driven-development",
+        "Use when implementing any feature or bugfix, before writing implementation code.",
+        "## When to Use\n\n- New features\n- Bug fixes\n",
+    )
+    _write_skill(
+        skills_dir,
+        "requesting-code-review",
+        "Use when completing tasks, implementing major features, or before merging to verify work meets requirements.",
+        "## When to Use\n\n- Request review\n- Code review\n",
+    )
+
+    from agentmf.skill_scanner import render_agentmakefile_from_skill_dirs
+
+    agentmakefile = tmp_path / "AgentMakefile"
+    agentmakefile.write_text(
+        render_agentmakefile_from_skill_dirs(
+            [skills_dir],
+            namespace="superpowers",
+            package_name="scanned-superpowers",
+            bootstrap_skill="using-superpowers",
+        )
+    )
+
+    result = create_link_plan(agentmakefile, request="implement this feature")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.test-driven-development"]
+
+
+def _write_skill(skills_dir: Path, name: str, description: str, body: str) -> Path:
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True)
+    path = skill_dir / "SKILL.md"
+    path.write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\n{body}\n"
+    )
+    return path
+
+
 def test_validate_numeric_version_is_normalized(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -2072,6 +2532,27 @@ targets:
             "mode": "explicit_target",
             "request": None,
             "targets": ["review.task"],
+        },
+        "selection_trace": {
+            "mode": "explicit_target",
+            "algorithm": "explicit_target_order",
+            "request": None,
+            "requested_targets": ["review.task"],
+            "selected": {
+                "target": "review.task",
+                "targets": ["review.task"],
+                "dependency_closure": ["base.task", "review.task"],
+            },
+            "candidates": [
+                {
+                    "rank": 1,
+                    "target": "review.task",
+                    "priority": 50,
+                    "matched_terms": [],
+                    "selected": True,
+                    "reason": "explicit target",
+                },
+            ],
         },
         "selected_targets": ["review.task"],
         "target_closure": ["base.task", "review.task"],
@@ -4296,6 +4777,63 @@ targets:
         "prepend_stable_prefix_append_volatile_context"
     )
     assert result.payload["trace"]["target_closure"] == ["review.task"]
+
+
+def test_plugin_payload_exposes_selected_skills_and_artifact_paths(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  receiving-code-review:
+    namespace: superpowers
+    description: Review feedback rigorously.
+  verification-before-completion:
+    namespace: superpowers
+    description: Verify before claiming completion.
+targets:
+  base.verify:
+    skills:
+      - superpowers:verification-before-completion
+  review.task:
+    deps:
+      - base.verify
+    match:
+      user_intent:
+        - review code
+    skills:
+      - superpowers:receiving-code-review
+      - superpowers:verification-before-completion
+    steps:
+      - action: review_code
+""",
+    )
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=path,
+        host="codex",
+        request="please review code",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["selected_targets"] == ["review.task"]
+    assert result.payload["selected_skills"] == [
+        "superpowers:verification-before-completion",
+        "superpowers:receiving-code-review",
+    ]
+    assert result.payload["skill_artifacts"] == {
+        "skills_index": "skills/index.md",
+        "codex": [
+            ".codex/skills/superpowers-verification-before-completion/SKILL.md",
+            ".codex/skills/superpowers-receiving-code-review/SKILL.md",
+        ],
+        "claude": [
+            ".claude/skills/superpowers-verification-before-completion/SKILL.md",
+            ".claude/skills/superpowers-receiving-code-review/SKILL.md",
+        ],
+    }
 
 
 def test_cli_plugin_payload_outputs_json(tmp_path: Path, capsys) -> None:

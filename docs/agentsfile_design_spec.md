@@ -10,6 +10,20 @@ Static generated files are the compatibility layer. The deeper integration point
 
 The goal is **not** to build another coding agent runtime. Instead, AgentMakefile acts as a **single portable source of truth** for agent skills and rails, similar to how an API specification can act as the source for generated SDKs, CLIs, documentation, or MCP servers.
 
+AgentMakefile supports two complementary source-of-truth modes:
+
+* **Forward compilation**: teams maintain AgentMakefile directly, then compile
+  it into platform-native instructions and skill packages.
+* **Reverse skill import**: a plugin or host scans existing `SKILL.md`
+  packages into a generated AgentMakefile skill-index module, then uses
+  AgentMakefile target selection, dependency closure, and `selection_trace` to
+  optimize which skills are loaded for a request.
+
+The reverse import path is a major feature, not only a migration helper. It lets
+existing skill ecosystems keep their current package layout while gaining a
+structured dependency graph, deterministic prompt fragments, explainable skill
+selection, and cross-platform outputs.
+
 In the same way that a `Makefile` tells a build system how to produce targets from dependencies, an `AgentMakefile` tells agent runtimes how to execute task-specific workflows and enforce project-specific guardrails. This also gives AgentMakefile a path to avoid unnecessary recompilation: unchanged modules, targets, skills, and backend settings should be reusable across builds, while only affected prompt-prefix artifacts are regenerated.
 
 Concise positioning:
@@ -118,6 +132,12 @@ SDK / CLI / MCP server / docs
 AgentMakefile
   ↓
 Claude SKILL.md / Codex skill / AGENTS.md / CLAUDE.md / Cursor rules / OpenCode config
+
+Existing SKILL.md tree
+  ↓
+Generated AgentMakefile skill-index module
+  ↓
+Explainable plugin payload / selected skills / cross-platform skill artifacts
 ```
 
 In this analogy, AgentMakefile is not the runtime. It is the source format and compiler toolchain for portable agent skills and rails.
@@ -259,6 +279,18 @@ The **match** block defines when a target applies.
 In **compiler-only mode**, `match` is descriptive metadata used to generate skill triggers, documentation, rule descriptions, and platform-native instructions. The compiler does not need to understand natural-language intent at compile time.
 
 In **runtime mode**, `match` can be used by a target selector to route a live user request to the most relevant target or skill.
+
+The initial selector should remain deterministic and explainable. It may use
+layered matching before reporting no match:
+
+* raw substring matching against `match` terms
+* normalized matching for case, punctuation, underscores, and hyphenation
+* built-in translation or alias expansion for common development intents
+* lightweight semantic token overlap with canonicalized terms
+
+Every non-exact match should be reflected in `selection_trace` so a host can
+see whether a target was selected by `substring`, `normalized_substring`,
+`translated_substring`, or `semantic_token_overlap`.
 
 Matching may use:
 
@@ -3136,6 +3168,7 @@ agentmf compile --target cursor-rule
 agentmf compile --target claude-skill
 agentmf compile --target codex-skill
 agentmf compile --target skills-index
+agentmf skills scan --skills-dir <dir> --out AgentMakefile
 agentmf compile --all
 ```
 
@@ -3709,6 +3742,28 @@ Behavior:
   `.codex/skills/<slug>/SKILL.md`
 * include soft permission guidance when permissions are present
 * treat the file as generated output; AgentMakefile remains the source of truth
+
+#### skills scan
+
+Input:
+
+```text
+<skills-dir>/*/SKILL.md
+```
+
+Behavior:
+
+* parse existing skill package frontmatter, especially `name` and
+  `description`
+* infer `match.user_intent` terms from skill names, descriptions, and
+  `## When to Use` bullets
+* emit one AgentMakefile `skills` entry per scanned skill
+* emit one `skill.*` target per scanned skill so runtime selection can route
+  directly to a skill-backed target
+* when a bootstrap skill is configured, emit that bootstrap target as a
+  dependency of all other generated skill targets
+* keep generated AgentMakefile output as an import/bridge path; curated modules
+  may still replace or refine generated match rules later
 
 ---
 

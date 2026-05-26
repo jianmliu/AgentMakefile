@@ -10,6 +10,34 @@
         "review.task"
       ]
     },
+    "selection_trace": {
+      "mode": "explicit_target",
+      "algorithm": "explicit_target_order",
+      "request": null,
+      "requested_targets": [
+        "review.task"
+      ],
+      "selected": {
+        "target": "review.task",
+        "targets": [
+          "review.task"
+        ],
+        "dependency_closure": [
+          "base.task",
+          "review.task"
+        ]
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "target": "review.task",
+          "priority": 50,
+          "matched_terms": [],
+          "selected": true,
+          "reason": "explicit target"
+        }
+      ]
+    },
     "selected_targets": [
       "review.task"
     ],
