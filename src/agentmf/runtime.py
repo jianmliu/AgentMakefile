@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -8,7 +9,7 @@ from agentmf.compiler import compile_agentmakefile
 from agentmf.diagnostics import Diagnostics
 from agentmf.ir import normalize
 from agentmf.loader import load_source_with_diagnostics
-from agentmf.models import AgentRuleIR, IRPolicy, IRTarget
+from agentmf.models import AgentRuleIR, IRPermission, IRPolicy, IRTarget, PermissionAction
 from agentmf.selector import create_link_plan
 
 
@@ -29,6 +30,9 @@ RUNTIME_PHASES = [
     {"name": "trace_logging", "status": "planned"},
 ]
 
+PERMISSION_ACTION_RANK = {"allow": 0, "ask": 1, "deny": 2}
+IMPLICIT_PERMISSION_ACTION: PermissionAction = "ask"
+
 
 @dataclass
 class RunPlanResult:
@@ -46,6 +50,7 @@ def create_run_plan(
     target_names: Optional[List[str]] = None,
     backend: str = "agents-fragments",
     dry_run: bool = False,
+    proposed_tool_calls: Optional[List[Dict[str, str]]] = None,
 ) -> RunPlanResult:
     diagnostics = Diagnostics()
     if not dry_run:
@@ -87,13 +92,21 @@ def create_run_plan(
         },
         "link_plan": link_result.plan,
         "prompt_prefix": prompt_prefix,
-        "runtime_phases": list(RUNTIME_PHASES),
+        "runtime_phases": _runtime_phases(proposed_tool_calls or []),
         "target_contracts": [_target_contract(target) for target in target_closure],
         "policy_contracts": _policy_contracts(target_closure),
         "guard_evaluation": _guard_evaluation(target_closure),
         "permission_contract": _permission_contract(ir),
+        "permission_evaluation": _permission_evaluation(ir, proposed_tool_calls or []),
     }
     return RunPlanResult(diagnostics, plan)
+
+
+def _runtime_phases(proposed_tool_calls: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    phases = [dict(phase) for phase in RUNTIME_PHASES]
+    if proposed_tool_calls:
+        phases[4] = {"name": "permission_enforcement", "status": "evaluated_dry_run"}
+    return phases
 
 
 def _link_prompt_prefix(
@@ -243,4 +256,57 @@ def _permission_contract(ir: AgentRuleIR) -> Dict[str, Any]:
             {"tool": permission.tool, "pattern": permission.pattern, "action": permission.action}
             for permission in sorted(ir.permissions, key=lambda item: (item.tool, item.pattern))
         ],
+    }
+
+
+def _permission_evaluation(
+    ir: AgentRuleIR,
+    proposed_tool_calls: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    return {
+        "mode": "dry_run",
+        "executed": False,
+        "default_action": IMPLICIT_PERMISSION_ACTION,
+        "tool_calls": [
+            _evaluate_tool_call(ir, tool_call)
+            for tool_call in proposed_tool_calls
+        ],
+    }
+
+
+def _evaluate_tool_call(ir: AgentRuleIR, tool_call: Dict[str, str]) -> Dict[str, Any]:
+    tool = tool_call["tool"]
+    input_text = tool_call["input"]
+    matches = [
+        permission
+        for permission in sorted(ir.permissions, key=lambda item: (item.tool, item.pattern))
+        if permission.tool == tool and fnmatchcase(input_text, permission.pattern)
+    ]
+    if matches:
+        action = _most_restrictive_action([permission.action for permission in matches])
+        source = "rule"
+    elif tool in ir.permission_defaults:
+        action = ir.permission_defaults[tool]
+        source = "default"
+    else:
+        action = IMPLICIT_PERMISSION_ACTION
+        source = "implicit_default"
+    return {
+        "tool": tool,
+        "input": input_text,
+        "action": action,
+        "source": source,
+        "matched_rules": [_permission_record(permission) for permission in matches],
+    }
+
+
+def _most_restrictive_action(actions: List[PermissionAction]) -> PermissionAction:
+    return max(actions, key=lambda action: PERMISSION_ACTION_RANK[action])
+
+
+def _permission_record(permission: IRPermission) -> Dict[str, str]:
+    return {
+        "tool": permission.tool,
+        "pattern": permission.pattern,
+        "action": permission.action,
     }

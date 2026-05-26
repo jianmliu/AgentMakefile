@@ -682,6 +682,177 @@ Acceptance:
 - Text dry-run output summarizes planned guards.
 - Guard records are never executed during dry-run.
 
+### AMF-M4-004 Add Deterministic Prompt Command
+
+Status: implemented.
+
+Goal: generate a final prompt payload from selected AgentMakefile fragments
+without invoking a model or running tools.
+
+Implementation:
+
+- Add `agentmf.prompt.create_prompt_payload`.
+- Add `agentmf prompt`.
+- Reuse the runtime prompt-link path for target selection and stable prefix
+  assembly.
+- Compose the stable prefix with volatile request context into
+  `final_prompt`.
+- Emit JSON with `stable_prefix`, `volatile_context`, `final_prompt`, and
+  trace metadata.
+- Emit the final prompt content directly in text mode.
+
+Acceptance:
+
+- `agentmf prompt --request ... --format json` returns a deterministic prompt
+  payload.
+- Text mode prints the final prompt content without model calls.
+- Changing request text changes the final prompt hash but not the stable prefix
+  hash for the same selected target.
+
+### AMF-M4-005 Add Plan Input to Runtime Prompt Generation
+
+Status: implemented.
+
+Goal: let `agentmf prompt` include implementation plans as volatile task
+context without changing stable prompt-prefix artifacts.
+
+Implementation:
+
+- Add `plan_path` to `agentmf.prompt.create_prompt_payload`.
+- Add `--plan` to `agentmf prompt`.
+- Read the plan file as UTF-8 text.
+- Store plan path and content under `volatile_context.plan`.
+- Append the plan after the stable prefix in the final prompt's volatile task
+  context section.
+- Keep plan content out of `stable_prefix.hash`.
+
+Acceptance:
+
+- `agentmf prompt --plan ... --format json` includes plan path and content
+  under `volatile_context.plan`.
+- Text and JSON final prompts include a `### Plan` section when a plan is
+  provided.
+- Changing only plan content changes the final prompt hash but not the stable
+  prefix hash.
+
+### AMF-M4-006 Add Context Collection to Runtime Prompt Generation
+
+Status: implemented.
+
+Goal: let `agentmf prompt` include explicit context files and git context as
+volatile task context without changing stable prompt-prefix artifacts.
+
+Implementation:
+
+- Add `context_files`, `include_git_status`, and `include_git_diff` to
+  `agentmf.prompt.create_prompt_payload`.
+- Add `--context-file`, `--include-git-status`, and `--include-git-diff` to
+  `agentmf prompt`.
+- Read explicit context files as UTF-8 text.
+- Reject secret-looking context files such as `.env`, `.npmrc`, `.pypirc`, and
+  names containing `secret`.
+- Collect git status and git diff only when requested.
+- Append context files, git status, and git diff after the stable prefix in the
+  final prompt's volatile task context section.
+- Keep context content out of `stable_prefix.hash`.
+
+Acceptance:
+
+- `agentmf prompt --context-file ... --format json` includes context file path
+  and content under `volatile_context.context_files`.
+- `agentmf prompt --include-git-status --include-git-diff --format json`
+  includes git status and git diff under volatile context.
+- Final prompts include `### Context File`, `### Git Status`, and `### Git Diff`
+  sections only when those inputs are requested.
+- Secret-looking context files are rejected before prompt generation.
+
+### AMF-M4-007 Add Provider Adapter for One-Shot Ask
+
+Status: implemented.
+
+Goal: let `agentmf ask` run a one-shot provider adapter using the deterministic
+prompt payload path, without introducing a tool loop or external provider
+dependency.
+
+Implementation:
+
+- Add `agentmf.provider.ProviderAdapter`.
+- Add a deterministic local `echo` provider.
+- Add `agentmf.ask.create_ask_payload`.
+- Add `agentmf ask`.
+- Reuse `create_prompt_payload` for request, plan, context file, and git
+  context assembly.
+- Return provider response content, selected target trace, stable prefix hash,
+  and final prompt hash.
+- Accept provider options (`--provider`, `--model`, `--temperature`, and
+  `--max-output-tokens`) while the initial `echo` provider only uses
+  `--provider` and `--model`.
+
+Acceptance:
+
+- `agentmf ask --provider echo --format json` returns a structured ask payload
+  with prompt payload and provider response.
+- Text mode prints the provider response content.
+- Unsupported providers fail with a stable diagnostic.
+- Plan, context-file, git status, and git diff options flow through the prompt
+  payload reused by `agentmf ask`.
+
+### AMF-M4-008 Add Permission Dry-Run
+
+Status: implemented.
+
+Goal: evaluate proposed tool calls against AgentMakefile permission rules
+without executing those calls.
+
+Implementation:
+
+- Add `proposed_tool_calls` to `agentmf.runtime.create_run_plan`.
+- Add `permission_evaluation` to runtime dry-run output.
+- Add `agentmf run --permission-check TOOL:INPUT`.
+- Match rules with shell-style glob semantics.
+- Resolve multiple matching rules with the existing most-restrictive order:
+  `deny > ask > allow`.
+- Use configured tool defaults when no rule matches, and the implicit
+  conservative default `ask` when neither a rule nor a tool default exists.
+- Mark the permission runtime phase as `evaluated_dry_run` only when proposed
+  tool calls are supplied.
+
+Acceptance:
+
+- JSON dry-run output includes each proposed tool call, matched rules, source,
+  and final action.
+- Text dry-run output summarizes proposed permission checks.
+- Dry-run permission evaluation never executes tool calls.
+
+### AMF-M4-009 Add Gated Tool Loop Prototype
+
+Status: implemented.
+
+Goal: introduce the first execution surface while keeping tool execution
+explicit, permission-gated, and traceable.
+
+Implementation:
+
+- Add `agentmf.tool_loop.create_exec_payload`.
+- Add `agentmf exec`.
+- Require `--apply` before any tool execution.
+- Accept explicit proposed tool calls with `--tool-call TOOL:INPUT`.
+- Reuse runtime target selection, prompt linking, guard dry-run, and permission
+  dry-run before execution.
+- Execute only tool calls whose permission action is `allow`.
+- Block `ask` and `deny` tool calls with structured tool result records.
+- Support only the local `bash` tool in the first prototype.
+- Return stdout, stderr, exit code, blocked reasons, runtime plan, and
+  diagnostics in JSON mode.
+
+Acceptance:
+
+- `agentmf exec` without `--apply` fails before executing tools.
+- `agentmf exec --apply --tool-call ... --format json` returns structured tool
+  results.
+- Allowed bash calls execute and capture stdout/stderr.
+- `ask` and `deny` calls are blocked and not executed.
+
 ### AMF-M4-CLI-000 Specify Prompt-Aware Runtime CLI
 
 Status: documented.
@@ -696,7 +867,7 @@ Design:
 - Treat AgentMakefile modules as stable behavior source.
 - Treat implementation plans as volatile runtime task context.
 - Add a staged command surface: `agentmf prompt`, `agentmf ask`,
-  `agentmf chat`, and eventually `agentmf exec`.
+  `agentmf chat`, and gated `agentmf exec`.
 - Keep prompt generation testable before provider calls or tool loops exist.
 
 Acceptance:
@@ -857,10 +1028,7 @@ Acceptance:
 
 These tasks should not block compiler milestones:
 
-- Deterministic final prompt generation with `agentmf prompt`.
-- One-shot provider calls with `agentmf ask`.
-- Permission evaluation dry-run.
-- Tool-call interception.
+- Host-level tool-call interception.
 - Sandbox integration.
 - Output validation.
 - Fallback execution.
@@ -898,6 +1066,12 @@ Completed:
 - AMF-M4-001 runtime dry-run skeleton.
 - AMF-M4-002 prompt link step.
 - AMF-M4-003 guard evaluation dry-run.
+- AMF-M4-004 deterministic final prompt generation with `agentmf prompt`.
+- AMF-M4-005 plan input for runtime prompt generation.
+- AMF-M4-006 context collection for runtime prompt generation.
+- AMF-M4-007 provider adapter for one-shot `agentmf ask`.
+- AMF-M4-008 permission dry-run for proposed tool calls.
+- AMF-M4-009 gated tool loop prototype.
 - AMF-M4-CLI-000 prompt-aware runtime CLI spec.
 - AMF-PAD-001 plugin adapter protocol spec.
 - AMF-PAD-002 plugin payload builder.
@@ -908,7 +1082,7 @@ Completed:
 
 Next:
 
-1. AMF-M4-004 deterministic final prompt generation with `agentmf prompt`.
-2. AMF-M4-005 plan input for runtime prompt generation.
+1. AMF-M4-010 output validation dry-run.
+2. AMF-M4-011 fallback handling for blocked tool calls.
 
-This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks. The next runtime work should continue from dry-run planning into deterministic prompt payload generation.
+This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks. The next runtime work should validate outputs and blocked-call fallback behavior now that prompt assembly, guard dry-run, permission dry-run, provider adapter seams, and a gated tool-loop prototype exist.

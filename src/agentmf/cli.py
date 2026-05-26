@@ -6,11 +6,14 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from agentmf.ask import create_ask_payload
 from agentmf.compiler import compile_agentmakefile
 from agentmf.loader import load_source_with_diagnostics
 from agentmf.plugin import create_plugin_payload
+from agentmf.prompt import create_prompt_payload
 from agentmf.runtime import create_run_plan
 from agentmf.selector import create_link_plan
+from agentmf.tool_loop import create_exec_payload
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -45,7 +48,46 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_cmd.add_argument("--target", action="append", dest="targets")
     run_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
     run_cmd.add_argument("--dry-run", action="store_true")
+    run_cmd.add_argument("--permission-check", action="append", dest="permission_checks")
     run_cmd.add_argument("--format", choices=["text", "json"], default="text")
+
+    prompt_cmd = subparsers.add_parser("prompt", help="emit a deterministic prompt payload")
+    prompt_cmd.add_argument("request_positional", nargs="?")
+    prompt_cmd.add_argument("--file", default="AgentMakefile")
+    prompt_cmd.add_argument("--request")
+    prompt_cmd.add_argument("--target", action="append", dest="targets")
+    prompt_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    prompt_cmd.add_argument("--plan")
+    prompt_cmd.add_argument("--include-git-status", action="store_true")
+    prompt_cmd.add_argument("--include-git-diff", action="store_true")
+    prompt_cmd.add_argument("--context-file", action="append", dest="context_files")
+    prompt_cmd.add_argument("--format", choices=["text", "json"], default="text")
+
+    ask_cmd = subparsers.add_parser("ask", help="run a one-shot provider call")
+    ask_cmd.add_argument("request_positional", nargs="?")
+    ask_cmd.add_argument("--file", default="AgentMakefile")
+    ask_cmd.add_argument("--request")
+    ask_cmd.add_argument("--target", action="append", dest="targets")
+    ask_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    ask_cmd.add_argument("--plan")
+    ask_cmd.add_argument("--include-git-status", action="store_true")
+    ask_cmd.add_argument("--include-git-diff", action="store_true")
+    ask_cmd.add_argument("--context-file", action="append", dest="context_files")
+    ask_cmd.add_argument("--provider", default="echo")
+    ask_cmd.add_argument("--model")
+    ask_cmd.add_argument("--temperature", type=float)
+    ask_cmd.add_argument("--max-output-tokens", type=int)
+    ask_cmd.add_argument("--format", choices=["text", "json"], default="text")
+
+    exec_cmd = subparsers.add_parser("exec", help="run a gated tool-loop prototype")
+    exec_cmd.add_argument("request_positional", nargs="?")
+    exec_cmd.add_argument("--file", default="AgentMakefile")
+    exec_cmd.add_argument("--request")
+    exec_cmd.add_argument("--target", action="append", dest="targets")
+    exec_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    exec_cmd.add_argument("--tool-call", action="append", dest="tool_calls")
+    exec_cmd.add_argument("--apply", action="store_true")
+    exec_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
     plugin_cmd = subparsers.add_parser("plugin", help="plugin adapter commands")
     plugin_subcommands = plugin_cmd.add_subparsers(dest="plugin_command", required=True)
@@ -71,6 +113,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _select(args)
     if args.command == "run":
         return _run(args)
+    if args.command == "prompt":
+        return _prompt(args)
+    if args.command == "ask":
+        return _ask(args)
+    if args.command == "exec":
+        return _exec(args)
     if args.command == "plugin":
         return _plugin(args)
     return 2
@@ -166,12 +214,14 @@ def _select(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    proposed_tool_calls = _parse_permission_checks(args.permission_checks)
     result = create_run_plan(
         path=Path(args.file),
         request=args.request,
         target_names=args.targets,
         backend=args.backend,
         dry_run=args.dry_run,
+        proposed_tool_calls=proposed_tool_calls,
     )
     if args.format == "json":
         print(
@@ -222,7 +272,156 @@ def _run(args: argparse.Namespace) -> int:
                     )
                 else:
                     print(f"  guard: target {guard['target']}: {guard['guard']}")
+            permission_evaluation = result.plan["permission_evaluation"]
+            tool_calls = permission_evaluation["tool_calls"]
+            print(
+                "  permission evaluation: "
+                f"{len(tool_calls)} planned, executed={permission_evaluation['executed']}"
+            )
+            for tool_call in tool_calls:
+                print(
+                    "  permission: "
+                    f"{tool_call['tool']} {tool_call['input']} -> {tool_call['action']}"
+                )
             print("  execution: not performed")
+    return 1 if not result.ok else 0
+
+
+def _parse_permission_checks(permission_checks: Optional[List[str]]) -> List[dict]:
+    return _parse_tool_call_specs(permission_checks)
+
+
+def _parse_tool_call_specs(tool_call_specs: Optional[List[str]]) -> List[dict]:
+    tool_calls = []
+    for raw_spec in tool_call_specs or []:
+        if ":" not in raw_spec:
+            tool_calls.append({"tool": raw_spec, "input": ""})
+            continue
+        tool, input_text = raw_spec.split(":", 1)
+        tool_calls.append({"tool": tool, "input": input_text})
+    return tool_calls
+
+
+def _prompt(args: argparse.Namespace) -> int:
+    if args.request and args.request_positional:
+        print("error: provide request either positionally or with --request, not both", file=sys.stderr)
+        return 2
+    request = args.request if args.request is not None else args.request_positional
+    result = create_prompt_payload(
+        path=Path(args.file),
+        request=request,
+        target_names=args.targets,
+        backend=args.backend,
+        plan_path=Path(args.plan) if args.plan else None,
+        context_files=[Path(path) for path in args.context_files or []],
+        include_git_status=args.include_git_status,
+        include_git_diff=args.include_git_diff,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "prompt_payload": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print(result.payload["final_prompt"]["content"], end="")
+    return 1 if not result.ok else 0
+
+
+def _ask(args: argparse.Namespace) -> int:
+    if args.request and args.request_positional:
+        print("error: provide request either positionally or with --request, not both", file=sys.stderr)
+        return 2
+    request = args.request if args.request is not None else args.request_positional
+    result = create_ask_payload(
+        path=Path(args.file),
+        request=request,
+        target_names=args.targets,
+        backend=args.backend,
+        plan_path=Path(args.plan) if args.plan else None,
+        context_files=[Path(path) for path in args.context_files or []],
+        include_git_status=args.include_git_status,
+        include_git_diff=args.include_git_diff,
+        provider=args.provider,
+        model=args.model,
+        temperature=args.temperature,
+        max_output_tokens=args.max_output_tokens,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "ask_payload": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print(result.payload["response"]["content"], end="")
+    return 1 if not result.ok else 0
+
+
+def _exec(args: argparse.Namespace) -> int:
+    if args.request and args.request_positional:
+        print("error: provide request either positionally or with --request, not both", file=sys.stderr)
+        return 2
+    request = args.request if args.request is not None else args.request_positional
+    result = create_exec_payload(
+        path=Path(args.file),
+        request=request,
+        target_names=args.targets,
+        backend=args.backend,
+        tool_calls=_parse_tool_call_specs(args.tool_calls),
+        apply=args.apply,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "exec_payload": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print("Tool loop prototype:")
+            for tool_result in result.payload["tool_results"]:
+                if tool_result["status"] == "executed":
+                    print(
+                        "  executed: "
+                        f"{tool_result['tool']} {tool_result['input']} -> exit {tool_result['exit_code']}"
+                    )
+                elif tool_result["status"] == "failed":
+                    print(
+                        "  failed: "
+                        f"{tool_result['tool']} {tool_result['input']} -> exit {tool_result['exit_code']}"
+                    )
+                else:
+                    print(
+                        "  blocked: "
+                        f"{tool_result['tool']} {tool_result['input']} ({tool_result['reason']})"
+                    )
     return 1 if not result.ok else 0
 
 

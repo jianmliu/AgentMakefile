@@ -34,6 +34,10 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `.agentmf/fragments/manifest.json` records each fragment's backend, target, dependency closure, source inputs, compiler version, and content hash. Re-running `--write` skips unchanged fragment outputs.
 - `agentmf select` emits a stable JSON link plan that selects fragment paths either from an explicit target or from a request matched against target `match` rules.
 - `agentmf run --dry-run` emits the first runtime-facing plan: selected targets, dependency closure, linked prompt prefix, fragment paths, size/token comparison against the all-in-one baseline, dry-run guard evaluation records, steps, permissions, output contracts, and fallback metadata without executing the workflow.
+- `agentmf run --dry-run --permission-check TOOL:INPUT` evaluates proposed tool calls against AgentMakefile permission rules without executing them.
+- `agentmf prompt` emits a deterministic final prompt payload by combining the selected stable prefix with volatile request, plan, context-file, and git context, without calling a model or running tools.
+- `agentmf ask` reuses the same prompt payload path and runs a one-shot provider call; the first provider is the deterministic local `echo` adapter.
+- `agentmf exec --apply --tool-call TOOL:INPUT` is the first gated tool-loop prototype: it evaluates guards and permissions, then runs only explicitly allowed tool calls.
 - `claude-code` emits native Claude Code settings and hook artifacts under `.claude/` where feasible.
 - `opencode` emits `opencode.json` with permission configuration and target-derived agent definitions.
 
@@ -47,6 +51,10 @@ agentmf compile --file AgentMakefile --target claude-code
 agentmf compile --file AgentMakefile --target opencode
 agentmf select --file AgentMakefile --request "review code" --backend agents-fragments
 agentmf run --file AgentMakefile --request "review code" --dry-run --format json
+agentmf run --file AgentMakefile --target project.default --dry-run --permission-check "bash:git status" --format json
+agentmf prompt --file AgentMakefile --request "review code" --plan docs/superpowers/plans/2026-05-25-agentmf-plugin-adapter.md --include-git-status --format json
+agentmf ask --file AgentMakefile --request "review code" --provider echo --format json
+agentmf exec --file modules/unknown-repo-security/AgentMakefile --target repo.security_review --tool-call "bash:git status" --apply --format json
 agentmf plugin payload --host codex --request "review code" --format json
 agentmf plugin payload --host codex --target project.default --plan docs/superpowers/plans/2026-05-25-agentmf-plugin-adapter.md --include-git-status --format json
 agentmf compile --file AgentMakefile --write

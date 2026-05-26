@@ -129,14 +129,15 @@ Generate the final prompt payload without calling a model.
 ```bash
 agentmf prompt "fix failing tests" --format text
 agentmf prompt --request "review this repo" --plan docs/plans/review.md --format json
+agentmf prompt --request "fix failing tests" --include-git-status --include-git-diff --format json
 ```
 
 Responsibilities:
 
 - load AgentMakefile
-- select target from request and optional plan metadata
+- select target from request and explicit targets
 - link selected prompt fragments
-- collect configured volatile context
+- collect request-specific volatile context, including optional plan content
 - emit the final prompt payload and trace
 
 This is the first user-facing runtime command because it is deterministic and
@@ -144,18 +145,23 @@ testable.
 
 ### `agentmf ask`
 
-Run a one-shot model call with the generated prompt, without a tool loop.
+Run a one-shot provider call with the generated prompt, without a tool loop.
 
 ```bash
-agentmf ask "summarize the next task" --provider openai --model gpt-5-codex
+agentmf ask "summarize the next task" --provider echo
 ```
 
 Responsibilities:
 
 - reuse the prompt assembly path
-- send one model request
+- send one provider request
 - print the response
 - write a trace when requested
+
+The first provider adapter is `echo`, a deterministic local adapter for testing
+prompt assembly and response plumbing without external network calls. OpenAI,
+Anthropic, local model, and host-runtime adapters can be added behind the same
+provider interface later.
 
 ### `agentmf chat`
 
@@ -177,8 +183,7 @@ Responsibilities:
 Run a coding-agent tool loop.
 
 ```bash
-agentmf exec "implement AMF-M4-003 guard evaluation dry-run"
-agentmf exec --plan docs/superpowers/plans/amf-m4-003.md --apply
+agentmf exec --target project.default --tool-call "bash:pytest -q" --apply
 ```
 
 Responsibilities:
@@ -192,6 +197,8 @@ Responsibilities:
 
 `exec` should remain out of scope until prompt assembly, guard dry-run, and
 permission dry-run are stable.
+The initial prototype accepts explicit `--tool-call TOOL:INPUT` values and
+requires `--apply`; autonomous model-driven tool selection remains future work.
 
 ## Shared Options
 
@@ -201,6 +208,7 @@ permission dry-run are stable.
 --plan PATH
 --target NAME
 --backend agents-fragments|claude-fragments
+--tool-call TOOL:INPUT
 --format text|json
 --trace PATH
 --dry-run
@@ -342,31 +350,53 @@ policy when applicable, guard name, and planned status.
 
 ### AMF-M4-004 `agentmf prompt`
 
-Add deterministic final prompt generation from request, optional plan, linked
-stable prefix, and volatile context.
+Status: implemented.
+
+Add deterministic final prompt generation from request, linked stable prefix,
+and volatile request context.
 
 ### AMF-M4-005 Plan Input
+
+Status: implemented.
 
 Add `--plan` to runtime commands and include plan content only in volatile
 context.
 
 ### AMF-M4-006 Context Collection
 
-Add configurable collection for git status, git diff, active files, and explicit
-context files.
+Status: implemented.
+
+Add configurable collection for git status, git diff, and explicit context
+files. Active editor files are represented by explicit `--context-file` inputs
+until host adapters can provide active-file metadata directly.
 
 ### AMF-M4-007 Provider Adapter
 
+Status: implemented.
+
 Add a provider abstraction and the first one-shot `agentmf ask` implementation.
+The first provider is the deterministic local `echo` adapter; external model
+providers remain future work.
 
 ### AMF-M4-008 Permission Dry-Run
 
+Status: implemented.
+
 Evaluate permission decisions for proposed tool calls without executing them.
+`agentmf run --dry-run --permission-check TOOL:INPUT` records the matched
+permission rules, the default or implicit default used when no rule matches,
+and the final `allow` / `ask` / `deny` action. When multiple rules match the
+same proposed call, the most restrictive action wins.
 
 ### AMF-M4-009 Tool Loop Prototype
 
+Status: implemented.
+
 Introduce `agentmf exec` behind an explicit opt-in flag after guards,
 permissions, and traces are testable.
+The first prototype requires `--apply`, accepts explicit `--tool-call`
+arguments, supports the local `bash` tool, and blocks any call whose permission
+decision is `ask` or `deny`.
 
 ## Acceptance Criteria
 
@@ -378,4 +408,7 @@ permissions, and traces are testable.
   permissions.
 - Provider-backed commands reuse the same prompt assembly path as dry-run
   commands.
-- Tool execution remains unavailable until guard and permission checks exist.
+- Permission dry-run explains proposed tool-call decisions without executing
+  tools.
+- Tool execution is available only through the explicitly gated `agentmf exec`
+  prototype.

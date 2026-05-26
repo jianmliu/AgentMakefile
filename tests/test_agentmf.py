@@ -2100,6 +2100,121 @@ permissions:
     }
 
 
+def test_runtime_permission_dry_run_evaluates_proposed_tool_calls(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  defaults:
+    bash: ask
+  rules:
+    bash:
+      "git status": allow
+      "npm install*": deny
+""",
+    )
+
+    result = create_run_plan(
+        path,
+        target_names=["review.task"],
+        backend="agents-fragments",
+        dry_run=True,
+        proposed_tool_calls=[
+            {"tool": "bash", "input": "git status"},
+            {"tool": "bash", "input": "npm install lodash"},
+            {"tool": "file_write", "input": "README.md"},
+        ],
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["runtime_phases"][4] == {
+        "name": "permission_enforcement",
+        "status": "evaluated_dry_run",
+    }
+    assert result.plan["permission_evaluation"] == {
+        "mode": "dry_run",
+        "executed": False,
+        "default_action": "ask",
+        "tool_calls": [
+            {
+                "tool": "bash",
+                "input": "git status",
+                "action": "allow",
+                "source": "rule",
+                "matched_rules": [
+                    {"tool": "bash", "pattern": "git status", "action": "allow"}
+                ],
+            },
+            {
+                "tool": "bash",
+                "input": "npm install lodash",
+                "action": "deny",
+                "source": "rule",
+                "matched_rules": [
+                    {"tool": "bash", "pattern": "npm install*", "action": "deny"}
+                ],
+            },
+            {
+                "tool": "file_write",
+                "input": "README.md",
+                "action": "ask",
+                "source": "implicit_default",
+                "matched_rules": [],
+            },
+        ],
+    }
+
+
+def test_runtime_permission_dry_run_uses_most_restrictive_matching_rule(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  defaults:
+    bash: allow
+  rules:
+    bash:
+      "git *": allow
+      "git push*": ask
+      "git push --force*": deny
+""",
+    )
+
+    result = create_run_plan(
+        path,
+        target_names=["review.task"],
+        dry_run=True,
+        proposed_tool_calls=[
+            {"tool": "bash", "input": "git push --force origin main"},
+        ],
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["permission_evaluation"]["tool_calls"] == [
+        {
+            "tool": "bash",
+            "input": "git push --force origin main",
+            "action": "deny",
+            "source": "rule",
+            "matched_rules": [
+                {"tool": "bash", "pattern": "git *", "action": "allow"},
+                {"tool": "bash", "pattern": "git push --force*", "action": "deny"},
+                {"tool": "bash", "pattern": "git push*", "action": "ask"},
+            ],
+        }
+    ]
+
+
 def test_runtime_execution_without_dry_run_is_rejected(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -2221,6 +2336,246 @@ targets:
     assert payload["diagnostics"] == []
 
 
+def test_cli_run_dry_run_accepts_permission_checks(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  defaults:
+    bash: ask
+  rules:
+    bash:
+      "git status": allow
+""",
+    )
+
+    exit_code = main(
+        [
+            "run",
+            "--file",
+            str(path),
+            "--target",
+            "review.task",
+            "--dry-run",
+            "--permission-check",
+            "bash:git status",
+            "--permission-check",
+            "bash:npm install",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["runtime_plan"]["permission_evaluation"]["tool_calls"] == [
+        {
+            "tool": "bash",
+            "input": "git status",
+            "action": "allow",
+            "source": "rule",
+            "matched_rules": [
+                {"tool": "bash", "pattern": "git status", "action": "allow"}
+            ],
+        },
+        {
+            "tool": "bash",
+            "input": "npm install",
+            "action": "ask",
+            "source": "default",
+            "matched_rules": [],
+        },
+    ]
+
+
+def test_exec_payload_requires_apply_before_tool_execution(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "printf *": allow
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[{"tool": "bash", "input": "printf hello"}],
+        apply=False,
+    )
+
+    assert not result.ok
+    assert result.payload == {}
+    assert [
+        (item.code, item.message, item.location, item.hint)
+        for item in result.diagnostics.items
+    ] == [
+        (
+            "AMF142",
+            "tool execution requires --apply",
+            "exec.apply",
+            "rerun with --apply after reviewing the selected target, guards, and permission decisions",
+        )
+    ]
+
+
+def test_exec_payload_runs_allowed_bash_and_blocks_non_allowed_calls(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  defaults:
+    bash: ask
+  rules:
+    bash:
+      "printf *": allow
+      "rm -rf *": deny
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[
+            {"tool": "bash", "input": "printf hello"},
+            {"tool": "bash", "input": "rm -rf /tmp/agentmf-demo"},
+            {"tool": "bash", "input": "python3 -V"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["version"] == 1
+    assert result.payload["mode"] == "exec"
+    assert result.payload["execution"] == {
+        "enabled": True,
+        "applied": True,
+        "tool_loop": "prototype",
+        "supported_tools": ["bash"],
+    }
+    assert result.payload["runtime_plan"]["permission_evaluation"]["tool_calls"] == [
+        {
+            "tool": "bash",
+            "input": "printf hello",
+            "action": "allow",
+            "source": "rule",
+            "matched_rules": [
+                {"tool": "bash", "pattern": "printf *", "action": "allow"}
+            ],
+        },
+        {
+            "tool": "bash",
+            "input": "rm -rf /tmp/agentmf-demo",
+            "action": "deny",
+            "source": "rule",
+            "matched_rules": [
+                {"tool": "bash", "pattern": "rm -rf *", "action": "deny"}
+            ],
+        },
+        {
+            "tool": "bash",
+            "input": "python3 -V",
+            "action": "ask",
+            "source": "default",
+            "matched_rules": [],
+        },
+    ]
+    assert result.payload["tool_results"] == [
+        {
+            "tool": "bash",
+            "input": "printf hello",
+            "status": "executed",
+            "exit_code": 0,
+            "stdout": "hello",
+            "stderr": "",
+        },
+        {
+            "tool": "bash",
+            "input": "rm -rf /tmp/agentmf-demo",
+            "status": "blocked",
+            "reason": "permission_deny",
+            "permission_action": "deny",
+        },
+        {
+            "tool": "bash",
+            "input": "python3 -V",
+            "status": "blocked",
+            "reason": "permission_ask",
+            "permission_action": "ask",
+        },
+    ]
+
+
+def test_cli_exec_json_runs_allowed_tool_call(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "printf *": allow
+""",
+    )
+
+    exit_code = main(
+        [
+            "exec",
+            "--file",
+            str(path),
+            "--target",
+            "review.task",
+            "--tool-call",
+            "bash:printf cli-ok",
+            "--apply",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["exec_payload"]["tool_results"] == [
+        {
+            "tool": "bash",
+            "input": "printf cli-ok",
+            "status": "executed",
+            "exit_code": 0,
+            "stdout": "cli-ok",
+            "stderr": "",
+        }
+    ]
+
+
 def test_cli_run_dry_run_text_reports_guard_evaluation(tmp_path: Path, capsys) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -2255,6 +2610,609 @@ targets:
     assert exit_code == 0
     assert "guard evaluation: 1 planned, executed=False" in captured.out
     assert "guard: target review.task: target_guard" in captured.out
+
+
+def test_prompt_payload_generates_final_prompt_from_stable_prefix_and_request(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    from agentmf.prompt import create_prompt_payload
+
+    result = create_prompt_payload(
+        path=path,
+        request="please review code",
+        backend="agents-fragments",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["version"] == 1
+    assert payload["mode"] == "prompt"
+    assert payload["request"] == "please review code"
+    assert payload["selected_targets"] == ["review.task"]
+    assert payload["stable_prefix"]["backend"] == "agents-fragments"
+    assert payload["stable_prefix"]["content"].startswith(
+        "# review.task - Generic Coding Agents Target Fragment"
+    )
+    assert payload["volatile_context"] == {
+        "request": "please review code",
+        "plan": None,
+        "git_status": None,
+        "git_diff": None,
+        "context_files": [],
+    }
+    assert payload["final_prompt"]["content"].startswith(payload["stable_prefix"]["content"])
+    assert "## Volatile Task Context" in payload["final_prompt"]["content"]
+    assert "### User Request" in payload["final_prompt"]["content"]
+    assert "please review code" in payload["final_prompt"]["content"]
+    assert payload["final_prompt"]["chars"] == len(payload["final_prompt"]["content"])
+    assert payload["final_prompt"]["approx_tokens"] == (
+        len(payload["final_prompt"]["content"]) + 3
+    ) // 4
+    assert payload["final_prompt"]["hash"] == (
+        "sha256:" + hashlib.sha256(payload["final_prompt"]["content"].encode("utf-8")).hexdigest()
+    )
+    assert payload["trace"]["target_closure"] == ["review.task"]
+
+
+def test_prompt_payload_stable_prefix_hash_ignores_request_text(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+""",
+    )
+
+    from agentmf.prompt import create_prompt_payload
+
+    first = create_prompt_payload(path=path, target_names=["review.task"], request="first request")
+    second = create_prompt_payload(path=path, target_names=["review.task"], request="second request")
+
+    assert first.ok, first.diagnostics.format()
+    assert second.ok, second.diagnostics.format()
+    assert first.payload["stable_prefix"]["hash"] == second.payload["stable_prefix"]["hash"]
+    assert first.payload["final_prompt"]["hash"] != second.payload["final_prompt"]["hash"]
+
+
+def test_prompt_payload_includes_plan_as_volatile_context(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - action: edit_code
+""",
+    )
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n\n- Add tests\n- Implement code\n", encoding="utf-8")
+
+    from agentmf.prompt import create_prompt_payload
+
+    result = create_prompt_payload(
+        path=path,
+        request="implement feature",
+        plan_path=plan,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["volatile_context"]["plan"] == {
+        "path": str(plan),
+        "content": "# Plan\n\n- Add tests\n- Implement code\n",
+    }
+    assert "### Plan" in payload["final_prompt"]["content"]
+    assert f"Source: `{plan}`" in payload["final_prompt"]["content"]
+    assert "- Add tests" in payload["final_prompt"]["content"]
+
+
+def test_prompt_payload_stable_prefix_hash_ignores_plan_text(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    steps:
+      - action: edit_code
+""",
+    )
+    plan_a = tmp_path / "plan-a.md"
+    plan_b = tmp_path / "plan-b.md"
+    plan_a.write_text("# Plan A\n\n- Add tests first\n", encoding="utf-8")
+    plan_b.write_text("# Plan B\n\n- Add docs first\n", encoding="utf-8")
+
+    from agentmf.prompt import create_prompt_payload
+
+    first = create_prompt_payload(path=path, target_names=["code.change"], plan_path=plan_a)
+    second = create_prompt_payload(path=path, target_names=["code.change"], plan_path=plan_b)
+
+    assert first.ok, first.diagnostics.format()
+    assert second.ok, second.diagnostics.format()
+    assert first.payload["stable_prefix"]["hash"] == second.payload["stable_prefix"]["hash"]
+    assert first.payload["final_prompt"]["hash"] != second.payload["final_prompt"]["hash"]
+
+
+def test_prompt_payload_reads_context_file_as_volatile_context(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    context = tmp_path / "notes.md"
+    context.write_text("Important context\n", encoding="utf-8")
+
+    from agentmf.prompt import create_prompt_payload
+
+    result = create_prompt_payload(
+        path=path,
+        target_names=["docs.task"],
+        context_files=[context],
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["volatile_context"]["context_files"] == [
+        {"path": str(context), "content": "Important context\n"}
+    ]
+    assert "### Context File" in result.payload["final_prompt"]["content"]
+    assert f"Source: `{context}`" in result.payload["final_prompt"]["content"]
+    assert "Important context" in result.payload["final_prompt"]["content"]
+
+
+def test_prompt_payload_rejects_secret_context_file(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    secret = tmp_path / ".env"
+    secret.write_text("TOKEN=secret\n", encoding="utf-8")
+
+    from agentmf.prompt import create_prompt_payload
+
+    result = create_prompt_payload(
+        path=path,
+        target_names=["docs.task"],
+        context_files=[secret],
+    )
+
+    assert not result.ok
+    assert result.diagnostics.items[0].code == "AMF137"
+
+
+def test_prompt_payload_collects_requested_git_context(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=AgentMakefile Tests",
+            "-c",
+            "user.email=agentmf-tests@example.com",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    tracked.write_text("after\n", encoding="utf-8")
+
+    from agentmf.prompt import create_prompt_payload
+
+    result = create_prompt_payload(
+        path=path,
+        target_names=["docs.task"],
+        include_git_status=True,
+        include_git_diff=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert " M tracked.txt" in result.payload["volatile_context"]["git_status"]
+    assert "-before" in result.payload["volatile_context"]["git_diff"]
+    assert "+after" in result.payload["volatile_context"]["git_diff"]
+    assert "### Git Status" in result.payload["final_prompt"]["content"]
+    assert "### Git Diff" in result.payload["final_prompt"]["content"]
+
+
+def test_cli_prompt_outputs_json_payload(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "prompt",
+            "--file",
+            str(path),
+            "please review code",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["prompt_payload"]["mode"] == "prompt"
+    assert payload["prompt_payload"]["request"] == "please review code"
+    assert payload["prompt_payload"]["selected_targets"] == ["review.task"]
+    assert payload["prompt_payload"]["final_prompt"]["content"].startswith(
+        "# review.task - Generic Coding Agents Target Fragment"
+    )
+    assert payload["diagnostics"] == []
+
+
+def test_cli_prompt_accepts_plan_file(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - action: edit_code
+""",
+    )
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n\n- Add tests\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "prompt",
+            "--file",
+            str(path),
+            "--request",
+            "implement feature",
+            "--plan",
+            str(plan),
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["prompt_payload"]["volatile_context"]["plan"] == {
+        "path": str(plan),
+        "content": "# Plan\n\n- Add tests\n",
+    }
+    assert "### Plan" in payload["prompt_payload"]["final_prompt"]["content"]
+
+
+def test_cli_prompt_accepts_context_file(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    context = tmp_path / "notes.md"
+    context.write_text("Important context\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "prompt",
+            "--file",
+            str(path),
+            "--target",
+            "docs.task",
+            "--context-file",
+            str(context),
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["prompt_payload"]["volatile_context"]["context_files"] == [
+        {"path": str(context), "content": "Important context\n"}
+    ]
+
+
+def test_cli_prompt_text_outputs_final_prompt(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "prompt",
+            "--file",
+            str(path),
+            "--request",
+            "please review code",
+            "--format",
+            "text",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.startswith("# review.task - Generic Coding Agents Target Fragment")
+    assert "## Volatile Task Context" in captured.out
+    assert "please review code" in captured.out
+
+
+def test_cli_prompt_rejects_positional_and_flag_request(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "prompt",
+            "--file",
+            str(path),
+            "positional request",
+            "--request",
+            "flag request",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "provide request either positionally or with --request, not both" in captured.err
+
+
+def test_ask_payload_uses_echo_provider_with_prompt_payload(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    from agentmf.ask import create_ask_payload
+
+    result = create_ask_payload(
+        path=path,
+        request="please review code",
+        provider="echo",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["version"] == 1
+    assert payload["mode"] == "ask"
+    assert payload["provider"] == "echo"
+    assert payload["model"] == "echo-v1"
+    assert payload["prompt_payload"]["selected_targets"] == ["review.task"]
+    assert payload["prompt_payload"]["final_prompt"]["content"].startswith(
+        "# review.task - Generic Coding Agents Target Fragment"
+    )
+    assert payload["response"]["provider"] == "echo"
+    assert payload["response"]["model"] == "echo-v1"
+    assert "Selected targets:" in payload["response"]["content"]
+    assert "- review.task" in payload["response"]["content"]
+    assert payload["prompt_payload"]["final_prompt"]["hash"] in payload["response"]["content"]
+
+
+def test_ask_payload_rejects_unsupported_provider(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+""",
+    )
+
+    from agentmf.ask import create_ask_payload
+
+    result = create_ask_payload(
+        path=path,
+        target_names=["review.task"],
+        provider="openai",
+    )
+
+    assert not result.ok
+    assert result.diagnostics.items[0].code == "AMF141"
+
+
+def test_cli_ask_outputs_json_response(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "ask",
+            "--file",
+            str(path),
+            "please review code",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["ask_payload"]["provider"] == "echo"
+    assert payload["ask_payload"]["model"] == "echo-v1"
+    assert payload["ask_payload"]["prompt_payload"]["selected_targets"] == ["review.task"]
+    assert "- review.task" in payload["ask_payload"]["response"]["content"]
+
+
+def test_cli_ask_text_prints_provider_response(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "ask",
+            "--file",
+            str(path),
+            "--request",
+            "please review code",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.startswith("Echo provider response")
+    assert "- review.task" in captured.out
+
+
+def test_cli_ask_reuses_prompt_context_options(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    plan = tmp_path / "plan.md"
+    context = tmp_path / "notes.md"
+    plan.write_text("# Plan\n\n- Inspect docs\n", encoding="utf-8")
+    context.write_text("Important context\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "ask",
+            "--file",
+            str(path),
+            "--target",
+            "docs.task",
+            "--plan",
+            str(plan),
+            "--context-file",
+            str(context),
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    volatile_context = payload["ask_payload"]["prompt_payload"]["volatile_context"]
+    assert volatile_context["plan"] == {
+        "path": str(plan),
+        "content": "# Plan\n\n- Inspect docs\n",
+    }
+    assert volatile_context["context_files"] == [
+        {"path": str(context), "content": "Important context\n"}
+    ]
 
 
 def test_plugin_payload_wraps_runtime_prompt_prefix(tmp_path: Path) -> None:
