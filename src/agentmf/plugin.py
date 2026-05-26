@@ -110,6 +110,7 @@ def create_plugin_payload(
     prefix = run_result.plan["prompt_prefix"]
     content = prefix["content"]
     selected_skills = _selected_skills(run_result.plan)
+    selected_pipeline = _selected_pipeline(run_result.plan)
     payload = {
         "version": 1,
         "host": host,
@@ -117,10 +118,7 @@ def create_plugin_payload(
         "request": request,
         "selected_targets": list(run_result.plan["link_plan"]["selected_targets"]),
         "selected_skills": selected_skills,
-        "selected_pipeline": {
-            "target_closure": list(run_result.plan["link_plan"]["target_closure"]),
-            "targets": list(run_result.plan.get("target_pipelines", [])),
-        },
+        "selected_pipeline": selected_pipeline,
         "skill_artifacts": _skill_artifacts(selected_skills),
         "selection_trace": run_result.plan["link_plan"].get("selection_trace", {}),
         "stable_prefix": {
@@ -148,16 +146,55 @@ def create_plugin_payload(
     return PluginPayloadResult(diagnostics, payload)
 
 
+def _selected_pipeline(run_plan: Dict[str, Any]) -> Dict[str, Any]:
+    link_plan = run_plan["link_plan"]
+    target_pipelines = list(run_plan.get("target_pipelines", []))
+    return {
+        "target": link_plan["selected_targets"][0] if link_plan["selected_targets"] else None,
+        "target_closure": list(link_plan["target_closure"]),
+        "targets": target_pipelines,
+        "operations": _flatten_pipeline_ops(target_pipelines, "operations"),
+        "stable_prompt_ops": _flatten_pipeline_ops(target_pipelines, "prompt_ops"),
+        "volatile_context_ops": _flatten_pipeline_ops(target_pipelines, "context_ops"),
+        "guard_ops": _flatten_pipeline_ops(target_pipelines, "guard_ops"),
+        "permission_ops": _flatten_pipeline_ops(target_pipelines, "permission_ops"),
+        "fallback_ops": _flatten_pipeline_ops(target_pipelines, "fallback_ops"),
+        "output_contracts": [
+            {"target": pipeline.get("target"), **pipeline.get("output_contracts", {})}
+            for pipeline in target_pipelines
+        ],
+    }
+
+
+def _flatten_pipeline_ops(target_pipelines: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
+    operations: List[Dict[str, Any]] = []
+    for pipeline in target_pipelines:
+        for operation in pipeline.get(key, []):
+            operations.append({"target": pipeline.get("target"), **operation})
+    return operations
+
+
 def _selected_skills(run_plan: Dict[str, Any]) -> List[str]:
     selected = []
     seen = set()
     for target_contract in run_plan.get("target_contracts", []):
         for skill in target_contract.get("skills", []):
-            if skill in seen:
+            _append_selected_skill(selected, seen, skill)
+    for pipeline in run_plan.get("target_pipelines", []):
+        for operation in pipeline.get("prompt_ops", []):
+            if operation.get("type") != "use_skill":
                 continue
-            seen.add(skill)
-            selected.append(skill)
+            skill = operation.get("payload", {}).get("skill")
+            if isinstance(skill, str):
+                _append_selected_skill(selected, seen, skill)
     return selected
+
+
+def _append_selected_skill(selected: List[str], seen: set, skill: str) -> None:
+    if skill in seen:
+        return
+    seen.add(skill)
+    selected.append(skill)
 
 
 def _skill_artifacts(selected_skills: List[str]) -> Dict[str, Any]:

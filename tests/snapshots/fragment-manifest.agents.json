@@ -3,7 +3,7 @@
   "fragments": [
     {
       "backend": "agents-fragments",
-      "hash": "sha256:9db9f2cc1c4710892627848a21239c1c3c99540f0e640e4110ec1b69a54c6450",
+      "hash": "sha256:37fb3040cd005bb75e2763d2c7623add63e2cccd23b4b3e8342c68743e7d2483",
       "inputs": [
         "AgentMakefile",
         "shared.yml"
@@ -20,7 +20,7 @@
     },
     {
       "backend": "agents-fragments",
-      "hash": "sha256:63c70118e9438f167044f9e83bd8ccaf191d96f341c0ad358cf15c2feb392fed",
+      "hash": "sha256:930de432a75f1446e6bbbba9a24b3ff3faccac0f576c8545ca6da920fb0b9b5d",
       "inputs": [
         "AgentMakefile",
         "shared.yml"

@@ -94,6 +94,10 @@ def build_agentmakefile_data(
             "description": f"Use {skill.qualified_name}.",
             "match": {"user_intent": skill.match_terms},
             "skills": [skill.qualified_name],
+            "steps": [
+                {"use_skill": skill.qualified_name},
+                {"link_prompt": {"source": str(skill.path)}},
+            ],
         }
         if bootstrap and skill.qualified_name != bootstrap.qualified_name:
             target["deps"] = [bootstrap.target_name]

@@ -396,6 +396,17 @@ targets:
     skills:
       - superpowers:test-driven-development
       - superpowers:verification-before-completion
+    steps:
+      - use_skill: superpowers:test-driven-development
+      - select_context:
+          include:
+            - git.diff
+            - active_file
+            - tests
+      - link_prompt:
+          fragment: superpowers.test-driven-development
+      - check_guard: write_failing_test_before_production_code
+      - validate_output: verification_result
     output_format:
       - failing_test
       - implementation_summary
@@ -441,6 +452,15 @@ targets:
     skills:
       - superpowers:receiving-code-review
       - superpowers:verification-before-completion
+    steps:
+      - use_skill: superpowers:receiving-code-review
+      - select_context:
+          include:
+            - git.diff
+            - review_feedback
+      - link_prompt:
+          fragment: superpowers.receiving-code-review
+      - validate_output: findings
     output_format:
       - findings
       - changes

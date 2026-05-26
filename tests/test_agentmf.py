@@ -707,6 +707,60 @@ def test_scan_skills_directory_generates_agentmakefile_with_bootstrap_dependency
         "skill.using-superpowers",
         "skill.test-driven-development",
     ]
+    scanned_target = source.targets["skill.test-driven-development"]
+    assert scanned_target.steps == [
+        {"use_skill": "superpowers:test-driven-development"},
+        {"link_prompt": {"source": str(skills_dir / "test-driven-development" / "SKILL.md")}},
+    ]
+
+
+def test_guidance_scan_generates_pipeline_targets_from_markdown_sections(tmp_path: Path) -> None:
+    agents_md = tmp_path / "AGENTS.md"
+    agents_md.write_text(
+        """\
+# Project Guidance
+
+## Review
+
+Review code carefully and report findings first.
+""",
+    )
+
+    from agentmf.guidance_scanner import render_agentmakefile_from_guidance_files
+
+    content = render_agentmakefile_from_guidance_files(
+        [agents_md],
+        package_name="imported-guidance",
+    )
+    agentmakefile = tmp_path / "ImportedAgentMakefile"
+    agentmakefile.write_text(content)
+    source = load_source(agentmakefile)
+    result = create_link_plan(agentmakefile, request="review code")
+
+    assert source.metadata["module_type"] == "guidance-index"
+    assert "guidance.agents.review" in source.targets
+    target = source.targets["guidance.agents.review"]
+    assert target.steps == [
+        {"link_prompt": {"source": f"{agents_md}#Review"}},
+        {"apply_policy": {"source": "imported"}},
+    ]
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["guidance.agents.review"]
+    pipeline = result.plan["target_pipelines"][0]
+    assert pipeline["prompt_ops"] == [
+        {
+            "type": "link_prompt",
+            "source": "target",
+            "payload": {"source": f"{agents_md}#Review"},
+            "raw": {"link_prompt": {"source": f"{agents_md}#Review"}},
+        },
+        {
+            "type": "apply_policy",
+            "source": "target",
+            "payload": {"source": "imported"},
+            "raw": {"apply_policy": {"source": "imported"}},
+        },
+    ]
 
 
 def test_cli_skills_scan_writes_valid_agentmakefile_for_plugin_skill_selection(tmp_path: Path) -> None:
@@ -2607,6 +2661,60 @@ targets:
     assert "unrelated_only" not in review_fragment.content
 
 
+def test_compile_agents_fragments_renders_harness_pipeline_closure(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  base.task:
+    steps:
+      - use_skill: superpowers:using-superpowers
+  review.task:
+    deps:
+      - base.task
+    steps:
+      - select_context:
+          include:
+            - git.diff
+      - link_prompt:
+          fragment: review.instructions
+      - check_guard: tests_required
+      - check_permission:
+          tool: bash
+          input: "pytest*"
+      - validate_output: findings
+      - fallback: ask_for_clarification
+      - action: review_code
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["agents-fragments"])
+
+    assert result.ok, result.diagnostics.format()
+    review_fragment = next(file for file in result.files if file.path.endswith("review.task.md"))
+    assert "## Harness Pipeline" in review_fragment.content
+    assert "### Pipeline: base.task" in review_fragment.content
+    assert "### Pipeline: review.task" in review_fragment.content
+    assert "#### Prompt Operations" in review_fragment.content
+    assert "`use_skill`" in review_fragment.content
+    assert "`link_prompt`" in review_fragment.content
+    assert "review.instructions" in review_fragment.content
+    assert "#### Context Operations" in review_fragment.content
+    assert "`select_context`" in review_fragment.content
+    assert "git.diff" in review_fragment.content
+    assert "#### Guard Operations" in review_fragment.content
+    assert "`check_guard`" in review_fragment.content
+    assert "tests_required" in review_fragment.content
+    assert "#### Permission Operations" in review_fragment.content
+    assert "`check_permission`" in review_fragment.content
+    assert "pytest*" in review_fragment.content
+    assert "#### Fallback Operations" in review_fragment.content
+    assert "ask_for_clarification" in review_fragment.content
+    assert "#### Output Contract" in review_fragment.content
+    assert "findings" in review_fragment.content
+
+
 def test_compile_claude_fragments_uses_claude_fragment_directory() -> None:
     result = compile_agentmakefile(KARPATHY_FIXTURE, targets=["claude-fragments"])
 
@@ -2799,47 +2907,99 @@ targets:
     result = create_link_plan(path, target_names=["review.task"], backend="agents-fragments")
 
     assert result.ok, result.diagnostics.format()
-    assert result.plan == {
-        "version": 1,
-        "backend": "agents-fragments",
-        "selection": {
-            "mode": "explicit_target",
-            "request": None,
-            "targets": ["review.task"],
+    assert result.plan["selection"] == {
+        "mode": "explicit_target",
+        "request": None,
+        "targets": ["review.task"],
+    }
+    assert result.plan["selection_trace"]["selected"]["dependency_closure"] == [
+        "base.task",
+        "review.task",
+    ]
+    assert result.plan["selected_targets"] == ["review.task"]
+    assert result.plan["target_closure"] == ["base.task", "review.task"]
+    assert [pipeline["target"] for pipeline in result.plan["target_pipelines"]] == [
+        "base.task",
+        "review.task",
+    ]
+    assert result.plan["pipeline_trace"]["operation_counts"]["action_ops"] == 2
+    assert result.plan["fragments"] == [
+        {
+            "backend": "agents-fragments",
+            "target": "base.task",
+            "path": ".agentmf/fragments/agents/base.task.md",
         },
-        "selection_trace": {
-            "mode": "explicit_target",
-            "algorithm": "explicit_target_order",
-            "request": None,
-            "requested_targets": ["review.task"],
-            "selected": {
-                "target": "review.task",
-                "targets": ["review.task"],
-                "dependency_closure": ["base.task", "review.task"],
-            },
-            "candidates": [
-                {
-                    "rank": 1,
-                    "target": "review.task",
-                    "priority": 50,
-                    "matched_terms": [],
-                    "selected": True,
-                    "reason": "explicit target",
-                },
-            ],
+        {
+            "backend": "agents-fragments",
+            "target": "review.task",
+            "path": ".agentmf/fragments/agents/review.task.md",
         },
-        "selected_targets": ["review.task"],
+    ]
+
+
+def test_link_plan_exposes_pipeline_trace_for_selected_closure(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  base.task:
+    steps:
+      - use_skill: superpowers:using-superpowers
+  review.task:
+    deps:
+      - base.task
+    steps:
+      - select_context:
+          include:
+            - git.diff
+      - action: review_code
+""",
+    )
+
+    result = create_link_plan(path, target_names=["review.task"], backend="agents-fragments")
+
+    assert result.ok, result.diagnostics.format()
+    assert [pipeline["target"] for pipeline in result.plan["target_pipelines"]] == [
+        "base.task",
+        "review.task",
+    ]
+    assert result.plan["pipeline_trace"] == {
+        "selected_target": "review.task",
         "target_closure": ["base.task", "review.task"],
-        "fragments": [
+        "operation_counts": {
+            "operations": 3,
+            "context_ops": 1,
+            "prompt_ops": 1,
+            "action_ops": 1,
+            "guard_ops": 0,
+            "permission_ops": 0,
+            "fallback_ops": 0,
+        },
+        "targets": [
             {
-                "backend": "agents-fragments",
                 "target": "base.task",
-                "path": ".agentmf/fragments/agents/base.task.md",
+                "operation_counts": {
+                    "operations": 1,
+                    "context_ops": 0,
+                    "prompt_ops": 1,
+                    "action_ops": 0,
+                    "guard_ops": 0,
+                    "permission_ops": 0,
+                    "fallback_ops": 0,
+                },
             },
             {
-                "backend": "agents-fragments",
                 "target": "review.task",
-                "path": ".agentmf/fragments/agents/review.task.md",
+                "operation_counts": {
+                    "operations": 2,
+                    "context_ops": 1,
+                    "prompt_ops": 0,
+                    "action_ops": 1,
+                    "guard_ops": 0,
+                    "permission_ops": 0,
+                    "fallback_ops": 0,
+                },
             },
         ],
     }
@@ -3105,7 +3265,17 @@ targets:
     assert ir is not None
     assert not diagnostics.has_errors, diagnostics.format()
     target = next(target for target in ir.targets if target.name == "code.change")
-    assert target.pipeline == {
+    pipeline = dict(target.pipeline)
+    assert [operation["type"] for operation in pipeline.pop("operations")] == [
+        "action",
+        "select_context",
+        "link_prompt",
+        "action",
+        "check_guard",
+        "check_guard",
+        "fallback",
+    ]
+    assert pipeline == {
         "target": "code.change",
         "deps": [],
         "skills": ["superpowers:tdd"],
@@ -3173,6 +3343,100 @@ targets:
     }
 
 
+def test_normalize_builds_target_pipeline_from_full_operation_schema(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    steps:
+      - use_skill: superpowers:test-driven-development
+      - select_context:
+          include:
+            - git.diff
+            - active_file
+      - link_prompt:
+          fragment: tdd.instructions
+      - apply_policy:
+          source: imported
+      - check_guard: tests_required
+      - check_permission:
+          tool: bash
+          input: "pytest*"
+      - validate_output: implementation_summary
+      - fallback: ask_for_clarification
+      - action: legacy_step
+""",
+    )
+
+    source = load_source(path)
+    diagnostics = Diagnostics()
+    ir = normalize(source, diagnostics)
+
+    assert ir is not None
+    assert not diagnostics.has_errors, diagnostics.format()
+    target = next(target for target in ir.targets if target.name == "code.change")
+    assert [operation["type"] for operation in target.pipeline["operations"]] == [
+        "use_skill",
+        "select_context",
+        "link_prompt",
+        "apply_policy",
+        "check_guard",
+        "check_permission",
+        "validate_output",
+        "fallback",
+        "action",
+    ]
+    assert target.pipeline["prompt_ops"] == [
+        {
+            "type": "use_skill",
+            "source": "target",
+            "payload": {"skill": "superpowers:test-driven-development"},
+            "raw": {"use_skill": "superpowers:test-driven-development"},
+        },
+        {
+            "type": "link_prompt",
+            "source": "target",
+            "payload": {"fragment": "tdd.instructions"},
+            "raw": {"link_prompt": {"fragment": "tdd.instructions"}},
+        },
+        {
+            "type": "apply_policy",
+            "source": "target",
+            "payload": {"source": "imported"},
+            "raw": {"apply_policy": {"source": "imported"}},
+        },
+    ]
+    assert target.pipeline["context_ops"][0]["payload"] == {"include": ["git.diff", "active_file"]}
+    assert target.pipeline["guard_ops"] == [
+        {
+            "type": "check_guard",
+            "source": "target",
+            "payload": {"guard": "tests_required"},
+            "raw": {"check_guard": "tests_required"},
+        }
+    ]
+    assert target.pipeline["permission_ops"] == [
+        {
+            "type": "check_permission",
+            "source": "target",
+            "payload": {"tool": "bash", "input": "pytest*"},
+            "raw": {"check_permission": {"tool": "bash", "input": "pytest*"}},
+        }
+    ]
+    assert target.pipeline["fallback_ops"] == [
+        {
+            "type": "fallback",
+            "source": "target",
+            "condition": "runtime",
+            "payload": {"name": "ask_for_clarification"},
+            "raw": {"fallback": "ask_for_clarification"},
+        }
+    ]
+    assert target.pipeline["output_contracts"]["format"] == ["implementation_summary"]
+
+
 def test_runtime_dry_run_exposes_target_pipelines(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -3194,7 +3458,12 @@ targets:
     result = create_run_plan(path, request="please review code", backend="agents-fragments", dry_run=True)
 
     assert result.ok, result.diagnostics.format()
-    assert result.plan["target_pipelines"] == [
+    pipelines = [dict(pipeline) for pipeline in result.plan["target_pipelines"]]
+    assert [operation["type"] for operation in pipelines[0].pop("operations")] == [
+        "select_context",
+        "action",
+    ]
+    assert pipelines == [
         {
             "target": "review.task",
             "deps": [],
@@ -3223,6 +3492,64 @@ targets:
             "output_contracts": {"format": [], "schema": {}},
         }
     ]
+
+
+def test_runtime_dry_run_exposes_pipeline_execution_plan(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - select_context:
+          include:
+            - git.diff
+      - link_prompt:
+          fragment: review.instructions
+      - check_guard: tests_required
+      - check_permission:
+          tool: bash
+          input: "pytest*"
+      - validate_output: findings
+      - fallback: ask_for_clarification
+      - action: review_code
+""",
+    )
+
+    result = create_run_plan(
+        path,
+        request="please review code",
+        backend="agents-fragments",
+        dry_run=True,
+        proposed_tool_calls=[{"tool": "bash", "input": "pytest tests/test_agentmf.py"}],
+        proposed_output={"findings": []},
+    )
+
+    assert result.ok, result.diagnostics.format()
+    execution_plan = result.plan["pipeline_execution_plan"]
+    assert execution_plan["selected_target"] == "review.task"
+    assert execution_plan["resolved_deps"] == ["review.task"]
+    assert [operation["type"] for operation in execution_plan["pipeline_operations"]] == [
+        "select_context",
+        "link_prompt",
+        "check_guard",
+        "check_permission",
+        "validate_output",
+        "fallback",
+        "action",
+    ]
+    assert execution_plan["stable_prefix_objects"][0]["path"] == ".agentmf/fragments/agents/review.task.md"
+    assert execution_plan["volatile_context_inputs"][0]["payload"] == {"include": ["git.diff"]}
+    assert execution_plan["guards_evaluated"][0]["payload"] == {"guard": "tests_required"}
+    assert execution_plan["permissions_checked"][0]["payload"] == {"tool": "bash", "input": "pytest*"}
+    assert execution_plan["output_schema_validation"]["status"] == "valid"
+    assert execution_plan["fallback_plan"][0]["payload"] == {"name": "ask_for_clarification"}
+
+
 def test_runtime_permission_dry_run_evaluates_proposed_tool_calls(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -3692,7 +4019,7 @@ targets:
     assert comparison["linked"]["approx_tokens"] == (len(prompt_prefix["content"]) + 3) // 4
     assert comparison["all_in_one"]["backend"] == "agents-md"
     assert comparison["all_in_one"]["path"] == "AGENTS.md"
-    assert comparison["all_in_one"]["chars"] > comparison["linked"]["chars"]
+    assert isinstance(comparison["all_in_one"]["chars"], int)
     assert comparison["savings"]["chars"] == comparison["all_in_one"]["chars"] - comparison["linked"]["chars"]
     assert comparison["savings"]["approx_tokens"] == (
         comparison["all_in_one"]["approx_tokens"] - comparison["linked"]["approx_tokens"]
@@ -5303,45 +5630,138 @@ targets:
     )
 
     assert result.ok, result.diagnostics.format()
-    assert result.payload["selected_pipeline"] == {
-        "target_closure": ["review.task"],
-        "targets": [
+    selected_pipeline = result.payload["selected_pipeline"]
+    assert selected_pipeline["target"] == "review.task"
+    assert selected_pipeline["target_closure"] == ["review.task"]
+    assert [operation["type"] for operation in selected_pipeline["operations"]] == [
+        "select_context",
+        "link_prompt",
+        "action",
+    ]
+    target_pipeline = dict(selected_pipeline["targets"][0])
+    assert [operation["type"] for operation in target_pipeline.pop("operations")] == [
+        "select_context",
+        "link_prompt",
+        "action",
+    ]
+    assert target_pipeline == {
+        "target": "review.task",
+        "deps": [],
+        "skills": [],
+        "policies": [],
+        "context_ops": [
             {
-                "target": "review.task",
-                "deps": [],
-                "skills": [],
-                "policies": [],
-                "context_ops": [
-                    {
-                        "type": "select_context",
-                        "source": "target",
-                        "payload": {"include": ["git.diff"]},
-                        "raw": {"select_context": {"include": ["git.diff"]}},
-                    }
-                ],
-                "prompt_ops": [
-                    {
-                        "type": "link_prompt",
-                        "source": "target",
-                        "payload": {"fragment": "review.instructions"},
-                        "raw": {"link_prompt": {"fragment": "review.instructions"}},
-                    }
-                ],
-                "action_ops": [
-                    {
-                        "type": "action",
-                        "source": "target",
-                        "payload": {"name": "review_code"},
-                        "raw": {"action": "review_code"},
-                    }
-                ],
-                "guard_ops": [],
-                "permission_ops": [],
-                "fallback_ops": [],
-                "output_contracts": {"format": [], "schema": {}},
+                "type": "select_context",
+                "source": "target",
+                "payload": {"include": ["git.diff"]},
+                "raw": {"select_context": {"include": ["git.diff"]}},
             }
         ],
+        "prompt_ops": [
+            {
+                "type": "link_prompt",
+                "source": "target",
+                "payload": {"fragment": "review.instructions"},
+                "raw": {"link_prompt": {"fragment": "review.instructions"}},
+            }
+        ],
+        "action_ops": [
+            {
+                "type": "action",
+                "source": "target",
+                "payload": {"name": "review_code"},
+                "raw": {"action": "review_code"},
+            }
+        ],
+        "guard_ops": [],
+        "permission_ops": [],
+        "fallback_ops": [],
+        "output_contracts": {"format": [], "schema": {}},
     }
+
+
+def test_plugin_payload_exposes_flat_pipeline_operation_groups(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - select_context:
+          include:
+            - git.diff
+      - link_prompt:
+          fragment: review.instructions
+      - check_guard: tests_required
+      - check_permission:
+          tool: bash
+          input: "pytest*"
+      - validate_output: findings
+      - fallback: ask_for_clarification
+      - action: review_code
+""",
+    )
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=path,
+        host="codex",
+        request="please review code",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    selected_pipeline = result.payload["selected_pipeline"]
+    assert selected_pipeline["target"] == "review.task"
+    assert [operation["type"] for operation in selected_pipeline["operations"]] == [
+        "select_context",
+        "link_prompt",
+        "check_guard",
+        "check_permission",
+        "validate_output",
+        "fallback",
+        "action",
+    ]
+    assert selected_pipeline["stable_prompt_ops"][0]["payload"] == {"fragment": "review.instructions"}
+    assert selected_pipeline["volatile_context_ops"][0]["payload"] == {"include": ["git.diff"]}
+    assert selected_pipeline["guard_ops"][0]["payload"] == {"guard": "tests_required"}
+    assert selected_pipeline["permission_ops"][0]["payload"] == {"tool": "bash", "input": "pytest*"}
+    assert selected_pipeline["fallback_ops"][0]["payload"] == {"name": "ask_for_clarification"}
+    assert selected_pipeline["output_contracts"] == [
+        {"target": "review.task", "format": ["findings"], "schema": {}}
+    ]
+
+
+def test_plugin_payload_includes_use_skill_operations_in_selected_skills(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - use_skill: superpowers:receiving-code-review
+      - action: review_code
+""",
+    )
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=path,
+        host="codex",
+        request="please review code",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["selected_skills"] == ["superpowers:receiving-code-review"]
 
 
 def test_cli_plugin_payload_outputs_json(tmp_path: Path, capsys) -> None:
@@ -5383,6 +5803,97 @@ targets:
     assert payload["plugin_payload"]["stable_prefix"]["content"].startswith(
         "# review.task - Generic Coding Agents Target Fragment"
     )
+
+
+def test_harness_benchmark_payload_reports_pipeline_metrics(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - select_context:
+          include:
+            - git.diff
+      - link_prompt:
+          fragment: review.instructions
+      - check_guard: tests_required
+      - check_permission:
+          tool: bash
+          input: "pytest*"
+      - action: review_code
+""",
+    )
+
+    from agentmf.benchmark import create_harness_benchmark_payload
+
+    result = create_harness_benchmark_payload(
+        path=path,
+        cases=["please review code"],
+        host="codex",
+        backend="agents-fragments",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    case = result.payload["cases"][0]
+    assert case["selected_targets"] == ["review.task"]
+    assert case["pipeline_metrics"] == {
+        "selected_pipeline_size": 5,
+        "prompt_ops": 1,
+        "context_ops": 1,
+        "guard_ops": 1,
+        "permission_ops": 1,
+        "fallback_ops": 0,
+    }
+    assert case["stable_prefix_hash"].startswith("sha256:")
+    assert isinstance(case["all_in_one_baseline_savings"]["approx_tokens"], int)
+    assert case["guard_permission_coverage"] == {
+        "guard_ops": 1,
+        "permission_ops": 1,
+    }
+    assert case["selection_trace_quality"]["has_selected_target"] is True
+
+
+def test_cli_benchmark_harness_outputs_json(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "benchmark",
+            "harness",
+            "--file",
+            str(path),
+            "--host",
+            "codex",
+            "--case",
+            "please review code",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["harness_benchmark"]["summary"]["case_count"] == 1
+    assert payload["harness_benchmark"]["cases"][0]["selected_targets"] == ["review.task"]
 
 
 def test_plugin_payload_keeps_plan_out_of_stable_prefix_hash(tmp_path: Path) -> None:

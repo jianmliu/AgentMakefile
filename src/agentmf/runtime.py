@@ -85,6 +85,10 @@ def create_run_plan(
 
     targets_by_name = {target.name: target for target in ir.targets}
     target_closure = [targets_by_name[name] for name in link_result.plan["target_closure"]]
+    target_pipelines = [target.pipeline for target in target_closure]
+    guard_evaluation = _guard_evaluation(target_closure)
+    permission_evaluation = _permission_evaluation(ir, proposed_tool_calls or [])
+    output_validation = _output_validation(target_closure, proposed_output)
     plan = {
         "version": 1,
         "mode": "dry_run",
@@ -97,12 +101,18 @@ def create_run_plan(
         "prompt_prefix": prompt_prefix,
         "runtime_phases": _runtime_phases(proposed_tool_calls or [], proposed_output),
         "target_contracts": [_target_contract(target) for target in target_closure],
-        "target_pipelines": [target.pipeline for target in target_closure],
+        "target_pipelines": target_pipelines,
+        "pipeline_execution_plan": _pipeline_execution_plan(
+            link_result.plan,
+            target_pipelines,
+            prompt_prefix,
+            output_validation,
+        ),
         "policy_contracts": _policy_contracts(target_closure),
-        "guard_evaluation": _guard_evaluation(target_closure),
+        "guard_evaluation": guard_evaluation,
         "permission_contract": _permission_contract(ir),
-        "permission_evaluation": _permission_evaluation(ir, proposed_tool_calls or []),
-        "output_validation": _output_validation(target_closure, proposed_output),
+        "permission_evaluation": permission_evaluation,
+        "output_validation": output_validation,
     }
     return RunPlanResult(diagnostics, plan)
 
@@ -197,6 +207,33 @@ def _size_metrics(content: str) -> Dict[str, int]:
         "chars": len(content),
         "approx_tokens": (len(content) + 3) // 4,
     }
+
+
+def _pipeline_execution_plan(
+    link_plan: Dict[str, Any],
+    target_pipelines: List[Dict[str, Any]],
+    prompt_prefix: Dict[str, Any],
+    output_validation: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "selected_target": link_plan["selected_targets"][0] if link_plan["selected_targets"] else None,
+        "resolved_deps": list(link_plan["target_closure"]),
+        "pipeline_operations": _flatten_pipeline_ops(target_pipelines, "operations"),
+        "stable_prefix_objects": list(prompt_prefix.get("fragments", [])),
+        "volatile_context_inputs": _flatten_pipeline_ops(target_pipelines, "context_ops"),
+        "guards_evaluated": _flatten_pipeline_ops(target_pipelines, "guard_ops"),
+        "permissions_checked": _flatten_pipeline_ops(target_pipelines, "permission_ops"),
+        "output_schema_validation": output_validation,
+        "fallback_plan": _flatten_pipeline_ops(target_pipelines, "fallback_ops"),
+    }
+
+
+def _flatten_pipeline_ops(target_pipelines: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
+    operations: List[Dict[str, Any]] = []
+    for pipeline in target_pipelines:
+        for operation in pipeline.get(key, []):
+            operations.append({"target": pipeline.get("target"), **operation})
+    return operations
 
 
 def _target_contract(target: IRTarget) -> Dict[str, Any]:

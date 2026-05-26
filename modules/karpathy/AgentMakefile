@@ -119,10 +119,18 @@ targets:
     skills:
       - karpathy-guidelines
     steps:
+      - use_skill: karpathy-guidelines
+      - select_context:
+          include:
+            - active_file
+            - git.diff
+      - link_prompt:
+          fragment: karpathy.guidelines
       - action: clarify_task_if_needed
       - action: state_assumptions_and_success_criteria
       - action: inspect_relevant_context
       - action: make_minimal_change_or_recommendation
+      - validate_output: verification_result
       - action: verify_or_explain_verification_gap
       - action: summarize_changes_and_risks
     output_format:
@@ -149,6 +157,13 @@ targets:
       - skip_full_rigor_for_trivial_tasks
       - do_not_over_explain
       - make_smallest_safe_change
+    steps:
+      - use_skill: karpathy-guidelines
+      - select_context:
+          include:
+            - active_file
+      - action: make_smallest_safe_change
+      - validate_output: concise_fix
     output_format:
       - concise_fix
       - verification_if_relevant

@@ -486,6 +486,7 @@ def render_target_fragment(
     _append_policy_section(lines, _policies_for_targets(target_closure))
     _append_skill_section(lines, _skills_for_targets(target_closure))
     _append_target_section(lines, target_closure)
+    _append_pipeline_section(lines, target_closure)
     _append_permission_section(lines, ir)
     return "\n".join(lines).rstrip() + "\n"
 
@@ -602,6 +603,69 @@ def _append_target_section(lines: List[str], targets: List[IRTarget]) -> None:
         _append_list(lines, "Guards", target.guards)
         _append_list(lines, "Steps", target.steps)
         _append_list(lines, "Output format", target.output_format)
+
+
+def _append_pipeline_section(lines: List[str], targets: List[IRTarget]) -> None:
+    pipelines = [target.pipeline for target in targets if target.pipeline]
+    if not pipelines:
+        return
+    lines.extend(["## Harness Pipeline", ""])
+    for pipeline in pipelines:
+        lines.extend([f"### Pipeline: {pipeline['target']}", ""])
+        _append_pipeline_metadata(lines, pipeline)
+        _append_pipeline_ops(lines, "Prompt Operations", pipeline.get("prompt_ops", []))
+        _append_pipeline_ops(lines, "Context Operations", pipeline.get("context_ops", []))
+        _append_pipeline_ops(lines, "Action Operations", pipeline.get("action_ops", []))
+        _append_pipeline_ops(lines, "Guard Operations", pipeline.get("guard_ops", []))
+        _append_pipeline_ops(lines, "Permission Operations", pipeline.get("permission_ops", []))
+        _append_pipeline_ops(lines, "Fallback Operations", pipeline.get("fallback_ops", []))
+        _append_output_contract(lines, pipeline.get("output_contracts", {}))
+
+
+def _append_pipeline_metadata(lines: List[str], pipeline: Dict[str, Any]) -> None:
+    metadata = [
+        ("Dependencies", pipeline.get("deps", [])),
+        ("Skills", pipeline.get("skills", [])),
+        ("Policies", pipeline.get("policies", [])),
+    ]
+    for title, values in metadata:
+        if values:
+            lines.append(f"- {title}: {', '.join(f'`{value}`' for value in values)}")
+        else:
+            lines.append(f"- {title}: none")
+    lines.append("")
+
+
+def _append_pipeline_ops(lines: List[str], title: str, operations: List[Dict[str, Any]]) -> None:
+    lines.extend([f"#### {title}", ""])
+    if not operations:
+        lines.extend(["- None", ""])
+        return
+    for operation in operations:
+        source = operation.get("source", "unknown")
+        payload = json.dumps(operation.get("payload", {}), sort_keys=True)
+        suffix = ""
+        if "policy" in operation:
+            suffix = f", policy `{operation['policy']}`"
+        if "condition" in operation:
+            suffix = f", condition `{operation['condition']}`"
+        lines.append(f"- `{operation['type']}` from `{source}`{suffix}: `{payload}`")
+    lines.append("")
+
+
+def _append_output_contract(lines: List[str], output_contract: Dict[str, Any]) -> None:
+    lines.extend(["#### Output Contract", ""])
+    output_format = output_contract.get("format", [])
+    schema = output_contract.get("schema", {})
+    if output_format:
+        lines.append(f"- Format: {', '.join(f'`{item}`' for item in output_format)}")
+    else:
+        lines.append("- Format: none")
+    if schema:
+        lines.append(f"- Schema: `{json.dumps(schema, sort_keys=True)}`")
+    else:
+        lines.append("- Schema: none")
+    lines.append("")
 
 
 def _append_permission_section(lines: List[str], ir: AgentRuleIR) -> None:

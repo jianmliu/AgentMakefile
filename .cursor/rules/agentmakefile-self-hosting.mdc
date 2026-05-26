@@ -523,6 +523,14 @@ Implement behavior changes using TDD and verification.
 
 - methodology.bootstrap
 
+#### Steps
+
+- use_skill=superpowers:test-driven-development
+- select_context=include=git.diff, active_file, tests
+- link_prompt=fragment=superpowers.test-driven-development
+- check_guard=write_failing_test_before_production_code
+- validate_output=verification_result
+
 #### Output format
 
 - failing_test
@@ -772,6 +780,13 @@ Review or address review feedback with technical rigor.
 #### Dependencies
 
 - methodology.bootstrap
+
+#### Steps
+
+- use_skill=superpowers:receiving-code-review
+- select_context=include=git.diff, review_feedback
+- link_prompt=fragment=superpowers.receiving-code-review
+- validate_output=findings
 
 #### Output format
 

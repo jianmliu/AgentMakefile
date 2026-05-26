@@ -70,6 +70,7 @@ def create_link_plan(
 
     closure = _target_closure(selected_targets, targets_by_name)
     selection_trace = _with_dependency_closure(selection_trace, selected_targets, closure)
+    target_pipelines = [target.pipeline for target in closure]
     fragment_dir = FRAGMENT_BACKEND_DIRS[backend]
     plan = {
         "version": 1,
@@ -82,6 +83,8 @@ def create_link_plan(
         "selection_trace": selection_trace,
         "selected_targets": [target.name for target in selected_targets],
         "target_closure": [target.name for target in closure],
+        "target_pipelines": target_pipelines,
+        "pipeline_trace": _pipeline_trace(selected_targets, closure),
         "fragments": [
             {
                 "backend": backend,
@@ -312,6 +315,54 @@ def _with_dependency_closure(
         selected["target"] = selected_targets[0].name
     trace["selected"] = selected
     return trace
+
+
+def _pipeline_trace(selected_targets: List[IRTarget], closure: List[IRTarget]) -> Dict[str, Any]:
+    return {
+        "selected_target": selected_targets[0].name if selected_targets else None,
+        "target_closure": [target.name for target in closure],
+        "operation_counts": _aggregate_operation_counts(target.pipeline for target in closure),
+        "targets": [
+            {
+                "target": target.name,
+                "operation_counts": _operation_counts(target.pipeline),
+            }
+            for target in closure
+        ],
+    }
+
+
+def _aggregate_operation_counts(pipelines: Iterable[Dict[str, Any]]) -> Dict[str, int]:
+    counts = _empty_operation_counts()
+    for pipeline in pipelines:
+        target_counts = _operation_counts(pipeline)
+        for key, value in target_counts.items():
+            counts[key] += value
+    return counts
+
+
+def _operation_counts(pipeline: Dict[str, Any]) -> Dict[str, int]:
+    return {
+        "operations": len(pipeline.get("operations", [])),
+        "context_ops": len(pipeline.get("context_ops", [])),
+        "prompt_ops": len(pipeline.get("prompt_ops", [])),
+        "action_ops": len(pipeline.get("action_ops", [])),
+        "guard_ops": len(pipeline.get("guard_ops", [])),
+        "permission_ops": len(pipeline.get("permission_ops", [])),
+        "fallback_ops": len(pipeline.get("fallback_ops", [])),
+    }
+
+
+def _empty_operation_counts() -> Dict[str, int]:
+    return {
+        "operations": 0,
+        "context_ops": 0,
+        "prompt_ops": 0,
+        "action_ops": 0,
+        "guard_ops": 0,
+        "permission_ops": 0,
+        "fallback_ops": 0,
+    }
 
 
 def _fragment_file_name(target_name: str) -> str:

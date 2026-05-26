@@ -1,7 +1,9 @@
 """AgentMakefile deterministic compiler."""
 
 from agentmf.ask import AskPayloadResult, create_ask_payload
+from agentmf.benchmark import HarnessBenchmarkResult, create_harness_benchmark_payload, render_harness_benchmark_markdown
 from agentmf.compiler import CompileResult, compile_agentmakefile
+from agentmf.guidance_scanner import render_agentmakefile_from_guidance_files, scan_guidance_files
 from agentmf.loader import load_source
 from agentmf.models import AgentMakefileSource
 from agentmf.plugin import PluginPayloadResult, create_plugin_payload
@@ -17,6 +19,7 @@ __all__ = [
     "AskPayloadResult",
     "CompileResult",
     "ExecPayloadResult",
+    "HarnessBenchmarkResult",
     "LinkPlanResult",
     "PluginPayloadResult",
     "PluginInstallPayloadResult",
@@ -25,6 +28,7 @@ __all__ = [
     "SkillSyncPayloadResult",
     "compile_agentmakefile",
     "create_ask_payload",
+    "create_harness_benchmark_payload",
     "create_exec_payload",
     "create_link_plan",
     "create_plugin_payload",
@@ -33,4 +37,7 @@ __all__ = [
     "create_run_plan",
     "create_skill_sync_payload",
     "load_source",
+    "render_harness_benchmark_markdown",
+    "render_agentmakefile_from_guidance_files",
+    "scan_guidance_files",
 ]

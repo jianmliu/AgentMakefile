@@ -45,6 +45,108 @@
       "base.task",
       "review.task"
     ],
+    "target_pipelines": [
+      {
+        "target": "base.task",
+        "deps": [],
+        "skills": [],
+        "policies": [],
+        "operations": [
+          {
+            "type": "action",
+            "source": "target",
+            "payload": {
+              "name": "inspect_base"
+            },
+            "raw": {
+              "action": "inspect_base"
+            }
+          }
+        ],
+        "context_ops": [],
+        "prompt_ops": [],
+        "action_ops": [
+          {
+            "type": "action",
+            "source": "target",
+            "payload": {
+              "name": "inspect_base"
+            },
+            "raw": {
+              "action": "inspect_base"
+            }
+          }
+        ],
+        "guard_ops": [],
+        "permission_ops": [],
+        "fallback_ops": [],
+        "output_contracts": {
+          "format": [],
+          "schema": {}
+        }
+      },
+      {
+        "target": "review.task",
+        "deps": [
+          "base.task"
+        ],
+        "skills": [],
+        "policies": [],
+        "operations": [],
+        "context_ops": [],
+        "prompt_ops": [],
+        "action_ops": [],
+        "guard_ops": [],
+        "permission_ops": [],
+        "fallback_ops": [],
+        "output_contracts": {
+          "format": [],
+          "schema": {}
+        }
+      }
+    ],
+    "pipeline_trace": {
+      "selected_target": "review.task",
+      "target_closure": [
+        "base.task",
+        "review.task"
+      ],
+      "operation_counts": {
+        "operations": 1,
+        "context_ops": 0,
+        "prompt_ops": 0,
+        "action_ops": 1,
+        "guard_ops": 0,
+        "permission_ops": 0,
+        "fallback_ops": 0
+      },
+      "targets": [
+        {
+          "target": "base.task",
+          "operation_counts": {
+            "operations": 1,
+            "context_ops": 0,
+            "prompt_ops": 0,
+            "action_ops": 1,
+            "guard_ops": 0,
+            "permission_ops": 0,
+            "fallback_ops": 0
+          }
+        },
+        {
+          "target": "review.task",
+          "operation_counts": {
+            "operations": 0,
+            "context_ops": 0,
+            "prompt_ops": 0,
+            "action_ops": 0,
+            "guard_ops": 0,
+            "permission_ops": 0,
+            "fallback_ops": 0
+          }
+        }
+      ]
+    },
     "fragments": [
       {
         "backend": "agents-fragments",

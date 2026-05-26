@@ -146,6 +146,13 @@ Apply Karpathy-style coding guidelines for writing, reviewing, debugging, refact
 - do_not_over_explain
 - make_smallest_safe_change
 
+#### Steps
+
+- use_skill=karpathy-guidelines
+- select_context=include=active_file
+- action=make_smallest_safe_change
+- validate_output=concise_fix
+
 #### Output format
 
 - concise_fix
@@ -173,10 +180,14 @@ Apply Karpathy-style coding guidelines for writing, reviewing, debugging, refact
 
 #### Steps
 
+- use_skill=karpathy-guidelines
+- select_context=include=active_file, git.diff
+- link_prompt=fragment=karpathy.guidelines
 - action=clarify_task_if_needed
 - action=state_assumptions_and_success_criteria
 - action=inspect_relevant_context
 - action=make_minimal_change_or_recommendation
+- validate_output=verification_result
 - action=verify_or_explain_verification_gap
 - action=summarize_changes_and_risks
 

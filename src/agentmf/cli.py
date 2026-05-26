@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from agentmf.ask import create_ask_payload
+from agentmf.benchmark import create_harness_benchmark_payload, render_harness_benchmark_markdown
 from agentmf.compiler import compile_agentmakefile
 from agentmf.loader import load_source_with_diagnostics
 from agentmf.plugin import create_plugin_payload
@@ -145,6 +146,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     skills_sync_cmd.add_argument("--force", action="store_true")
     skills_sync_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
+    benchmark_cmd = subparsers.add_parser("benchmark", help="benchmark AgentMakefile harness behavior")
+    benchmark_subcommands = benchmark_cmd.add_subparsers(dest="benchmark_command", required=True)
+    benchmark_harness_cmd = benchmark_subcommands.add_parser(
+        "harness",
+        help="benchmark pipeline selection, prompt size, and harness coverage",
+    )
+    benchmark_harness_cmd.add_argument("--file", default="AgentMakefile")
+    benchmark_harness_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    benchmark_harness_cmd.add_argument("--case", action="append", dest="cases", required=True)
+    benchmark_harness_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    benchmark_harness_cmd.add_argument("--format", choices=["text", "json", "markdown"], default="markdown")
+
     args = parser.parse_args(argv)
     if args.command == "validate":
         return _validate(args)
@@ -164,6 +177,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _plugin(args)
     if args.command == "skills":
         return _skills(args)
+    if args.command == "benchmark":
+        return _benchmark(args)
     return 2
 
 
@@ -516,6 +531,39 @@ def _skills(args: argparse.Namespace) -> int:
     if args.skills_command == "sync":
         return _skills_sync(args)
     return 2
+
+
+def _benchmark(args: argparse.Namespace) -> int:
+    if args.benchmark_command == "harness":
+        return _benchmark_harness(args)
+    return 2
+
+
+def _benchmark_harness(args: argparse.Namespace) -> int:
+    result = create_harness_benchmark_payload(
+        path=Path(args.file),
+        cases=args.cases,
+        host=args.host,
+        backend=args.backend,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "harness_benchmark": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print(render_harness_benchmark_markdown(result.payload), end="")
+    return 1 if not result.ok else 0
 
 
 def _skills_scan(args: argparse.Namespace) -> int:

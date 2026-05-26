@@ -1,15 +1,15 @@
-# AgentMakefile Benchmark CLI Spec
+# AgentMakefile Harness Benchmark CLI Spec
 
-Status: proposed.
+Status: proposed; first `agentmf benchmark harness` slice implemented.
 
 Date: 2026-05-26.
 
 ## Summary
 
-`agentmf benchmark skills` should make AgentMakefile's value measurable. It
-compares request-specific AgentMakefile skill selection against scattered or
-all-in-one skill loading patterns, then reports token savings, cache stability,
-selection quality, and explainability.
+`agentmf benchmark harness` should make AgentMakefile's value measurable. It
+compares request-specific AgentMakefile pipeline selection against scattered or
+all-in-one guidance loading patterns, then reports token savings, cache
+stability, operation coverage, selection quality, and explainability.
 
 The benchmark is deterministic. It should not call a model, execute tools, or
 use an LLM judge in the first version. It measures the artifacts AgentMakefile
@@ -18,6 +18,8 @@ already owns:
 - selected targets
 - selected skills
 - dependency closure
+- selected pipeline size
+- prompt/context/guard/permission/fallback operation counts
 - stable prefix size and hash
 - all-in-one baseline size
 - selected native skill artifact paths
@@ -35,14 +37,18 @@ and hand-maintained skill indexes when it can prove these outcomes:
 - It explains why each skill was selected.
 - It compiles and syncs the same skill source across hosts.
 
-`agentmf benchmark skills` is the command that produces this evidence.
+`agentmf benchmark harness` is the primary command that produces this evidence.
+A narrower `agentmf benchmark skills` command remains a possible compatibility
+view focused only on native skill selection.
 
 ## Goals
 
-- Compare AgentMakefile request routing against all-in-one prompt or skill
+- Compare AgentMakefile request routing against all-in-one prompt, harness, or skill
   baselines.
 - Quantify stable prompt size and approximate token savings.
 - Show stable prefix hashes so cache reuse can be inspected across cases.
+- Report selected pipeline size and operation group counts.
+- Report guard/permission coverage for selected pipelines.
 - Validate `selected_skills` against optional expected labels.
 - Report selection trace evidence in a compact human-readable form.
 - Support benchmark cases for authored modules, scanned skill-index modules,
@@ -66,7 +72,7 @@ and hand-maintained skill indexes when it can prove these outcomes:
 ### Minimal Invocation
 
 ```bash
-agentmf benchmark skills \
+agentmf benchmark harness \
   --file modules/superpowers/AgentMakefile \
   --case "write an implementation plan" \
   --case "implement this feature" \
@@ -76,7 +82,7 @@ agentmf benchmark skills \
 ### Labeled Cases
 
 ```bash
-agentmf benchmark skills \
+agentmf benchmark harness \
   --file modules/oh-my-openagent/AgentMakefile \
   --cases-file benchmarks/omo.skill-routing.yaml \
   --host codex \
@@ -86,7 +92,7 @@ agentmf benchmark skills \
 ### Compare Against Existing Skill Roots
 
 ```bash
-agentmf benchmark skills \
+agentmf benchmark harness \
   --file /tmp/scanned-superpowers.AgentMakefile \
   --baseline-skills-dir ~/.codex/skills \
   --case "debug failing test" \
@@ -161,6 +167,12 @@ Each case should report:
 - `selected_targets`
 - `target_closure`
 - `selected_skills`
+- `selected_pipeline_size`
+- `prompt_ops`
+- `context_ops`
+- `guard_ops`
+- `permission_ops`
+- `fallback_ops`
 - `skill_artifacts`
 - `stable_prefix_chars`
 - `stable_prefix_approx_tokens`
@@ -353,13 +365,13 @@ Unit tests should cover:
 Smoke tests should cover:
 
 ```bash
-agentmf benchmark skills \
+agentmf benchmark harness \
   --file modules/superpowers/AgentMakefile \
   --case "write an implementation plan" \
   --case "implement this feature" \
   --format markdown
 
-agentmf benchmark skills \
+agentmf benchmark harness \
   --file modules/oh-my-openagent/AgentMakefile \
   --case "autonomous implementation" \
   --format json
@@ -369,13 +381,15 @@ agentmf benchmark skills \
 
 The first implementation should be intentionally small:
 
-1. Add `agentmf benchmark skills`.
+1. Add `agentmf benchmark harness`.
 2. Support `--file`, `--case`, `--host`, `--backend`, `--baseline agents-md`,
-   `--format json|markdown`, and `--fail-on-mismatch`.
+   and `--format json|markdown`.
 3. Use `create_plugin_payload` for each case.
 4. Use the payload's existing `trace.comparison` for baseline and savings.
-5. Add optional expected target and skill labels only through a cases file in
-   the second slice.
+5. Report selected pipeline size, operation counts, stable prefix hash,
+   guard/permission coverage, and compact selection-trace quality.
+6. Add cases files, explicit baselines, report writing, and mismatch handling
+   in later slices.
 
 This keeps the first benchmark useful for demos while avoiding a large cases
 file parser in the first pass.

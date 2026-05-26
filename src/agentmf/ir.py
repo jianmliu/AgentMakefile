@@ -15,6 +15,13 @@ from agentmf.models import (
     TargetSpec,
 )
 
+CONTEXT_OPERATION_TYPES = {"select_context"}
+PROMPT_OPERATION_TYPES = {"link_prompt", "prompt", "use_skill", "apply_policy"}
+GUARD_OPERATION_TYPES = {"check_guard"}
+PERMISSION_OPERATION_TYPES = {"check_permission"}
+FALLBACK_OPERATION_TYPES = {"fallback"}
+OUTPUT_OPERATION_TYPES = {"validate_output"}
+
 
 def normalize(source: AgentMakefileSource, diagnostics: Diagnostics) -> Optional[AgentRuleIR]:
     policies = _normalize_policies(source)
@@ -134,6 +141,11 @@ def _target_pipeline(
     context_ops: List[Dict[str, Any]] = []
     prompt_ops: List[Dict[str, Any]] = []
     action_ops: List[Dict[str, Any]] = []
+    guard_ops: List[Dict[str, Any]] = []
+    permission_ops: List[Dict[str, Any]] = []
+    fallback_ops: List[Dict[str, Any]] = []
+    output_validation_ops: List[Dict[str, Any]] = []
+    operations: List[Dict[str, Any]] = []
     for policy in policies:
         _append_step_ops(
             policy.steps,
@@ -141,6 +153,11 @@ def _target_pipeline(
             context_ops=context_ops,
             prompt_ops=prompt_ops,
             action_ops=action_ops,
+            guard_ops=guard_ops,
+            permission_ops=permission_ops,
+            fallback_ops=fallback_ops,
+            output_validation_ops=output_validation_ops,
+            operations=operations,
             policy=policy.name,
         )
     _append_step_ops(
@@ -149,20 +166,32 @@ def _target_pipeline(
         context_ops=context_ops,
         prompt_ops=prompt_ops,
         action_ops=action_ops,
+        guard_ops=guard_ops,
+        permission_ops=permission_ops,
+        fallback_ops=fallback_ops,
+        output_validation_ops=output_validation_ops,
+        operations=operations,
     )
+    implicit_guard_ops = _guard_ops(target, policies)
+    guard_ops.extend(implicit_guard_ops)
+    operations.extend(implicit_guard_ops)
+    implicit_fallback_ops = _fallback_ops(target)
+    fallback_ops.extend(implicit_fallback_ops)
+    operations.extend(implicit_fallback_ops)
     return {
         "target": name,
         "deps": list(target.deps),
         "skills": [skill.qualified_name for skill in skills],
         "policies": [policy.name for policy in policies],
+        "operations": operations,
         "context_ops": context_ops,
         "prompt_ops": prompt_ops,
         "action_ops": action_ops,
-        "guard_ops": _guard_ops(target, policies),
-        "permission_ops": [],
-        "fallback_ops": _fallback_ops(target),
+        "guard_ops": guard_ops,
+        "permission_ops": permission_ops,
+        "fallback_ops": fallback_ops,
         "output_contracts": {
-            "format": list(target.output_format),
+            "format": _output_contract_format(target, policies, output_validation_ops),
             "schema": dict(target.output_schema),
         },
     }
@@ -175,14 +204,28 @@ def _append_step_ops(
     context_ops: List[Dict[str, Any]],
     prompt_ops: List[Dict[str, Any]],
     action_ops: List[Dict[str, Any]],
+    guard_ops: List[Dict[str, Any]],
+    permission_ops: List[Dict[str, Any]],
+    fallback_ops: List[Dict[str, Any]],
+    output_validation_ops: List[Dict[str, Any]],
+    operations: List[Dict[str, Any]],
     policy: Optional[str] = None,
 ) -> None:
     for step in steps:
         operation = _step_operation(step, source=source, policy=policy)
-        if operation["type"] == "select_context":
+        operations.append(operation)
+        if operation["type"] in CONTEXT_OPERATION_TYPES:
             context_ops.append(operation)
-        elif operation["type"] in {"link_prompt", "prompt"}:
+        elif operation["type"] in PROMPT_OPERATION_TYPES:
             prompt_ops.append(operation)
+        elif operation["type"] in GUARD_OPERATION_TYPES:
+            guard_ops.append(operation)
+        elif operation["type"] in PERMISSION_OPERATION_TYPES:
+            permission_ops.append(operation)
+        elif operation["type"] in FALLBACK_OPERATION_TYPES:
+            fallback_ops.append(operation)
+        elif operation["type"] in OUTPUT_OPERATION_TYPES:
+            output_validation_ops.append(operation)
         else:
             action_ops.append(operation)
 
@@ -202,16 +245,15 @@ def _step_operation(
         }
     else:
         operation_type, value = _single_step_entry(step)
-        if operation_type == "action":
-            payload = {"name": value} if isinstance(value, str) else _payload(value)
-        else:
-            payload = _payload(value)
+        payload = _operation_payload(operation_type, value)
         operation = {
             "type": operation_type,
             "source": source,
             "payload": payload,
             "raw": step,
         }
+        if operation_type == "fallback":
+            operation["condition"] = str(payload.get("condition") or "runtime")
     if policy is not None:
         operation["policy"] = policy
     return operation
@@ -230,6 +272,43 @@ def _payload(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {"name": value}
+
+
+def _operation_payload(operation_type: str, value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if operation_type == "action":
+        return {"name": value}
+    if operation_type == "use_skill":
+        return {"skill": value}
+    if operation_type == "check_guard":
+        return {"guard": value}
+    if operation_type == "validate_output":
+        return {"format": value}
+    if operation_type == "fallback":
+        return {"name": value}
+    if operation_type == "apply_policy":
+        return {"policy": value}
+    return _payload(value)
+
+
+def _output_contract_format(
+    target: TargetSpec,
+    policies: List[IRPolicy],
+    output_validation_ops: List[Dict[str, Any]],
+) -> List[str]:
+    values: List[str] = []
+    for policy in policies:
+        values.extend(policy.output_format)
+    values.extend(target.output_format)
+    for operation in output_validation_ops:
+        payload = operation.get("payload", {})
+        value = payload.get("format") or payload.get("name")
+        if isinstance(value, str):
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(item for item in value if isinstance(item, str))
+    return _unique_preserving_order(values)
 
 
 def _guard_ops(target: TargetSpec, policies: List[IRPolicy]) -> List[Dict[str, Any]]:
@@ -279,6 +358,17 @@ def _fallback_operation(condition: str, fallback: Union[str, Dict[str, Any]]) ->
         "payload": payload,
         "raw": fallback,
     }
+
+
+def _unique_preserving_order(values: List[str]) -> List[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _validate_target_dependencies(targets: Dict[str, TargetSpec], diagnostics: Diagnostics) -> None:

@@ -200,6 +200,18 @@ targets:
     skills:
       - omo:ultrawork
       - omo:category-routing
+    steps:
+      - use_skill: omo:ultrawork
+      - use_skill: omo:category-routing
+      - select_context:
+          include:
+            - user_request
+            - project_state
+            - git.diff
+      - link_prompt:
+          fragment: omo.ultrawork
+      - check_guard: verify_orchestrated_results
+      - validate_output: verification_result
     output_format:
       - plan
       - delegated_work
@@ -217,6 +229,16 @@ targets:
       - omo:prometheus-planning
       - omo:oracle-consultation
       - omo:atlas-execution
+    steps:
+      - use_skill: omo:prometheus-planning
+      - use_skill: omo:atlas-execution
+      - select_context:
+          include:
+            - user_request
+            - constraints
+      - link_prompt:
+          fragment: omo.planning
+      - validate_output: plan
     output_format:
       - clarified_scope
       - plan

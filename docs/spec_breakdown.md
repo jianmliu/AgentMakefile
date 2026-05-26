@@ -1551,11 +1551,17 @@ Implementation:
 - Add `pipeline` to normalized `IRTarget`.
 - Normalize legacy `steps: [{action: ...}]` into `action_ops`.
 - Normalize typed `select_context` steps into `context_ops`.
-- Normalize typed `link_prompt` / `prompt` steps into `prompt_ops`.
+- Normalize typed `link_prompt`, `prompt`, `use_skill`, and `apply_policy`
+  steps into `prompt_ops`.
+- Normalize typed `check_guard`, `check_permission`, `validate_output`, and
+  `fallback` steps into guard, permission, output-contract, and fallback
+  operation groups.
+- Preserve ordered `operations` for each target pipeline so adapters can
+  replay or explain the intended harness flow.
 - Include policy steps, policy guards, target guards, fallback behavior, skills,
   policies, deps, and output contracts in the target pipeline.
 - Preserve existing `steps` and `target_contracts` for compatibility.
-- Expose selected `target_pipelines` in runtime dry-run plans.
+- Expose selected `target_pipelines` in selection and runtime dry-run plans.
 
 Acceptance:
 
@@ -1563,6 +1569,7 @@ Acceptance:
 - Legacy `action` steps remain valid and appear as action operations.
 - `agentmf run --dry-run` exposes selected target pipelines alongside existing
   contracts.
+- `agentmf select` exposes `target_pipelines` and a compact `pipeline_trace`.
 
 ### AMF-HARNESS-002 Selected Pipeline in Plugin Payload
 
@@ -1576,33 +1583,80 @@ Implementation:
 - Add `selected_pipeline` to `agentmf plugin payload`.
 - Include the selected `target_closure`.
 - Include the runtime `target_pipelines` generated for that closure.
+- Include flat operation groups for stable prompt operations, volatile context
+  operations, guards, permissions, fallbacks, and output contracts.
 
 Acceptance:
 
 - Plugin payload JSON includes `selected_pipeline.target_closure`.
 - Plugin payload JSON includes structured target pipeline operations.
+- Plugin payload JSON includes `stable_prompt_ops`, `volatile_context_ops`,
+  `guard_ops`, `permission_ops`, and `fallback_ops`.
 - Existing `selected_skills`, `skill_artifacts`, and `selection_trace` remain
   unchanged.
 
-### AMF-PAD-015 Benchmark CLI First Slice
+### AMF-HARNESS-003 Pipeline-Aware Fragment Backend
 
-Status: planned.
+Status: implemented.
 
-Goal: make AgentMakefile's prompt-size, cache-stability, and skill-selection
-benefits measurable through a deterministic `agentmf benchmark skills` command.
+Goal: make target fragments compile as readable harness pipeline objects, not
+only raw target text.
 
 Implementation:
 
-- Add `agentmf benchmark skills`.
-- Reuse plugin payload selection traces, selected skills, stable prefix hashes,
-  and prompt-size comparison data.
+- Render a `Harness Pipeline` section in `agents-fragments` and
+  `claude-fragments`.
+- Render the target closure's prompt operations, context operations, action
+  operations, guards, permission checks, fallback behavior, and output contract.
+
+Acceptance:
+
+- A selected target fragment includes its dependency pipeline closure.
+- Typed operations are visible in deterministic Markdown output.
+
+### AMF-HARNESS-004 Pipeline Dry-Run Trace
+
+Status: implemented.
+
+Goal: let `agentmf run --dry-run` explain how a selected harness would be
+assembled before any host model or tool loop runs.
+
+Implementation:
+
+- Add `pipeline_execution_plan` to runtime dry-run output.
+- Report selected target, resolved deps, ordered pipeline operations, stable
+  prefix objects, volatile context inputs, guard ops, permission ops, output
+  validation, and fallback plan.
+
+Acceptance:
+
+- Dry-run JSON shows the pipeline execution plan without executing tools.
+- Proposed output and proposed tool calls are evaluated against the selected
+  pipeline contracts.
+
+### AMF-PAD-015 Benchmark CLI First Slice
+
+Status: partially implemented.
+
+Goal: make AgentMakefile's prompt-size, cache-stability, pipeline-selection,
+and skill-selection benefits measurable through deterministic benchmark
+commands.
+
+Implementation:
+
+- Add the first implemented `agentmf benchmark harness` slice.
+- Reuse plugin payload selected pipelines, selection traces, selected skills,
+  stable prefix hashes, prompt-size comparison data, and guard/permission
+  coverage.
+- Keep `agentmf benchmark skills` as a future compatibility-focused extension.
 - Support inline cases, JSON output, Markdown output, report writing, and
-  fail-on-mismatch diagnostics for expected labels.
+  fail-on-mismatch diagnostics for expected labels in later slices.
 
 Acceptance:
 
 - A benchmark case can report selected targets, selected skills, selected
-  native skill artifacts, stable prefix hash, baseline size, and savings.
+-  pipeline size, stable prefix hash, baseline size, and savings.
+- A benchmark case can report prompt/context/guard/permission operation counts.
 - Markdown output is suitable for demos and README examples.
 - JSON output is suitable for CI and future benchmark suites.
 
