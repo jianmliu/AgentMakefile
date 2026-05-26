@@ -1424,6 +1424,33 @@ Acceptance:
 - The install payload explicitly names `selected_skills` and
   `selection_trace` as the request-time fields the model should inspect.
 
+### AMF-PAD-012 Skill-Match-Derived Target Routing
+
+Status: implemented.
+
+Goal: let reusable AgentMakefile modules compile into multiple native skills
+and still optimize skill selection even when a target does not duplicate every
+referenced skill's `match.user_intent` terms.
+
+Implementation:
+
+- Extend request-based target selection to inspect each target's referenced
+  skills.
+- Treat a skill `match` hit as a candidate match for the target that packages
+  that skill.
+- Preserve direct target `match` priority over skill-derived target matches,
+  then use target priority and match score within each group.
+- Add `source: skill:<qualified-name>` to skill-derived match details in
+  `selection_trace`.
+
+Acceptance:
+
+- `modules/oh-my-openagent/AgentMakefile` can route
+  `autonomous implementation` to `omo.ultrawork` without an explicit target
+  match.
+- Plugin payloads for the routed target expose the OMO selected skills.
+- Selection trace explains which skill supplied the matched term.
+
 ## Post-MVP Runtime Work
 
 These tasks should not block compiler milestones:

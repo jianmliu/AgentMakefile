@@ -627,6 +627,47 @@ def test_superpowers_plugin_payload_selects_bootstrap_and_workflow_skills() -> N
     assert selected["dependency_closure"] == ["methodology.bootstrap", "methodology.code_change"]
 
 
+def test_link_plan_derives_target_match_from_referenced_skill_match() -> None:
+    result = create_link_plan(
+        OH_MY_OPENAGENT_MODULE,
+        request="autonomous implementation",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["omo.ultrawork"]
+    selected = result.plan["selection_trace"]["selected"]
+    assert selected["matched_terms"] == ["autonomous implementation"]
+    assert selected["match_details"] == [
+        {
+            "term": "autonomous implementation",
+            "method": "substring",
+            "score": 100,
+            "evidence": "autonomous implementation",
+            "source": "skill:omo:ultrawork",
+        }
+    ]
+
+
+def test_plugin_payload_uses_skill_match_derived_target_routing() -> None:
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=OH_MY_OPENAGENT_MODULE,
+        host="codex",
+        request="autonomous implementation",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["selected_targets"] == ["omo.ultrawork"]
+    assert result.payload["selected_skills"] == [
+        "omo:ultrawork",
+        "omo:category-routing",
+    ]
+    assert result.payload["selection_trace"]["selected"]["match_details"][0]["source"] == (
+        "skill:omo:ultrawork"
+    )
+
+
 def test_scan_skills_directory_generates_agentmakefile_with_bootstrap_dependency(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"
     _write_skill(

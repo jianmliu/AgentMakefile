@@ -119,12 +119,21 @@ def _targets_for_request(
     for target in targets:
         match_details = _match_details(target, profile)
         if match_details:
-            matches.append((target.priority, _match_score(match_details), target.name, target, match_details))
+            matches.append(
+                (
+                    _candidate_source_rank(match_details),
+                    target.priority,
+                    _match_score(match_details),
+                    target.name,
+                    target,
+                    match_details,
+                )
+            )
     if not matches:
         diagnostics.error("AMF118", "no target matched request", "request")
         return [], {}
-    matches.sort(key=lambda item: (-item[0], -item[1], item[2]))
-    selected_target = matches[0][3]
+    matches.sort(key=lambda item: (item[0], -item[1], -item[2], item[3]))
+    selected_target = matches[0][4]
     selected_name = selected_target.name
     candidates = [
         {
@@ -137,7 +146,7 @@ def _targets_for_request(
             "selected": target.name == selected_name,
             "reason": _reason(match_details),
         }
-        for index, (priority, score, _name, target, match_details) in enumerate(matches, start=1)
+        for index, (_source_rank, priority, score, _name, target, match_details) in enumerate(matches, start=1)
     ]
     trace = {
         "mode": "request",
@@ -149,9 +158,9 @@ def _targets_for_request(
         "selected": {
             "target": selected_target.name,
             "priority": selected_target.priority,
-            "matched_terms": [detail["term"] for detail in matches[0][4]],
-            "match_details": matches[0][4],
-            "match_score": matches[0][1],
+            "matched_terms": [detail["term"] for detail in matches[0][5]],
+            "match_details": matches[0][5],
+            "match_score": matches[0][2],
             "dependency_closure": [],
         },
         "candidates": candidates,
@@ -166,7 +175,34 @@ def _target_matches_request(target: IRTarget, request: str) -> bool:
 def _match_details(target: IRTarget, profile: RequestProfile) -> List[dict]:
     details = []
     seen = set()
-    for candidate in _match_strings(target.match.values()):
+    _append_match_details(
+        details,
+        seen,
+        target.match.values(),
+        profile,
+        source=None,
+    )
+    for skill in target.skills:
+        _append_match_details(
+            details,
+            seen,
+            skill.match.values(),
+            profile,
+            source=f"skill:{skill.qualified_name}",
+        )
+    details.sort(key=lambda item: (-item["score"], _detail_source_rank(item), item["term"]))
+    return details
+
+
+def _append_match_details(
+    details: List[dict],
+    seen: set,
+    candidates: Iterable[Any],
+    profile: RequestProfile,
+    *,
+    source: Optional[str],
+) -> None:
+    for candidate in _match_strings(candidates):
         detail = match_term(profile, candidate)
         if detail is None:
             continue
@@ -174,15 +210,24 @@ def _match_details(target: IRTarget, profile: RequestProfile) -> List[dict]:
         if key in seen:
             continue
         seen.add(key)
+        if source is not None:
+            detail = dict(detail)
+            detail["source"] = source
         details.append(detail)
-    details.sort(key=lambda item: (-item["score"], item["term"]))
-    return details
 
 
 def _match_score(match_details: List[dict]) -> int:
     if not match_details:
         return 0
     return max(detail["score"] for detail in match_details)
+
+
+def _detail_source_rank(detail: dict) -> int:
+    return 1 if "source" in detail else 0
+
+
+def _candidate_source_rank(match_details: List[dict]) -> int:
+    return min(_detail_source_rank(detail) for detail in match_details)
 
 
 def _reason(match_details: List[dict]) -> str:

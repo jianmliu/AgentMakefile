@@ -240,7 +240,12 @@ skill guidance.
 `selection_trace` explains why a target was selected. For request-based
 selection it records the normalized request, expanded request terms, matched
 `match.user_intent` terms, match details, candidate ranking, priority values,
-the selected target, and dependency closure. Match detail methods are:
+the selected target, and dependency closure. A target can match directly through
+its own `match` fields or indirectly through the `match` fields of the skills it
+references; skill-derived match details include a `source` value such as
+`skill:omo:ultrawork`. Direct target matches rank ahead of skill-derived
+matches, then priority and match score decide within each group. Match detail
+methods are:
 
 - `substring`: the raw request contains the match term
 - `normalized_substring`: punctuation, case, or hyphenation normalization made

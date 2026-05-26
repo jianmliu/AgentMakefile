@@ -292,6 +292,13 @@ Every non-exact match should be reflected in `selection_trace` so a host can
 see whether a target was selected by `substring`, `normalized_substring`,
 `translated_substring`, or `semantic_token_overlap`.
 
+A target selector may also derive target candidates from the `match` blocks of
+skills referenced by a target. This lets reusable framework modules compile
+multiple native skills and still route a request to the target that packages the
+matching skill set. Skill-derived trace entries should identify their source
+skill, and direct target matches should win over skill-derived matches before
+priority and score are used to rank candidates within each group.
+
 Matching may use:
 
 * User intent

@@ -55,6 +55,12 @@ skills, explain why they were selected, and keep using native `SKILL.md`
 packages as compatibility artifacts. In this mode AgentMakefile behaves like a
 SkillMakefile index with dependency-aware routing.
 
+The same optimization also applies to hand-authored modules. If a target does
+not define its own `match` terms, `agentmf plugin payload` can derive target
+candidates from the `match` terms of the skills referenced by that target. This
+is useful for modules such as Oh My OpenAgent, where targets package several
+skills into an orchestration mode.
+
 Request matching is deterministic and layered. It first checks raw substrings,
 then normalized text such as hyphen-insensitive skill names, then built-in
 translation aliases for common development intents, and finally lightweight
