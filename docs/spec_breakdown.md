@@ -659,14 +659,207 @@ Acceptance:
 - Linked prompt content excludes unrelated target-only guidance.
 - Runtime output reports linked-vs-all-in-one size and approximate token deltas.
 
+### AMF-M4-003 Add Guard Evaluation Dry-Run
+
+Status: implemented.
+
+Goal: make runtime plans show which guards would be evaluated before any
+workflow execution or tool interception exists.
+
+Implementation:
+
+- Add `guard_evaluation` to the runtime dry-run plan.
+- Resolve policy guards and target guards from the selected target closure.
+- Preserve guard provenance by reporting source, target, policy when
+  applicable, guard name, and planned status.
+- Mark the guard evaluation runtime phase as `evaluated_dry_run`.
+- Show guard evaluation counts and guard records in
+  `agentmf run --dry-run --format text`.
+
+Acceptance:
+
+- JSON dry-run output includes target and policy guard evaluation records.
+- Text dry-run output summarizes planned guards.
+- Guard records are never executed during dry-run.
+
+### AMF-M4-CLI-000 Specify Prompt-Aware Runtime CLI
+
+Status: documented.
+
+Goal: define how AgentMakefile can become a Claude Code / Codex CLI-style
+agent shell that automatically builds a request-specific prompt prefix before
+model invocation.
+
+Design:
+
+- See [agentmf_runtime_cli_spec.md](agentmf_runtime_cli_spec.md).
+- Treat AgentMakefile modules as stable behavior source.
+- Treat implementation plans as volatile runtime task context.
+- Add a staged command surface: `agentmf prompt`, `agentmf ask`,
+  `agentmf chat`, and eventually `agentmf exec`.
+- Keep prompt generation testable before provider calls or tool loops exist.
+
+Acceptance:
+
+- Runtime CLI spec explains request and plan input semantics.
+- Runtime CLI spec separates stable prompt prefix from volatile task context.
+- Runtime CLI spec defines milestones from prompt generation through tool-loop
+  execution.
+- Main README and design spec link to the runtime CLI spec.
+
+### AMF-PAD-001 Specify Plugin Adapter Protocol
+
+Status: documented.
+
+Goal: define the lightweight plugin-first path where existing agent CLIs call
+AgentMakefile for prompt assembly instead of AgentMakefile replacing the host
+runtime.
+
+Design:
+
+- See [agentmf_plugin_adapter_spec.md](agentmf_plugin_adapter_spec.md).
+- Existing agent CLIs own model calls, streaming, tool loops, approval UX, and
+  sandboxing.
+- AgentMakefile owns target selection, prompt fragment linking, stable prefix
+  generation, volatile context packaging, and trace output.
+- The stable JSON protocol is `agentmf plugin payload`.
+
+Acceptance:
+
+- Plugin spec defines host responsibilities and AgentMakefile responsibilities.
+- Plugin spec defines stable prefix, volatile context, host instructions, trace,
+  and diagnostics fields.
+- Plugin spec defines command, library, and native host adapter modes.
+- Plugin spec keeps full standalone runtime work as a later path.
+
+### AMF-PAD-002 Add Plugin Payload Builder
+
+Status: implemented.
+
+Goal: expose a library API that wraps the runtime dry-run plan into a
+host-oriented prompt payload for plugin adapters.
+
+Implementation:
+
+- Add `agentmf.plugin.create_plugin_payload`.
+- Add `PluginPayloadResult`.
+- Reuse `create_run_plan(..., dry_run=True)` for target selection and prompt
+  linking.
+- Return stable prefix content, stable prefix size, stable prefix hash,
+  host instructions, volatile context placeholders, and trace metadata.
+- Export the plugin payload builder from `agentmf`.
+
+Acceptance:
+
+- A caller can build a plugin payload without invoking a model or tool loop.
+- The payload reports selected targets and stable prefix content.
+- Volatile context placeholders are separate from stable prefix content.
+- Runtime trace includes target closure, linked fragments, and size comparison.
+
+### AMF-PAD-003 Add Plugin Payload CLI Command
+
+Status: implemented.
+
+Goal: expose the plugin payload builder through the command line so host agents
+can shell out for prompt payload JSON.
+
+Implementation:
+
+- Add `agentmf plugin payload`.
+- Support `--host`, `--request`, positional request, `--target`, `--backend`,
+  and `--format`.
+- Emit stable JSON with `ok`, `plugin_payload`, and `diagnostics`.
+- Keep plan and context file flags for AMF-PAD-004.
+
+Acceptance:
+
+- `agentmf plugin payload --host codex --request ... --format json` returns a
+  selected plugin payload.
+- Positional request and `--request` are mutually exclusive.
+- Text mode summarizes host, selected targets, stable prefix size, and stable
+  prefix hash.
+
+### AMF-PAD-004 Add Plan and Context Inputs
+
+Status: implemented.
+
+Goal: let plugin payloads carry request-specific task context without changing
+the stable prompt prefix.
+
+Implementation:
+
+- Add `plan_path` to `create_plugin_payload`.
+- Add context file inputs with secret-looking file rejection.
+- Add opt-in git status and git diff collection.
+- Add `--plan`, `--context-file`, `--include-git-status`, and
+  `--include-git-diff` to `agentmf plugin payload`.
+- Keep plan, context files, git status, and git diff under `volatile_context`.
+
+Acceptance:
+
+- Plan content appears only in `volatile_context.plan`.
+- Changing only plan content does not change `stable_prefix.hash`.
+- Context files appear under `volatile_context.context_files`.
+- `.env`, `.npmrc`, `.pypirc`, and secret-looking context file names are
+  rejected.
+- Git status and git diff are collected only when explicitly requested.
+
+### AMF-PAD-005 Add Host Profiles
+
+Status: implemented.
+
+Goal: make plugin payload host instructions explicit per supported host without
+depending on host-specific SDKs.
+
+Implementation:
+
+- Add host profiles for `generic`, `codex`, `claude-code`, `cursor`, and
+  `opencode`.
+- Include `profile`, `instruction_surface`, `permissions_mode`, and
+  `native_artifacts` in `host_instructions`.
+- Keep common injection and cache boundary fields stable across hosts.
+- Document host profile semantics in the plugin adapter spec.
+
+Acceptance:
+
+- Each supported host returns a distinct `host_instructions.profile`.
+- Hosts with native hard-rail surfaces advertise
+  `host_enforced_when_supported`.
+- Hosts without native enforcement advertise `soft_guidance`.
+- Host profiles remain payload metadata only; they do not call host SDKs.
+
+### AMF-PAD-006 Add Example Adapter Docs
+
+Status: implemented.
+
+Goal: show host authors how to call `agentmf plugin payload` and inject the
+returned prompt payload into existing agent runtimes.
+
+Implementation:
+
+- Add [agentmf_plugin_adapter_examples.md](agentmf_plugin_adapter_examples.md).
+- Document command-adapter usage.
+- Document Python wrapper usage.
+- Document plan-aware and context-file invocations.
+- Document host-specific notes for `generic`, `codex`, `claude-code`,
+  `cursor`, and `opencode`.
+- Document error handling and the host security boundary.
+
+Acceptance:
+
+- Docs show how to consume `stable_prefix.content`.
+- Docs show volatile context appended after the stable prefix.
+- Docs explain that the host still owns model calls, tool loops, approvals, and
+  sandboxing.
+- Docs link from README and the plugin adapter spec.
+
 ## Post-MVP Runtime Work
 
 These tasks should not block compiler milestones:
 
-- Runtime target selection.
-- Dependency graph execution.
-- Step execution.
-- Guard evaluation.
+- Deterministic final prompt generation with `agentmf prompt`.
+- One-shot provider calls with `agentmf ask`.
+- Permission evaluation dry-run.
 - Tool-call interception.
 - Sandbox integration.
 - Output validation.
@@ -704,9 +897,18 @@ Completed:
 - AMF-M3-005 unknown repo hard rails demo.
 - AMF-M4-001 runtime dry-run skeleton.
 - AMF-M4-002 prompt link step.
+- AMF-M4-003 guard evaluation dry-run.
+- AMF-M4-CLI-000 prompt-aware runtime CLI spec.
+- AMF-PAD-001 plugin adapter protocol spec.
+- AMF-PAD-002 plugin payload builder.
+- AMF-PAD-003 `agentmf plugin payload` command.
+- AMF-PAD-004 plan and context inputs.
+- AMF-PAD-005 host profiles.
+- AMF-PAD-006 example adapter docs.
 
 Next:
 
-1. AMF-M4-003 guard evaluation dry-run.
+1. AMF-M4-004 deterministic final prompt generation with `agentmf prompt`.
+2. AMF-M4-005 plan input for runtime prompt generation.
 
-This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks. The next runtime task should evaluate guards in dry-run mode without executing steps.
+This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks. The next runtime work should continue from dry-run planning into deterministic prompt payload generation.

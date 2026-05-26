@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -2037,7 +2038,7 @@ permissions:
         {"name": "target_selection", "status": "resolved"},
         {"name": "dependency_graph_resolution", "status": "resolved"},
         {"name": "prompt_fragment_linking", "status": "linked"},
-        {"name": "guard_evaluation", "status": "not_executed"},
+        {"name": "guard_evaluation", "status": "evaluated_dry_run"},
         {"name": "permission_enforcement", "status": "not_executed"},
         {"name": "step_execution", "status": "not_executed"},
         {"name": "output_validation", "status": "not_executed"},
@@ -2074,6 +2075,25 @@ permissions:
             "output_format": [],
         }
     ]
+    assert result.plan["guard_evaluation"] == {
+        "mode": "dry_run",
+        "executed": False,
+        "guards": [
+            {
+                "source": "policy",
+                "target": "review.task",
+                "policy": "review_policy",
+                "guard": "policy_guard",
+                "status": "planned",
+            },
+            {
+                "source": "target",
+                "target": "review.task",
+                "guard": "target_guard",
+                "status": "planned",
+            },
+        ],
+    }
     assert result.plan["permission_contract"] == {
         "defaults": {"bash": "ask"},
         "rules": [{"tool": "bash", "pattern": "git status", "action": "allow"}],
@@ -2199,6 +2219,384 @@ targets:
     )
     assert payload["runtime_plan"]["prompt_prefix"]["comparison"]["all_in_one"]["path"] == "AGENTS.md"
     assert payload["diagnostics"] == []
+
+
+def test_cli_run_dry_run_text_reports_guard_evaluation(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    guards:
+      - target_guard
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "run",
+            "--file",
+            str(path),
+            "--request",
+            "please review code",
+            "--dry-run",
+            "--format",
+            "text",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "guard evaluation: 1 planned, executed=False" in captured.out
+    assert "guard: target review.task: target_guard" in captured.out
+
+
+def test_plugin_payload_wraps_runtime_prompt_prefix(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=path,
+        host="codex",
+        request="please review code",
+        backend="agents-fragments",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["version"] == 1
+    assert result.payload["host"] == "codex"
+    assert result.payload["mode"] == "prompt_payload"
+    assert result.payload["request"] == "please review code"
+    assert result.payload["selected_targets"] == ["review.task"]
+    assert result.payload["stable_prefix"]["backend"] == "agents-fragments"
+    assert result.payload["stable_prefix"]["content"].startswith(
+        "# review.task - Generic Coding Agents Target Fragment"
+    )
+    assert result.payload["volatile_context"] == {
+        "plan": None,
+        "git_status": None,
+        "git_diff": None,
+        "context_files": [],
+    }
+    assert result.payload["host_instructions"]["injection"] == (
+        "prepend_stable_prefix_append_volatile_context"
+    )
+    assert result.payload["trace"]["target_closure"] == ["review.task"]
+
+
+def test_cli_plugin_payload_outputs_json(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "plugin",
+            "payload",
+            "--file",
+            str(path),
+            "--host",
+            "codex",
+            "--request",
+            "please review code",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["plugin_payload"]["host"] == "codex"
+    assert payload["plugin_payload"]["selected_targets"] == ["review.task"]
+    assert payload["plugin_payload"]["stable_prefix"]["content"].startswith(
+        "# review.task - Generic Coding Agents Target Fragment"
+    )
+
+
+def test_plugin_payload_keeps_plan_out_of_stable_prefix_hash(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - action: edit_code
+""",
+    )
+    plan_a = tmp_path / "plan-a.md"
+    plan_b = tmp_path / "plan-b.md"
+    plan_a.write_text("# Plan A\n\n- Add tests first\n", encoding="utf-8")
+    plan_b.write_text("# Plan B\n\n- Add docs first\n", encoding="utf-8")
+
+    from agentmf.plugin import create_plugin_payload
+
+    result_a = create_plugin_payload(
+        path=path,
+        host="codex",
+        request="implement feature",
+        plan_path=plan_a,
+    )
+    result_b = create_plugin_payload(
+        path=path,
+        host="codex",
+        request="implement feature",
+        plan_path=plan_b,
+    )
+
+    assert result_a.ok, result_a.diagnostics.format()
+    assert result_b.ok, result_b.diagnostics.format()
+    assert result_a.payload["stable_prefix"]["hash"] == result_b.payload["stable_prefix"]["hash"]
+    assert result_a.payload["volatile_context"]["plan"] == {
+        "path": str(plan_a),
+        "content": "# Plan A\n\n- Add tests first\n",
+    }
+    assert result_b.payload["volatile_context"]["plan"] == {
+        "path": str(plan_b),
+        "content": "# Plan B\n\n- Add docs first\n",
+    }
+
+
+def test_plugin_payload_reads_context_file(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    context = tmp_path / "notes.md"
+    context.write_text("Important context\n", encoding="utf-8")
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=path,
+        host="generic",
+        target_names=["docs.task"],
+        context_files=[context],
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["volatile_context"]["context_files"] == [
+        {"path": str(context), "content": "Important context\n"}
+    ]
+
+
+def test_plugin_payload_rejects_secret_context_file(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    secret = tmp_path / ".env"
+    secret.write_text("TOKEN=secret\n", encoding="utf-8")
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=path,
+        host="generic",
+        target_names=["docs.task"],
+        context_files=[secret],
+    )
+
+    assert not result.ok
+    assert result.diagnostics.items[0].code == "AMF132"
+
+
+def test_plugin_payload_collects_requested_git_context(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=AgentMakefile Tests",
+            "-c",
+            "user.email=agentmf-tests@example.com",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    tracked.write_text("after\n", encoding="utf-8")
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=path,
+        host="generic",
+        target_names=["docs.task"],
+        include_git_status=True,
+        include_git_diff=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert " M tracked.txt" in result.payload["volatile_context"]["git_status"]
+    assert "-before" in result.payload["volatile_context"]["git_diff"]
+    assert "+after" in result.payload["volatile_context"]["git_diff"]
+
+
+def test_cli_plugin_payload_accepts_plan_and_context_file(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+    plan = tmp_path / "plan.md"
+    context = tmp_path / "notes.md"
+    plan.write_text("# Plan\n\n- Inspect docs\n", encoding="utf-8")
+    context.write_text("Important context\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "plugin",
+            "payload",
+            "--file",
+            str(path),
+            "--target",
+            "docs.task",
+            "--plan",
+            str(plan),
+            "--context-file",
+            str(context),
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["plugin_payload"]["volatile_context"]["plan"] == {
+        "path": str(plan),
+        "content": "# Plan\n\n- Inspect docs\n",
+    }
+    assert payload["plugin_payload"]["volatile_context"]["context_files"] == [
+        {"path": str(context), "content": "Important context\n"}
+    ]
+
+
+def test_plugin_payload_uses_host_specific_instruction_profiles(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  docs.task:
+    steps:
+      - action: inspect_docs
+""",
+    )
+
+    from agentmf.plugin import create_plugin_payload
+
+    expected = {
+        "generic": {
+            "profile": "generic",
+            "permissions_mode": "soft_guidance",
+            "instruction_surface": "generic_prompt_payload",
+            "native_artifacts": [],
+        },
+        "codex": {
+            "profile": "codex",
+            "permissions_mode": "host_enforced_when_supported",
+            "instruction_surface": "AGENTS.md_or_plugin_payload",
+            "native_artifacts": [],
+        },
+        "claude-code": {
+            "profile": "claude-code",
+            "permissions_mode": "host_enforced_when_supported",
+            "instruction_surface": "CLAUDE.md_or_claude_code_hooks",
+            "native_artifacts": [".claude/settings.json", ".claude/hooks/*"],
+        },
+        "cursor": {
+            "profile": "cursor",
+            "permissions_mode": "soft_guidance",
+            "instruction_surface": ".cursor/rules_or_plugin_payload",
+            "native_artifacts": [],
+        },
+        "opencode": {
+            "profile": "opencode",
+            "permissions_mode": "host_enforced_when_supported",
+            "instruction_surface": "opencode.json_or_plugin_payload",
+            "native_artifacts": ["opencode.json"],
+        },
+    }
+
+    for host, expected_profile in expected.items():
+        result = create_plugin_payload(path=path, host=host, target_names=["docs.task"])
+
+        assert result.ok, result.diagnostics.format()
+        host_instructions = result.payload["host_instructions"]
+        assert host_instructions["injection"] == "prepend_stable_prefix_append_volatile_context"
+        assert host_instructions["preferred_cache_boundary"] == "after_stable_prefix"
+        for key, value in expected_profile.items():
+            assert host_instructions[key] == value
 
 
 def test_compile_cursor_rule_snapshot() -> None:

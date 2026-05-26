@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from agentmf.compiler import compile_agentmakefile
 from agentmf.loader import load_source_with_diagnostics
+from agentmf.plugin import create_plugin_payload
 from agentmf.runtime import create_run_plan
 from agentmf.selector import create_link_plan
 
@@ -46,6 +47,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_cmd.add_argument("--dry-run", action="store_true")
     run_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
+    plugin_cmd = subparsers.add_parser("plugin", help="plugin adapter commands")
+    plugin_subcommands = plugin_cmd.add_subparsers(dest="plugin_command", required=True)
+    plugin_payload_cmd = plugin_subcommands.add_parser("payload", help="emit a plugin prompt payload")
+    plugin_payload_cmd.add_argument("request_positional", nargs="?")
+    plugin_payload_cmd.add_argument("--file", default="AgentMakefile")
+    plugin_payload_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    plugin_payload_cmd.add_argument("--request")
+    plugin_payload_cmd.add_argument("--target", action="append", dest="targets")
+    plugin_payload_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    plugin_payload_cmd.add_argument("--plan")
+    plugin_payload_cmd.add_argument("--include-git-status", action="store_true")
+    plugin_payload_cmd.add_argument("--include-git-diff", action="store_true")
+    plugin_payload_cmd.add_argument("--context-file", action="append", dest="context_files")
+    plugin_payload_cmd.add_argument("--format", choices=["text", "json"], default="json")
+
     args = parser.parse_args(argv)
     if args.command == "validate":
         return _validate(args)
@@ -55,6 +71,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _select(args)
     if args.command == "run":
         return _run(args)
+    if args.command == "plugin":
+        return _plugin(args)
     return 2
 
 
@@ -190,7 +208,69 @@ def _run(args: argparse.Namespace) -> int:
                 "  estimated savings: "
                 f"{comparison['savings']['chars']} chars, ~{comparison['savings']['approx_tokens']} tokens"
             )
+            guard_evaluation = result.plan["guard_evaluation"]
+            guards = guard_evaluation["guards"]
+            print(
+                "  guard evaluation: "
+                f"{len(guards)} planned, executed={guard_evaluation['executed']}"
+            )
+            for guard in guards:
+                if guard["source"] == "policy":
+                    print(
+                        "  guard: "
+                        f"policy {guard['policy']} -> {guard['target']}: {guard['guard']}"
+                    )
+                else:
+                    print(f"  guard: target {guard['target']}: {guard['guard']}")
             print("  execution: not performed")
+    return 1 if not result.ok else 0
+
+
+def _plugin(args: argparse.Namespace) -> int:
+    if args.plugin_command == "payload":
+        return _plugin_payload(args)
+    return 2
+
+
+def _plugin_payload(args: argparse.Namespace) -> int:
+    if args.request and args.request_positional:
+        print("error: provide request either positionally or with --request, not both", file=sys.stderr)
+        return 2
+    request = args.request if args.request is not None else args.request_positional
+    result = create_plugin_payload(
+        path=Path(args.file),
+        host=args.host,
+        request=request,
+        target_names=args.targets,
+        backend=args.backend,
+        plan_path=Path(args.plan) if args.plan else None,
+        context_files=[Path(path) for path in args.context_files or []],
+        include_git_status=args.include_git_status,
+        include_git_diff=args.include_git_diff,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "plugin_payload": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print("Plugin payload:")
+            print(f"  host: {result.payload['host']}")
+            for target in result.payload["selected_targets"]:
+                print(f"  selected target: {target}")
+            prefix = result.payload["stable_prefix"]
+            print(f"  stable prefix: {prefix['chars']} chars, ~{prefix['approx_tokens']} tokens")
+            print(f"  stable prefix hash: {prefix['hash']}")
     return 1 if not result.ok else 0
 
 

@@ -6,7 +6,12 @@ AgentMakefile is a Makefile-style build system for agent prompt prefixes. It tre
 
 Static files are the compatibility path for existing agents. The deeper integration path is runtime prompt-prefix assembly: an agent runtime consumes AgentMakefile IR directly, selects the relevant target and dependency graph for the current request, reuses stable prefix chunks, and appends volatile task context only at the end.
 
+The near-term runtime direction is plugin-first: existing agent CLIs keep owning model calls and tool loops, while AgentMakefile provides `agentmf plugin payload`-style prompt assembly for each user request and optional implementation plan. A standalone `agentmf prompt` / `agentmf ask` / `agentmf exec` runtime can build on the same payload path later.
+
 Design details live in [docs/agentsfile_design_spec.md](docs/agentsfile_design_spec.md).
+The proposed runtime CLI design lives in [docs/agentmf_runtime_cli_spec.md](docs/agentmf_runtime_cli_spec.md).
+The plugin-first adapter design lives in [docs/agentmf_plugin_adapter_spec.md](docs/agentmf_plugin_adapter_spec.md).
+Example host adapter flows live in [docs/agentmf_plugin_adapter_examples.md](docs/agentmf_plugin_adapter_examples.md).
 The staged implementation backlog lives in [docs/spec_breakdown.md](docs/spec_breakdown.md).
 This repository is self-hosted by the root [AgentMakefile](AgentMakefile), which compiles project development guidance into `AGENTS.md`, `CLAUDE.md`, and Cursor rules.
 
@@ -28,7 +33,7 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `claude-fragments` emits the same target-specific prompt objects for Claude-oriented prompt prefixes under `.agentmf/fragments/claude/`.
 - `.agentmf/fragments/manifest.json` records each fragment's backend, target, dependency closure, source inputs, compiler version, and content hash. Re-running `--write` skips unchanged fragment outputs.
 - `agentmf select` emits a stable JSON link plan that selects fragment paths either from an explicit target or from a request matched against target `match` rules.
-- `agentmf run --dry-run` emits the first runtime-facing plan: selected targets, dependency closure, linked prompt prefix, fragment paths, size/token comparison against the all-in-one baseline, guards, steps, permissions, output contracts, and fallback metadata without executing the workflow.
+- `agentmf run --dry-run` emits the first runtime-facing plan: selected targets, dependency closure, linked prompt prefix, fragment paths, size/token comparison against the all-in-one baseline, dry-run guard evaluation records, steps, permissions, output contracts, and fallback metadata without executing the workflow.
 - `claude-code` emits native Claude Code settings and hook artifacts under `.claude/` where feasible.
 - `opencode` emits `opencode.json` with permission configuration and target-derived agent definitions.
 
@@ -42,6 +47,8 @@ agentmf compile --file AgentMakefile --target claude-code
 agentmf compile --file AgentMakefile --target opencode
 agentmf select --file AgentMakefile --request "review code" --backend agents-fragments
 agentmf run --file AgentMakefile --request "review code" --dry-run --format json
+agentmf plugin payload --host codex --request "review code" --format json
+agentmf plugin payload --host codex --target project.default --plan docs/superpowers/plans/2026-05-25-agentmf-plugin-adapter.md --include-git-status --format json
 agentmf compile --file AgentMakefile --write
 ```
 

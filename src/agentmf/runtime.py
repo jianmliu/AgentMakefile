@@ -21,7 +21,7 @@ RUNTIME_PHASES = [
     {"name": "target_selection", "status": "resolved"},
     {"name": "dependency_graph_resolution", "status": "resolved"},
     {"name": "prompt_fragment_linking", "status": "linked"},
-    {"name": "guard_evaluation", "status": "not_executed"},
+    {"name": "guard_evaluation", "status": "evaluated_dry_run"},
     {"name": "permission_enforcement", "status": "not_executed"},
     {"name": "step_execution", "status": "not_executed"},
     {"name": "output_validation", "status": "not_executed"},
@@ -90,6 +90,7 @@ def create_run_plan(
         "runtime_phases": list(RUNTIME_PHASES),
         "target_contracts": [_target_contract(target) for target in target_closure],
         "policy_contracts": _policy_contracts(target_closure),
+        "guard_evaluation": _guard_evaluation(target_closure),
         "permission_contract": _permission_contract(ir),
     }
     return RunPlanResult(diagnostics, plan)
@@ -207,6 +208,32 @@ def _policy_contract(policy: IRPolicy) -> Dict[str, Any]:
         "steps": list(policy.steps),
         "output_format": list(policy.output_format),
     }
+
+
+def _guard_evaluation(targets: List[IRTarget]) -> Dict[str, Any]:
+    guards = []
+    for target in targets:
+        for policy in target.policies:
+            for guard in policy.guards:
+                guards.append(
+                    {
+                        "source": "policy",
+                        "target": target.name,
+                        "policy": policy.name,
+                        "guard": guard,
+                        "status": "planned",
+                    }
+                )
+        for guard in target.guards:
+            guards.append(
+                {
+                    "source": "target",
+                    "target": target.name,
+                    "guard": guard,
+                    "status": "planned",
+                }
+            )
+    return {"mode": "dry_run", "executed": False, "guards": guards}
 
 
 def _permission_contract(ir: AgentRuleIR) -> Dict[str, Any]:

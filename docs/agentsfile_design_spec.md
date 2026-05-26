@@ -2836,7 +2836,9 @@ The first runtime milestone can be a non-executing dry run:
 agentmf run --dry-run --request "review code" --format json
 ```
 
-This skeleton should reuse target selection and fragment link planning, then report the selected target closure, fragment paths, guards, steps, permissions, output contracts, and fallback metadata without executing workflow steps or intercepting tools. The next prompt-link milestone should assemble the selected target fragments into a deterministic prompt prefix and compare its size against the matching all-in-one prompt artifact so users can see the token/cache benefit directly.
+This skeleton should reuse target selection and fragment link planning, then report the selected target closure, fragment paths, guards, steps, permissions, output contracts, and fallback metadata without executing workflow steps or intercepting tools. Current dry-run guard evaluation resolves policy and target guards into structured planned records while keeping execution disabled. The prompt-link milestone assembles the selected target fragments into a deterministic prompt prefix and compares its size against the matching all-in-one prompt artifact so users can see the token/cache benefit directly.
+
+The near-term runtime direction is plugin-first and is specified in [agentmf_plugin_adapter_spec.md](agentmf_plugin_adapter_spec.md). Existing agent CLIs can keep owning model calls, tool loops, approvals, and sandboxing while AgentMakefile produces a selected prompt payload from the current request and optional implementation plan. The longer standalone runtime CLI direction is specified in [agentmf_runtime_cli_spec.md](agentmf_runtime_cli_spec.md). In both models, the plan is runtime task context and selection signal; it is not compiled into stable prompt fragments.
 
 The runtime can enforce hard rails directly through:
 
