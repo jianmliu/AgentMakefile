@@ -9,6 +9,7 @@ from agentmf.plugin_install import PluginInstallPayloadResult, create_plugin_ins
 from agentmf.prompt import PromptPayloadResult, create_prompt_payload
 from agentmf.runtime import RunPlanResult, create_run_plan
 from agentmf.selector import LinkPlanResult, create_link_plan
+from agentmf.skill_sync import SkillSyncPayloadResult, create_skill_sync_payload
 from agentmf.tool_loop import ExecPayloadResult, create_exec_payload
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "PluginInstallPayloadResult",
     "PromptPayloadResult",
     "RunPlanResult",
+    "SkillSyncPayloadResult",
     "compile_agentmakefile",
     "create_ask_payload",
     "create_exec_payload",
@@ -29,5 +31,6 @@ __all__ = [
     "create_plugin_install_payload",
     "create_prompt_payload",
     "create_run_plan",
+    "create_skill_sync_payload",
     "load_source",
 ]

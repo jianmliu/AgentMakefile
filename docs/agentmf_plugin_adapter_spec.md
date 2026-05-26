@@ -348,6 +348,7 @@ Initial plugin commands:
 ```bash
 agentmf plugin install
 agentmf plugin payload [REQUEST]
+agentmf skills sync
 ```
 
 Options:
@@ -379,11 +380,26 @@ Options:
 --format json|text
 ```
 
+`agentmf skills sync` options:
+
+```text
+--file AgentMakefile
+--host codex|claude-code
+--out-dir PATH          # defaults to the host skill root
+--write                 # without this, only plans the sync
+--force                 # overwrite existing different skill files
+--format json|text
+```
+
 Rules:
 
 - `plugin install` is the install-time bootstrap path: scan native skill
   packages, generate the AgentMakefile skill index, and emit model instructions
   to use `plugin payload` at request time.
+- `skills sync` is the forward installation path: compile AgentMakefile modules
+  into native `SKILL.md` packages and copy them into a host skill root. It is
+  dry-run by default and refuses to overwrite changed installed skills without
+  `--force`.
 - Positional `REQUEST` and `--request` are mutually exclusive.
 - `--target` bypasses request matching.
 - `--plan` is loaded into volatile context only.

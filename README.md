@@ -48,6 +48,7 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `agentmf plugin install` scans existing skills, writes a plugin-local AgentMakefile when requested, and emits model instructions telling hosts to call `agentmf plugin payload` before loading skills.
 - `agentmf plugin payload` exposes `selected_skills`, generated Codex/Claude skill artifact paths, and `selection_trace` rationale so host adapters can use AgentMakefile as an explainable skill-routing layer. Request routing can match either explicit target `match` terms or the `match` terms of skills referenced by a target.
 - `agentmf skills scan` imports existing `SKILL.md` directories into a generated AgentMakefile skill-index module, with an optional bootstrap skill represented as an explicit target dependency.
+- `agentmf skills sync` compiles an AgentMakefile module into host-native Codex or Claude Code skill packages and syncs them to a host skill root only when `--write` is set.
 - Request selection normalizes punctuation and hyphenation, expands common Chinese/English development intents, and falls back to deterministic token-overlap matching before returning `AMF118`.
 - `skills-index` emits a generated `skills/index.md` compatibility catalog for all normalized skill entries, with links to the Claude and Codex skill package paths.
 - `claude-code` emits native Claude Code settings and hook artifacts under `.claude/` where feasible.
@@ -73,6 +74,7 @@ agentmf plugin install --skills-dir ~/.codex/skills --namespace superpowers --bo
 agentmf plugin payload --host codex --request "review code" --format json
 agentmf plugin payload --host codex --target project.default --plan docs/superpowers/plans/2026-05-25-agentmf-plugin-adapter.md --include-git-status --format json
 agentmf skills scan --skills-dir ~/.codex/skills --namespace superpowers --bootstrap-skill using-superpowers --out /tmp/superpowers.AgentMakefile --write
+agentmf skills sync --file modules/oh-my-openagent/AgentMakefile --host codex --write --format json
 agentmf compile --file AgentMakefile --write
 ```
 

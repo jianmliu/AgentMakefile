@@ -15,6 +15,7 @@ from agentmf.prompt import create_prompt_payload
 from agentmf.runtime import create_run_plan
 from agentmf.selector import create_link_plan
 from agentmf.skill_scanner import render_agentmakefile_from_skill_dirs
+from agentmf.skill_sync import HOST_SKILL_PROFILES, create_skill_sync_payload
 from agentmf.tool_loop import create_exec_payload
 
 
@@ -133,6 +134,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     skills_scan_cmd.add_argument("--bootstrap-skill")
     skills_scan_cmd.add_argument("--out")
     skills_scan_cmd.add_argument("--write", action="store_true")
+    skills_sync_cmd = skills_subcommands.add_parser(
+        "sync",
+        help="sync AgentMakefile-generated skills into a host skill root",
+    )
+    skills_sync_cmd.add_argument("--file", default="AgentMakefile")
+    skills_sync_cmd.add_argument("--host", choices=sorted(HOST_SKILL_PROFILES), required=True)
+    skills_sync_cmd.add_argument("--out-dir")
+    skills_sync_cmd.add_argument("--write", action="store_true")
+    skills_sync_cmd.add_argument("--force", action="store_true")
+    skills_sync_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
     args = parser.parse_args(argv)
     if args.command == "validate":
@@ -502,6 +513,8 @@ def _plugin(args: argparse.Namespace) -> int:
 def _skills(args: argparse.Namespace) -> int:
     if args.skills_command == "scan":
         return _skills_scan(args)
+    if args.skills_command == "sync":
+        return _skills_sync(args)
     return 2
 
 
@@ -529,6 +542,41 @@ def _skills_scan(args: argparse.Namespace) -> int:
     else:
         print(content, end="")
     return 0
+
+
+def _skills_sync(args: argparse.Namespace) -> int:
+    result = create_skill_sync_payload(
+        path=Path(args.file),
+        host=args.host,
+        out_dir=Path(args.out_dir) if args.out_dir else None,
+        write=args.write,
+        force=args.force,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "skill_sync_payload": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            action = "Synced" if args.write else "Would sync"
+            print(f"{action} skills for {result.payload['host']}:")
+            print(f"  source: {result.payload['agentmakefile_path']}")
+            print(f"  skill root: {result.payload['skill_root']}")
+            for file in result.payload["files"]:
+                print(f"  {file['status']}: {file['destination']}")
+            print("\nHost integration:")
+            print(result.payload["host_integration_instructions"])
+    return 1 if not result.ok else 0
 
 
 def _plugin_payload(args: argparse.Namespace) -> int:

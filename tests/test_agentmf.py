@@ -863,6 +863,136 @@ def test_cli_plugin_install_outputs_json_model_instruction(tmp_path: Path, capsy
     assert "selection_trace" in install_payload["model_instructions"]
 
 
+def test_skill_sync_plans_codex_skill_install_without_writing(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  local-review:
+    description: Review local changes.
+    match:
+      user_intent:
+        - review
+""",
+    )
+    skill_root = tmp_path / "codex-skills"
+
+    from agentmf.skill_sync import create_skill_sync_payload
+
+    result = create_skill_sync_payload(
+        path=path,
+        host="codex",
+        out_dir=skill_root,
+        write=False,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["host"] == "codex"
+    assert result.payload["backend"] == "codex-skill"
+    assert result.payload["skill_root"] == str(skill_root)
+    assert result.payload["files"] == [
+        {
+            "source_path": ".codex/skills/local-review/SKILL.md",
+            "destination": str(skill_root / "local-review" / "SKILL.md"),
+            "status": "planned",
+        }
+    ]
+    assert "agentmf plugin payload" in result.payload["host_integration_instructions"]
+    assert not (skill_root / "local-review" / "SKILL.md").exists()
+
+
+def test_skill_sync_writes_and_refuses_overwrite_without_force(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  local-review:
+    description: Review local changes.
+""",
+    )
+    skill_root = tmp_path / "codex-skills"
+
+    from agentmf.skill_sync import create_skill_sync_payload
+
+    first = create_skill_sync_payload(
+        path=path,
+        host="codex",
+        out_dir=skill_root,
+        write=True,
+    )
+
+    installed = skill_root / "local-review" / "SKILL.md"
+    assert first.ok, first.diagnostics.format()
+    assert installed.exists()
+    assert first.payload["files"][0]["status"] == "wrote"
+
+    installed.write_text("manual edit\n", encoding="utf-8")
+    blocked = create_skill_sync_payload(
+        path=path,
+        host="codex",
+        out_dir=skill_root,
+        write=True,
+    )
+
+    assert not blocked.ok
+    assert blocked.diagnostics.to_list()[0]["code"] == "AMF140"
+    assert installed.read_text(encoding="utf-8") == "manual edit\n"
+
+    forced = create_skill_sync_payload(
+        path=path,
+        host="codex",
+        out_dir=skill_root,
+        write=True,
+        force=True,
+    )
+
+    assert forced.ok, forced.diagnostics.format()
+    assert forced.payload["files"][0]["status"] == "wrote"
+    assert "manual edit" not in installed.read_text(encoding="utf-8")
+
+
+def test_cli_skills_sync_outputs_json_host_integration_instructions(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  local-review:
+    description: Review local changes.
+""",
+    )
+    skill_root = tmp_path / "claude-skills"
+
+    exit_code = main(
+        [
+            "skills",
+            "sync",
+            "--file",
+            str(path),
+            "--host",
+            "claude-code",
+            "--out-dir",
+            str(skill_root),
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    sync_payload = payload["skill_sync_payload"]
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert sync_payload["backend"] == "claude-skill"
+    assert sync_payload["files"][0]["destination"] == str(skill_root / "local-review" / "SKILL.md")
+    assert "selected_skills" in sync_payload["host_integration_instructions"]
+    assert (skill_root / "local-review" / "SKILL.md").exists()
+
+
 def test_skill_scan_keeps_feature_implementation_from_routing_to_review_skill(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"
     _write_skill(

@@ -3178,6 +3178,7 @@ agentmf compile --target skills-index
 agentmf plugin install --skills-dir <dir> --out .agentmf/plugin/AgentMakefile --write
 agentmf plugin payload --file .agentmf/plugin/AgentMakefile --request <text>
 agentmf skills scan --skills-dir <dir> --out AgentMakefile
+agentmf skills sync --file AgentMakefile --host codex --write
 agentmf compile --all
 ```
 
@@ -3792,6 +3793,28 @@ Behavior:
 * return `next_payload_command` so adapters can invoke the request-time
   selection path directly
 * keep request-specific selection in `plugin payload`, not in the install step
+
+#### skills sync
+
+Input:
+
+```text
+AgentMakefile
+```
+
+Behavior:
+
+* compile AgentMakefile skills into the selected host's native skill backend
+* map `.codex/skills/<slug>/SKILL.md` to the Codex skill root for `codex`
+* map `.claude/skills/<slug>/SKILL.md` to the Claude Code skill root for
+  `claude-code`
+* default to dry-run planning; only write installed skill files when `--write`
+  is set
+* refuse to overwrite existing changed installed skill files unless `--force`
+  is set
+* return host integration instructions that tell adapters to use
+  `agentmf plugin payload` at request time for `selected_skills`,
+  `skill_artifacts`, and `selection_trace`
 
 ---
 

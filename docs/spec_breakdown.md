@@ -1451,6 +1451,35 @@ Acceptance:
 - Plugin payloads for the routed target expose the OMO selected skills.
 - Selection trace explains which skill supplied the matched term.
 
+### AMF-PAD-013 System Skill Sync and Host Integration Instructions
+
+Status: implemented.
+
+Goal: provide the forward installation path for hand-authored AgentMakefile
+modules: compile them into native host skills and sync those skills into a
+host skill root while keeping request-time selection delegated to plugin
+payloads.
+
+Implementation:
+
+- Add `agentmf skills sync`.
+- Support `--host codex` by compiling `codex-skill` and mapping generated
+  `.codex/skills/*/SKILL.md` files into the Codex skill root.
+- Support `--host claude-code` by compiling `claude-skill` and mapping
+  generated `.claude/skills/*/SKILL.md` files into the Claude Code skill root.
+- Keep sync dry-run by default; write only with `--write`.
+- Refuse to overwrite changed installed skills unless `--force` is set.
+- Return `host_integration_instructions` that tell hosts to call
+  `agentmf plugin payload` and inspect `selected_skills`, `skill_artifacts`,
+  and `selection_trace`.
+
+Acceptance:
+
+- A module can be planned for system skill installation without writing files.
+- A module can be written to a caller-provided skill root in tests.
+- Existing modified installed skills are protected unless `--force` is set.
+- CLI JSON exposes the planned files and host integration instructions.
+
 ## Post-MVP Runtime Work
 
 These tasks should not block compiler milestones:

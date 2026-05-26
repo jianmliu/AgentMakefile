@@ -117,6 +117,20 @@ selection. The `skills-index` backend emits `skills/index.md` as a generated
 compatibility catalog, so existing skill-index workflows can browse the same
 source of truth. Re-running the same compile skips unchanged files.
 
+To install generated skills into a host skill root, use `skills sync`. It is a
+dry-run unless `--write` is present:
+
+```bash
+agentmf skills sync \
+  --file modules/oh-my-openagent/AgentMakefile \
+  --host codex \
+  --write \
+  --format json
+```
+
+For tests or local previews, pass `--out-dir /tmp/agentmf-codex-skills` instead
+of writing to the default host skill root.
+
 ## 3. Select the Runtime Target
 
 Ask AgentMakefile which target matches a request:
