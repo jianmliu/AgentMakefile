@@ -2,7 +2,7 @@
 
 Prototype implementation for the AgentMakefile design spec.
 
-AgentMakefile is a Makefile-style build system for agent prompt prefixes. It treats reusable rules, skills, policies, dependencies, permissions, and output contracts as structured inputs, then compiles them into stable prompt-prefix artifacts for each agent platform. Generated files such as `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, and future `SKILL.md` outputs are build artifacts, not the source of truth.
+AgentMakefile is a Makefile-style build system for agent prompt prefixes. It treats reusable rules, skills, policies, dependencies, permissions, and output contracts as structured inputs, then compiles them into stable prompt-prefix artifacts for each agent platform. Generated files such as `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `skills/index.md`, and `SKILL.md` outputs are build artifacts, not the source of truth.
 
 Static files are the compatibility path for existing agents. The deeper integration path is runtime prompt-prefix assembly: an agent runtime consumes AgentMakefile IR directly, selects the relevant target and dependency graph for the current request, reuses stable prefix chunks, and appends volatile task context only at the end.
 
@@ -18,7 +18,7 @@ This repository is self-hosted by the root [AgentMakefile](AgentMakefile), which
 
 Reusable rule modules live under [modules/](modules/). For example, the Karpathy / Andrej guidelines are represented as [modules/karpathy/AgentMakefile](modules/karpathy/AgentMakefile), unknown repository security rails are represented as [modules/unknown-repo-security/AgentMakefile](modules/unknown-repo-security/AgentMakefile), Superpowers is represented as [modules/superpowers/AgentMakefile](modules/superpowers/AgentMakefile), and Oh My OpenAgent is represented as [modules/oh-my-openagent/AgentMakefile](modules/oh-my-openagent/AgentMakefile). Demo files under [demos/](demos/) compose these modules and choose output backends.
 
-The [unknown repository security demo](demos/unknown-repo-security/AgentMakefile) proves the hard-rails path end to end by compiling soft Markdown guidance, Cursor rules, Claude Code settings and hooks, and OpenCode configuration from one AgentMakefile. The [runtime walkthrough demo](demos/runtime-walkthrough/AgentMakefile) exercises prompt fragments, Claude/Codex skill-package outputs, runtime dry-run planning, JSON Schema output validation, plugin payloads, provider echo, tool interception, sandbox preflight, and fallback handling.
+The [unknown repository security demo](demos/unknown-repo-security/AgentMakefile) proves the hard-rails path end to end by compiling soft Markdown guidance, Cursor rules, Claude Code settings and hooks, and OpenCode configuration from one AgentMakefile. The [runtime walkthrough demo](demos/runtime-walkthrough/AgentMakefile) exercises prompt fragments, a generated `skills/index.md` catalog, Claude/Codex skill-package outputs, runtime dry-run planning, JSON Schema output validation, plugin payloads, provider echo, tool interception, sandbox preflight, and fallback handling.
 
 This structure is intended to support target selection, dependency-aware rebuilds, and cache-friendly prompt layout: stable compiled guidance can stay byte-for-byte deterministic, while volatile task context such as the current user request, active files, and diffs can be appended later by the runtime.
 
@@ -40,6 +40,7 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `agentmf prompt` emits a deterministic final prompt payload by combining the selected stable prefix with volatile request, plan, context-file, and git context, without calling a model or running tools.
 - `agentmf ask` reuses the same prompt payload path and runs a one-shot provider call; the first provider is the deterministic local `echo` adapter.
 - `agentmf exec --apply --tool-call TOOL:INPUT` is the first gated tool-loop prototype: it evaluates guards and permissions, applies prototype sandbox preflight checks, records the provider tool-call interception contract, runs only explicitly allowed tool calls, and plans or optionally executes internal fallback actions for blocked calls.
+- `skills-index` emits a generated `skills/index.md` compatibility catalog for all normalized skill entries, with links to the Claude and Codex skill package paths.
 - `claude-code` emits native Claude Code settings and hook artifacts under `.claude/` where feasible.
 - `opencode` emits `opencode.json` with permission configuration and target-derived agent definitions.
 
@@ -51,7 +52,7 @@ agentmf compile --file AgentMakefile --target claude-md --target agents-md --tar
 agentmf compile --file AgentMakefile --target agents-fragments
 agentmf compile --file AgentMakefile --target claude-code
 agentmf compile --file AgentMakefile --target opencode
-agentmf compile --file AgentMakefile --target claude-skill --target codex-skill
+agentmf compile --file AgentMakefile --target claude-skill --target codex-skill --target skills-index
 agentmf select --file AgentMakefile --request "review code" --backend agents-fragments
 agentmf run --file AgentMakefile --request "review code" --dry-run --format json
 agentmf run --file AgentMakefile --target project.default --dry-run --permission-check "bash:git status" --format json

@@ -50,6 +50,7 @@ Implemented:
 - Shared `SKILL.md` rendering covers namespaced skill content and deterministic filesystem-safe skill paths.
 - The `claude-skill` backend emits one Claude `SKILL.md` package per unique skill entry.
 - The `codex-skill` backend emits one Codex `SKILL.md` package per unique skill entry.
+- The `skills-index` backend emits a generated `skills/index.md` compatibility catalog from the same normalized skill entries.
 - Backend capability warnings cover permission hard-to-soft downgrades and unsupported native hooks.
 - Soft permission guidance is rendered as Markdown tables, and soft backends emit `AMF121` downgrade warnings.
 - The Karpathy module exposes a `karpathy-guidelines` skill, so the Karpathy demo default compile emits Markdown, Cursor, Claude skill, and Codex skill outputs.
@@ -298,6 +299,40 @@ Acceptance:
 
 - Karpathy and Superpowers minimal fixtures compile with `--target codex-skill`.
 - `test_compile_codex_skill_snapshot.py` passes.
+
+### AMF-M1-004A Add `skills-index` Backend
+
+Goal: generate a compatibility skill catalog from AgentMakefile so
+`skills/index.md` can become a build artifact instead of a hand-maintained
+source of truth.
+
+Status: implemented.
+
+Implementation:
+
+- Add backend name `skills-index`.
+- Emit `skills/index.md` by default.
+- Honor `artifacts.skills-index.path` for custom catalog locations.
+- List each normalized skill entry with description, match rules, guards,
+  steps, output requirements, and deterministic Claude/Codex skill package
+  paths.
+- Include the shared soft permission table when the source defines permission
+  defaults or rules.
+
+Implemented scope:
+
+- `skills-index` is a supported backend target.
+- The runtime walkthrough demo includes `skills-index` in its default compile
+  target list.
+- The generated catalog is a managed shared output, matching the existing
+  Markdown managed-block write semantics.
+
+Acceptance:
+
+- A multi-skill AgentMakefile compiles with `--target skills-index`.
+- The generated catalog includes `.claude/skills/<slug>/SKILL.md` and
+  `.codex/skills/<slug>/SKILL.md` references for each skill.
+- `artifacts.skills-index.path` overrides the default output path.
 
 ### AMF-M1-005 Emit Formal Soft Permission Tables
 
@@ -1248,6 +1283,7 @@ Completed:
 - AMF-M1-002 shared skill rendering.
 - AMF-M1-003 `claude-skill` backend.
 - AMF-M1-004 `codex-skill` backend.
+- AMF-M1-004A `skills-index` backend.
 - AMF-M1-005 soft permission tables.
 - AMF-M1-006 Karpathy default compile.
 - AMF-M2-000 Superpowers module coverage.

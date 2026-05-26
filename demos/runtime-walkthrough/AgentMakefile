@@ -17,6 +17,7 @@ compile:
     - claude-fragments
     - claude-skill
     - codex-skill
+    - skills-index
 
 policies:
   demo.output_contract:

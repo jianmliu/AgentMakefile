@@ -39,7 +39,8 @@ agentmf compile \
   --target agents-fragments \
   --target claude-fragments \
   --target claude-skill \
-  --target codex-skill
+  --target codex-skill \
+  --target skills-index
 ```
 
 Write artifacts only when you want to inspect generated files:
@@ -57,7 +58,9 @@ emit host-native prompt packages such as:
 
 The current skill backends package each normalized `skills:` entry. Target
 fragments remain the target-scoped prompt objects used for dynamic runtime
-selection. Re-running the same compile skips unchanged files.
+selection. The `skills-index` backend emits `skills/index.md` as a generated
+compatibility catalog, so existing skill-index workflows can browse the same
+source of truth. Re-running the same compile skips unchanged files.
 
 ## 3. Select the Runtime Target
 

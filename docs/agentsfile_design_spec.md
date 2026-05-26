@@ -813,6 +813,7 @@ compile:
     - cursor-rule
     - claude-skill
     - codex-skill
+    - skills-index
 ```
 
 Each backend decides how to lower targets, guards, permissions, hooks, skills, and output contracts into platform-native files.
@@ -2437,6 +2438,7 @@ Different backends support different levels of enforcement. The compiler should 
 | `cursor-rule`  |      Yes |             No |         Soft only |           Limited |                No |
 | `claude-skill` |      Yes |            Yes |         Soft only |                No |                No |
 | `codex-skill`  |      Yes |            Yes |         Soft only |                No |                No |
+| `skills-index` |      Yes |        Catalog |         Soft only |                No |                No |
 | `claude-code`  |      Yes |            Yes |               Yes |               Yes |           Partial |
 | `opencode`     |      Yes |   Agent config |               Yes | Runtime-dependent |           Partial |
 | `langgraph`    |       No | Workflow nodes | Runtime-dependent | Runtime-dependent | Runtime-dependent |
@@ -3133,6 +3135,7 @@ agentmf compile --target agents-md
 agentmf compile --target cursor-rule
 agentmf compile --target claude-skill
 agentmf compile --target codex-skill
+agentmf compile --target skills-index
 agentmf compile --all
 ```
 
@@ -3602,6 +3605,7 @@ MVP 1 backends:
 ```text
 claude-skill
 codex-skill
+skills-index
 ```
 
 Future backends:
@@ -3688,6 +3692,23 @@ Behavior:
 
 * same logical content as `claude-skill`
 * avoid platform-specific wording unless needed
+
+#### skills-index
+
+Default output:
+
+```text
+skills/index.md
+```
+
+Behavior:
+
+* emit one generated compatibility catalog for all normalized `skills` entries
+* list descriptions, match rules, guards, steps, and output requirements
+* include deterministic links to `.claude/skills/<slug>/SKILL.md` and
+  `.codex/skills/<slug>/SKILL.md`
+* include soft permission guidance when permissions are present
+* treat the file as generated output; AgentMakefile remains the source of truth
 
 ---
 

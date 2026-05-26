@@ -101,6 +101,24 @@ class CodexSkillBackend(Backend):
         ]
 
 
+class SkillsIndexBackend(Backend):
+    name = "skills-index"
+    capabilities = BackendCapabilities(markdown=True, skills=True, permissions="soft")
+
+    def emit(self, ir: AgentRuleIR) -> List[GeneratedFile]:
+        artifact = ir.artifacts.get(self.name)
+        path = artifact.path if artifact and artifact.path else "skills/index.md"
+        managed_block = artifact.managed_block if artifact else True
+        return [
+            GeneratedFile(
+                path=path,
+                content=render_skills_index(ir),
+                backend=self.name,
+                managed_block=managed_block,
+            )
+        ]
+
+
 class ClaudeCodeBackend(Backend):
     name = "claude-code"
     capabilities = BackendCapabilities(markdown=True, skills=True, permissions="hard", hooks=True, hard_enforcement=True)
@@ -178,6 +196,7 @@ SUPPORTED_BACKENDS: Dict[str, Backend] = {
     "cursor-rule": CursorRuleBackend(),
     "claude-skill": ClaudeSkillBackend(),
     "codex-skill": CodexSkillBackend(),
+    "skills-index": SkillsIndexBackend(),
     "claude-code": ClaudeCodeBackend(),
     "opencode": OpenCodeBackend(),
     "agents-fragments": TargetFragmentBackend("agents-fragments", "agents", "Generic Coding Agents"),
@@ -240,6 +259,41 @@ def render_skill_markdown(skill: IRSkill, ir: Optional[AgentRuleIR] = None) -> s
     _append_skill_list(lines, "Output Requirements", skill.output_format)
     if ir is not None:
         _append_permission_section(lines, ir)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_skills_index(ir: AgentRuleIR) -> str:
+    lines = [
+        f"# {_title(ir, 'Skill Index')}",
+        "",
+        "Generated from AgentMakefile. Treat this file as a compatibility catalog; edit AgentMakefile or source skill modules instead.",
+        "",
+    ]
+    description = ir.metadata.get("description")
+    if description:
+        lines.extend(["## Package", "", str(description), ""])
+    unique_skills = _unique_skills(ir.skills)
+    if not unique_skills:
+        lines.extend(["## Skills", "", "No skills are defined.", ""])
+    else:
+        lines.extend(["## Skills", ""])
+        for skill in unique_skills:
+            lines.extend([f"### {skill.qualified_name}", ""])
+            if skill.description:
+                lines.extend([skill.description, ""])
+            lines.extend(
+                [
+                    f"- Slug: `{skill_slug(skill.qualified_name)}`",
+                    f"- Claude skill: `{skill_output_path('.claude/skills', skill)}`",
+                    f"- Codex skill: `{skill_output_path('.codex/skills', skill)}`",
+                    "",
+                ]
+            )
+            _append_mapping(lines, "Match", skill.match)
+            _append_list(lines, "Guards", skill.guards)
+            _append_list(lines, "Steps", skill.steps)
+            _append_list(lines, "Output format", skill.output_format)
+    _append_permission_section(lines, ir)
     return "\n".join(lines).rstrip() + "\n"
 
 

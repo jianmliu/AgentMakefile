@@ -166,6 +166,7 @@ def test_readme_documents_quickstart_and_default_demo_path() -> None:
     assert ".claude/skills/karpathy-guidelines/SKILL.md" in readme
     assert "claude-skill" in readme
     assert "codex-skill" in readme
+    assert "skills-index" in readme
 
 
 def test_karpathy_demo_default_compile_emits_all_configured_outputs() -> None:
@@ -628,6 +629,7 @@ def test_runtime_walkthrough_demo_default_compile_emits_skill_outputs() -> None:
 
     assert result.ok, result.diagnostics.format()
     paths = [file.path for file in result.files]
+    assert "skills/index.md" in paths
     assert ".claude/skills/superpowers-using-superpowers/SKILL.md" in paths
     assert ".codex/skills/superpowers-using-superpowers/SKILL.md" in paths
     assert ".claude/skills/superpowers-test-driven-development/SKILL.md" in paths
@@ -1694,6 +1696,87 @@ def test_compile_codex_skill_fixtures_are_supported() -> None:
     assert ".codex/skills/superpowers-systematic-debugging/SKILL.md" in [
         file.path for file in superpowers.files
     ]
+
+
+def test_compile_skills_index_emits_catalog_for_all_skills(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+metadata:
+  name: skill-catalog-fixture
+  description: Skill catalog fixture.
+skills:
+  systematic-debugging:
+    namespace: superpowers
+    description: Debug methodically.
+    match:
+      user_intent:
+        - debug
+    steps:
+      - reproduce_failure
+    output_format:
+      - root_cause
+  local-review:
+    description: Review local changes.
+    guards:
+      - inspect_diff_first
+    steps:
+      - report_findings
+permissions:
+  rules:
+    bash:
+      "npm install*": deny
+""",
+    )
+
+    result = compile_agentmakefile(path, targets=["skills-index"])
+
+    assert result.ok, result.diagnostics.format()
+    assert [file.path for file in result.files] == ["skills/index.md"]
+    assert result.files[0].backend == "skills-index"
+    assert result.files[0].managed_block is True
+    content = result.files[0].content
+    assert "# skill-catalog-fixture - Skill Index" in content
+    assert "Generated from AgentMakefile. Treat this file as a compatibility catalog" in content
+    assert "Skill catalog fixture." in content
+    assert "### local-review" in content
+    assert "### superpowers:systematic-debugging" in content
+    assert "- Slug: `local-review`" in content
+    assert "- Claude skill: `.claude/skills/local-review/SKILL.md`" in content
+    assert "- Codex skill: `.codex/skills/superpowers-systematic-debugging/SKILL.md`" in content
+    assert "#### Match" in content
+    assert "- `user_intent`: debug" in content
+    assert "#### Steps" in content
+    assert "- reproduce_failure" in content
+    assert "#### Output format" in content
+    assert "- root_cause" in content
+    assert "## Permission Guidance" in content
+    assert "| bash | npm install* | deny |" in content
+
+
+def test_compile_skills_index_honors_artifact_path(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+compile:
+  targets:
+    - skills-index
+artifacts:
+  skills-index:
+    path: docs/generated-skills.md
+skills:
+  local-review:
+    description: Review local changes.
+""",
+    )
+
+    result = compile_agentmakefile(path)
+
+    assert result.ok, result.diagnostics.format()
+    assert [file.path for file in result.files] == ["docs/generated-skills.md"]
+    assert "### local-review" in result.files[0].content
 
 
 def test_compile_agents_md_snapshot() -> None:
