@@ -97,6 +97,7 @@ def create_run_plan(
         "prompt_prefix": prompt_prefix,
         "runtime_phases": _runtime_phases(proposed_tool_calls or [], proposed_output),
         "target_contracts": [_target_contract(target) for target in target_closure],
+        "target_pipelines": [target.pipeline for target in target_closure],
         "policy_contracts": _policy_contracts(target_closure),
         "guard_evaluation": _guard_evaluation(target_closure),
         "permission_contract": _permission_contract(ir),

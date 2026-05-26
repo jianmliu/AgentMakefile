@@ -6,20 +6,21 @@ Date: 2026-05-25.
 
 ## Summary
 
-AgentMakefile can eventually grow from a compiler into a prompt-aware
-coding-agent shell.
-The compiler remains responsible for parsing, validating, normalizing,
-compiling, selecting, and linking AgentMakefile rules. The runtime CLI adds a
-thin execution layer that turns a user request plus optional plan into a
-dynamic, module-aware prompt prefix before calling a model or running an agent
-tool loop.
+AgentMakefile can eventually grow from a harness compiler into a prompt-aware
+coding-agent shell, but that is not the near-term product boundary. The
+compiler remains responsible for parsing, validating, normalizing, compiling,
+selecting, and linking AgentMakefile rules. The host-adapter layer turns a user
+request plus optional plan into a dynamic, module-aware prompt prefix before an
+existing host calls a model or runs an agent tool loop.
 
-The preferred near-term path is plugin-first, not full-runtime-first. The
-generic plugin adapter is specified in
-[agentmf_plugin_adapter_spec.md](agentmf_plugin_adapter_spec.md). Existing agent
-CLIs should remain responsible for model calls, streaming, tool loops,
-approvals, and sandboxing while AgentMakefile produces the selected prompt
-payload.
+The preferred near-term path is **plugin-first harness integration**, not
+full-runtime-first. The generic plugin adapter is specified in
+[agentmf_plugin_adapter_spec.md](agentmf_plugin_adapter_spec.md), and the
+top-level harness architecture is specified in
+[agentmf_agent_harness_architecture.md](agentmf_agent_harness_architecture.md).
+Existing agent CLIs should remain responsible for model calls, streaming, tool
+loops, approvals, and sandboxing while AgentMakefile produces the selected
+prompt payload.
 
 The key idea is:
 
@@ -29,7 +30,7 @@ user request + optional plan + repo state
   -> target fragment linking
   -> stable prompt prefix
   -> volatile task context suffix
-  -> model call or tool loop
+  -> host-owned model call or tool loop
 ```
 
 `AgentMakefile` is the source of stable agent behavior. The plan is task
@@ -38,27 +39,30 @@ context, not part of the stable prefix.
 There is also a reverse-input mode for existing skill ecosystems:
 
 ```text
-existing SKILL.md packages
-  -> agentmf plugin install
-  -> generated AgentMakefile skill-index module
+existing guidance files and skill packages
+  -> agentmf plugin install / agentmf guidance scan
+  -> generated AgentMakefile guidance-index module
   -> agentmf plugin payload
-  -> selected skills + selection_trace + stable prefix
+  -> selected skills or instruction fragments + selection_trace + stable prefix
   -> host-owned model/tool runtime
 ```
 
 This mode makes skill selection optimization a first-class runtime use case.
 Instead of loading an all-in-one skill index, a host can ask AgentMakefile which
 skill-backed targets match the current request, inspect the explanation, and
-load only the relevant native skill artifacts. `agentmf skills scan` remains
-the lower-level import primitive; `agentmf plugin install` wraps it with
-install-time model instructions for plugin hosts.
+load only the relevant native skill artifacts or instruction fragments.
+`agentmf skills scan` remains the first lower-level import primitive for
+`SKILL.md` package trees; the planned `agentmf guidance scan` generalizes that
+primitive to `AGENTS.md`, `CLAUDE.md`, single `SKILL.md` files, `skills/index.md`,
+Cursor rules, and other prompt-prefix guidance inputs. `agentmf plugin install`
+wraps those import paths with install-time model instructions for plugin hosts.
 
 ## Goals
 
 - Let users and host agents invoke AgentMakefile as a prompt assembly layer, not
   only as a compiler.
-- Let hosts import existing `SKILL.md` package trees into generated
-  AgentMakefile skill-index modules.
+- Let hosts import existing `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, and related
+  prompt-prefix guidance into generated AgentMakefile guidance-index modules.
 - Select relevant modules, targets, policies, skills, guards, and permissions
   from the current user request.
 - Return explainable skill selection data so hosts can debug and optimize
@@ -99,7 +103,7 @@ Codex CLI / Claude Code / Cursor / OpenCode
 This keeps AgentMakefile focused on its strongest early value: cross-platform
 target selection, prompt linking, module reuse, and traceable prompt-size
 savings. Commands such as `agentmf ask`, `agentmf chat`, and `agentmf exec` are
-later conveniences built on the same payload assembly path.
+optional later conveniences built on the same harness payload path.
 
 ## Concepts
 

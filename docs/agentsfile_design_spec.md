@@ -2,33 +2,37 @@
 
 ## 1. Overview
 
-**AgentMakefile** is a cross-platform source format and compiler layer for AI agent skills and rails. It defines reusable skills, policies, targets, permissions, hooks, output contracts, validation rules, and fallback behavior once, then compiles them into platform-native artifacts for Claude Code, OpenCode, Codex, Cursor, and future agent runtimes.
+**AgentMakefile** is a portable agent harness specification, compiler, and host adapter layer. It defines reusable skills, policies, targets, permissions, hooks, output contracts, validation rules, and fallback behavior once, then compiles them into platform-native artifacts or request-time harness payloads for Claude Code, OpenCode, Codex, Cursor, and future agent runtimes.
 
 At runtime, most platform-native instruction artifacts ultimately become part of a prompt prefix. `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `SKILL.md`, and runtime-specific rule files are different packaging formats for stable agent guidance that is prepended to task-specific context. AgentMakefile treats those prompt prefixes as build artifacts produced from structured inputs.
 
-Static generated files are the compatibility layer. The deeper integration point is runtime prompt-prefix assembly from AgentMakefile IR: a runtime can select the current task target, resolve dependencies, choose the required policies and skills, reuse stable prefix chunks, and append volatile task context immediately before the model call.
+Static generated files are the compatibility layer. The deeper integration point is harness-driven prompt-prefix assembly from AgentMakefile IR: a host adapter or runtime can select the current task target, resolve dependencies, choose the required policies and skills, reuse stable prefix chunks, and append volatile task context immediately before the model call.
 
-The goal is **not** to build another coding agent runtime. Instead, AgentMakefile acts as a **single portable source of truth** for agent skills and rails, similar to how an API specification can act as the source for generated SDKs, CLIs, documentation, or MCP servers.
+The near-term goal is **not** to build another coding agent runtime. Instead, AgentMakefile acts as a **single portable harness source of truth** for agent skills and rails, similar to how an API specification can act as the source for generated SDKs, CLIs, documentation, or MCP servers. A standalone `agentmf` runtime remains a later optional path built on the same harness IR and payload contracts.
 
 AgentMakefile supports two complementary source-of-truth modes:
 
 * **Forward compilation**: teams maintain AgentMakefile directly, then compile
   it into platform-native instructions and skill packages.
-* **Reverse skill import**: a plugin or host scans existing `SKILL.md`
-  packages into a generated AgentMakefile skill-index module, then uses
-  AgentMakefile target selection, dependency closure, and `selection_trace` to
-  optimize which skills are loaded for a request.
+* **Reverse guidance import**: a plugin or host scans existing prompt guidance
+  such as `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `skills/index.md`, Cursor rules,
+  or similar host-native instruction files into a generated AgentMakefile
+  guidance-index module. AgentMakefile target selection, dependency closure,
+  and `selection_trace` can then optimize which skills or instruction fragments
+  are loaded for a request.
 
 The reverse import path is a major feature, not only a migration helper. It lets
-existing skill ecosystems keep their current package layout while gaining a
-structured dependency graph, deterministic prompt fragments, explainable skill
-selection, and cross-platform outputs.
+existing skill and instruction ecosystems keep their current package layout
+while gaining a structured dependency graph, deterministic prompt fragments,
+explainable selection, and cross-platform outputs.
 
-In the same way that a `Makefile` tells a build system how to produce targets from dependencies, an `AgentMakefile` tells agent runtimes how to execute task-specific workflows and enforce project-specific guardrails. This also gives AgentMakefile a path to avoid unnecessary recompilation: unchanged modules, targets, skills, and backend settings should be reusable across builds, while only affected prompt-prefix artifacts are regenerated.
+In the same way that a `Makefile` tells a build system how to produce targets from dependencies, an `AgentMakefile` tells agent harnesses how to assemble task-specific behavior and enforce project-specific guardrails. Each target defines a **compilable agent harness pipeline**: dependency closure, selected skills, policies, prompt operations, context rules, guards, permissions, fallbacks, and output contracts. It is not a traditional shell recipe. This also gives AgentMakefile a path to avoid unnecessary recompilation: unchanged modules, targets, skills, and backend settings should be reusable across builds, while only affected prompt-prefix artifacts are regenerated.
+
+The top-level harness architecture is specified in [agentmf_agent_harness_architecture.md](agentmf_agent_harness_architecture.md).
 
 Concise positioning:
 
-> **AgentMakefile is a cross-platform source file for agent skills and rails.**
+> **AgentMakefile is a portable agent harness specification and compiler.**
 
 Expanded positioning:
 
@@ -45,11 +49,18 @@ Short slogans:
 ## 1.1 Terminology
 
 * **AgentMakefile**: the cross-platform source format and default project rule file.
+* **Agent harness**: the layer that turns stable guidance, user intent,
+  runtime context, and host capabilities into a selected prompt payload and
+  execution contract for an agent host.
 * **agentmf**: the CLI compiler and validator for AgentMakefile.
 * **Agent Rule IR**: the normalized intermediate representation produced from AgentMakefile before backend emission.
 * **Backend**: a platform-specific emitter that generates native artifacts for Claude Code, Codex, Cursor, OpenCode, or another agent runtime.
 * **Generated artifact**: a platform-native output such as `CLAUDE.md`, `AGENTS.md`, `.cursor/rules/*.mdc`, `SKILL.md`, `.claude/settings.json`, hooks, or OpenCode configuration.
 * **Prompt prefix artifact**: generated guidance that is expected to appear before volatile task context in a model request, either directly as prompt text or indirectly through a platform-native file such as `AGENTS.md`, `CLAUDE.md`, Cursor rules, or `SKILL.md`.
+* **Target pipeline**: the structured harness pipeline defined by a target:
+  dependency closure, selected skills, policies, prompt operations, context
+  selection, guards, permission contracts, fallback behavior, and output
+  contracts.
 * **Target fragment**: a small, target-specific prompt prefix artifact generated from one target's dependency closure. A target fragment is analogous to a compiled object file: it can be regenerated independently, cached by hash, and linked with other fragments at request time.
 * **Prompt object**: a compiled fragment of stable prompt-prefix material. Prompt objects may represent targets, policies, skills, permissions, output contracts, or reusable modules.
 * **Prompt link step**: the runtime or compiler phase that selects prompt objects for a request and concatenates them into the final prompt prefix before volatile task context is appended.
@@ -253,7 +264,11 @@ This hierarchy prevents overlap between high-level behavior rules and enforcemen
 
 ### 5.1 Target
 
-A **target** represents a user-facing goal, internal workflow, or compilable agent behavior unit.
+A **target** represents a user-facing goal, internal workflow, or compilable
+agent behavior unit. In harness terms, a target is a compiled pipeline boundary:
+it packages the dependency closure, selected skills, policies, prompt
+operations, context selection, guards, permissions, fallback behavior, and
+output contracts needed for one task class.
 
 Examples:
 
@@ -377,7 +392,10 @@ Dependencies can be:
 
 ### 5.5 Steps
 
-The **steps** block defines ordered execution actions. Steps can be rendered as natural-language instructions, compiled into skill procedures, mapped to workflow nodes, or implemented as runtime actions.
+The **steps** block defines ordered harness operations. Steps can be rendered as
+natural-language instructions, compiled into skill procedures, mapped to
+workflow nodes, converted into prompt operations, or implemented as runtime
+actions.
 
 Example:
 
@@ -393,7 +411,12 @@ steps:
     action: produce_summary
 ```
 
-Steps are similar to Makefile commands, but they represent agent actions rather than shell commands.
+Steps are similar to Makefile commands only at the graph level: they are the
+ordered operations attached to a target. They are not shell recipes. In
+AgentMakefile, a step should describe a harness operation such as selecting
+context, linking a prompt fragment, invoking a skill, checking a guard,
+declaring a permission, running an allowed tool, applying a fallback, or
+validating an output contract.
 
 ---
 
@@ -3775,17 +3798,47 @@ Behavior:
 * keep generated AgentMakefile output as an import/bridge path; curated modules
   can still replace it as the long-term source of truth
 
+#### guidance scan
+
+Input:
+
+```text
+AGENTS.md
+CLAUDE.md
+SKILL.md
+<skills-dir>/*/SKILL.md
+.cursor/rules/*.mdc
+```
+
+Behavior:
+
+* generalize `skills scan` from native skill packages to broader prompt-prefix
+  guidance sources
+* treat `skills scan` as the `skill-dir` reader for compatibility
+* import standalone `SKILL.md` files as real skill entries
+* import `AGENTS.md` and `CLAUDE.md` as guidance-backed targets in the first
+  slice, with section-level splitting deferred until provenance is stable
+* store `implementation.source` and `implementation.source_type` for every
+  imported unit
+* infer `match.user_intent` terms from filenames, frontmatter, descriptions,
+  headings, and "when to use" style sections
+* emit `metadata.module_type: guidance-index` so downstream tools know the
+  module was generated from existing host guidance
+
 #### plugin install
 
 Input:
 
 ```text
 <skills-dir>/*/SKILL.md
+AGENTS.md
+CLAUDE.md
+SKILL.md
 ```
 
 Behavior:
 
-* wrap `skills scan` for plugin installation
+* wrap `skills scan` and `guidance scan` for plugin installation
 * optionally write the generated skill-index AgentMakefile to
   `.agentmf/plugin/AgentMakefile` or the caller's `--out` path
 * return `model_instructions` telling the host/model to call

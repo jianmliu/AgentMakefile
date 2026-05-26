@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 from agentmf.diagnostics import Diagnostics
 from agentmf.models import (
@@ -119,9 +119,166 @@ def _normalize_targets(
                 output_format=target.output_format,
                 output_schema=target.output_schema,
                 fallback=target.fallback,
+                pipeline=_target_pipeline(name, target, resolved_policies, resolved_skills),
             )
         )
     return targets
+
+
+def _target_pipeline(
+    name: str,
+    target: TargetSpec,
+    policies: List[IRPolicy],
+    skills: List[IRSkill],
+) -> Dict[str, Any]:
+    context_ops: List[Dict[str, Any]] = []
+    prompt_ops: List[Dict[str, Any]] = []
+    action_ops: List[Dict[str, Any]] = []
+    for policy in policies:
+        _append_step_ops(
+            policy.steps,
+            source="policy",
+            context_ops=context_ops,
+            prompt_ops=prompt_ops,
+            action_ops=action_ops,
+            policy=policy.name,
+        )
+    _append_step_ops(
+        target.steps,
+        source="target",
+        context_ops=context_ops,
+        prompt_ops=prompt_ops,
+        action_ops=action_ops,
+    )
+    return {
+        "target": name,
+        "deps": list(target.deps),
+        "skills": [skill.qualified_name for skill in skills],
+        "policies": [policy.name for policy in policies],
+        "context_ops": context_ops,
+        "prompt_ops": prompt_ops,
+        "action_ops": action_ops,
+        "guard_ops": _guard_ops(target, policies),
+        "permission_ops": [],
+        "fallback_ops": _fallback_ops(target),
+        "output_contracts": {
+            "format": list(target.output_format),
+            "schema": dict(target.output_schema),
+        },
+    }
+
+
+def _append_step_ops(
+    steps: List[Union[str, Dict[str, Any]]],
+    *,
+    source: str,
+    context_ops: List[Dict[str, Any]],
+    prompt_ops: List[Dict[str, Any]],
+    action_ops: List[Dict[str, Any]],
+    policy: Optional[str] = None,
+) -> None:
+    for step in steps:
+        operation = _step_operation(step, source=source, policy=policy)
+        if operation["type"] == "select_context":
+            context_ops.append(operation)
+        elif operation["type"] in {"link_prompt", "prompt"}:
+            prompt_ops.append(operation)
+        else:
+            action_ops.append(operation)
+
+
+def _step_operation(
+    step: Union[str, Dict[str, Any]],
+    *,
+    source: str,
+    policy: Optional[str] = None,
+) -> Dict[str, Any]:
+    if isinstance(step, str):
+        operation = {
+            "type": "action",
+            "source": source,
+            "payload": {"name": step},
+            "raw": step,
+        }
+    else:
+        operation_type, value = _single_step_entry(step)
+        if operation_type == "action":
+            payload = {"name": value} if isinstance(value, str) else _payload(value)
+        else:
+            payload = _payload(value)
+        operation = {
+            "type": operation_type,
+            "source": source,
+            "payload": payload,
+            "raw": step,
+        }
+    if policy is not None:
+        operation["policy"] = policy
+    return operation
+
+
+def _single_step_entry(step: Dict[str, Any]) -> tuple[str, Any]:
+    if "action" in step:
+        return "action", step["action"]
+    if len(step) == 1:
+        key = next(iter(step))
+        return key, step[key]
+    return "action", step
+
+
+def _payload(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    return {"name": value}
+
+
+def _guard_ops(target: TargetSpec, policies: List[IRPolicy]) -> List[Dict[str, Any]]:
+    operations: List[Dict[str, Any]] = []
+    for policy in policies:
+        for guard in policy.guards:
+            operations.append(
+                {
+                    "type": "check_guard",
+                    "source": "policy",
+                    "policy": policy.name,
+                    "payload": {"guard": guard},
+                    "raw": guard,
+                }
+            )
+    for guard in target.guards:
+        operations.append(
+            {
+                "type": "check_guard",
+                "source": "target",
+                "payload": {"guard": guard},
+                "raw": guard,
+            }
+        )
+    return operations
+
+
+def _fallback_ops(target: TargetSpec) -> List[Dict[str, Any]]:
+    operations: List[Dict[str, Any]] = []
+    for condition in sorted(target.fallback):
+        for fallback in target.fallback[condition]:
+            operations.append(_fallback_operation(condition, fallback))
+    return operations
+
+
+def _fallback_operation(condition: str, fallback: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+    if isinstance(fallback, str):
+        payload = {"name": fallback}
+    elif "fallback" in fallback and isinstance(fallback["fallback"], str):
+        payload = {"name": fallback["fallback"]}
+    else:
+        payload = dict(fallback)
+    return {
+        "type": "fallback",
+        "source": "target",
+        "condition": condition,
+        "payload": payload,
+        "raw": fallback,
+    }
 
 
 def _validate_target_dependencies(targets: Dict[str, TargetSpec], diagnostics: Diagnostics) -> None:

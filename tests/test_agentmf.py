@@ -3059,6 +3059,170 @@ permissions:
     }
 
 
+def test_normalize_builds_target_pipeline_from_typed_steps(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+policies:
+  verify_policy:
+    guards:
+      - policy_guard
+    steps:
+      - action: policy_step
+skills:
+  tdd:
+    namespace: superpowers
+    description: Test-driven development.
+targets:
+  code.change:
+    policies:
+      - verify_policy
+    skills:
+      - superpowers:tdd
+    guards:
+      - tests_required
+    steps:
+      - select_context:
+          include:
+            - git.diff
+            - active_file
+      - link_prompt:
+          fragment: tdd.instructions
+      - action: legacy_step
+    output_format:
+      - implementation_summary
+    fallback:
+      blocked:
+        - fallback: ask_for_clarification
+""",
+    )
+
+    source = load_source(path)
+    diagnostics = Diagnostics()
+    ir = normalize(source, diagnostics)
+
+    assert ir is not None
+    assert not diagnostics.has_errors, diagnostics.format()
+    target = next(target for target in ir.targets if target.name == "code.change")
+    assert target.pipeline == {
+        "target": "code.change",
+        "deps": [],
+        "skills": ["superpowers:tdd"],
+        "policies": ["verify_policy"],
+        "context_ops": [
+            {
+                "type": "select_context",
+                "source": "target",
+                "payload": {"include": ["git.diff", "active_file"]},
+                "raw": {"select_context": {"include": ["git.diff", "active_file"]}},
+            }
+        ],
+        "prompt_ops": [
+            {
+                "type": "link_prompt",
+                "source": "target",
+                "payload": {"fragment": "tdd.instructions"},
+                "raw": {"link_prompt": {"fragment": "tdd.instructions"}},
+            }
+        ],
+        "action_ops": [
+            {
+                "type": "action",
+                "source": "policy",
+                "policy": "verify_policy",
+                "payload": {"name": "policy_step"},
+                "raw": {"action": "policy_step"},
+            },
+            {
+                "type": "action",
+                "source": "target",
+                "payload": {"name": "legacy_step"},
+                "raw": {"action": "legacy_step"},
+            }
+        ],
+        "guard_ops": [
+            {
+                "type": "check_guard",
+                "source": "policy",
+                "policy": "verify_policy",
+                "payload": {"guard": "policy_guard"},
+                "raw": "policy_guard",
+            },
+            {
+                "type": "check_guard",
+                "source": "target",
+                "payload": {"guard": "tests_required"},
+                "raw": "tests_required",
+            },
+        ],
+        "permission_ops": [],
+        "fallback_ops": [
+            {
+                "type": "fallback",
+                "source": "target",
+                "condition": "blocked",
+                "payload": {"name": "ask_for_clarification"},
+                "raw": {"fallback": "ask_for_clarification"},
+            }
+        ],
+        "output_contracts": {
+            "format": ["implementation_summary"],
+            "schema": {},
+        },
+    }
+
+
+def test_runtime_dry_run_exposes_target_pipelines(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - select_context:
+          include:
+            - git.diff
+      - action: review_code
+""",
+    )
+
+    result = create_run_plan(path, request="please review code", backend="agents-fragments", dry_run=True)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["target_pipelines"] == [
+        {
+            "target": "review.task",
+            "deps": [],
+            "skills": [],
+            "policies": [],
+            "context_ops": [
+                {
+                    "type": "select_context",
+                    "source": "target",
+                    "payload": {"include": ["git.diff"]},
+                    "raw": {"select_context": {"include": ["git.diff"]}},
+                }
+            ],
+            "prompt_ops": [],
+            "action_ops": [
+                {
+                    "type": "action",
+                    "source": "target",
+                    "payload": {"name": "review_code"},
+                    "raw": {"action": "review_code"},
+                }
+            ],
+            "guard_ops": [],
+            "permission_ops": [],
+            "fallback_ops": [],
+            "output_contracts": {"format": [], "schema": {}},
+        }
+    ]
 def test_runtime_permission_dry_run_evaluates_proposed_tool_calls(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -5106,6 +5270,76 @@ targets:
         "claude": [
             ".claude/skills/superpowers-verification-before-completion/SKILL.md",
             ".claude/skills/superpowers-receiving-code-review/SKILL.md",
+        ],
+    }
+
+
+def test_plugin_payload_exposes_selected_pipeline(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - select_context:
+          include:
+            - git.diff
+      - link_prompt:
+          fragment: review.instructions
+      - action: review_code
+""",
+    )
+
+    from agentmf.plugin import create_plugin_payload
+
+    result = create_plugin_payload(
+        path=path,
+        host="codex",
+        request="please review code",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["selected_pipeline"] == {
+        "target_closure": ["review.task"],
+        "targets": [
+            {
+                "target": "review.task",
+                "deps": [],
+                "skills": [],
+                "policies": [],
+                "context_ops": [
+                    {
+                        "type": "select_context",
+                        "source": "target",
+                        "payload": {"include": ["git.diff"]},
+                        "raw": {"select_context": {"include": ["git.diff"]}},
+                    }
+                ],
+                "prompt_ops": [
+                    {
+                        "type": "link_prompt",
+                        "source": "target",
+                        "payload": {"fragment": "review.instructions"},
+                        "raw": {"link_prompt": {"fragment": "review.instructions"}},
+                    }
+                ],
+                "action_ops": [
+                    {
+                        "type": "action",
+                        "source": "target",
+                        "payload": {"name": "review_code"},
+                        "raw": {"action": "review_code"},
+                    }
+                ],
+                "guard_ops": [],
+                "permission_ops": [],
+                "fallback_ops": [],
+                "output_contracts": {"format": [], "schema": {}},
+            }
         ],
     }
 

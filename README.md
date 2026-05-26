@@ -1,20 +1,32 @@
 # AgentMakefile
 
-Prototype implementation for the AgentMakefile design spec.
+AgentMakefile is a portable agent harness specification, compiler, and host adapter layer. It turns scattered `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, framework rules, policies, permissions, and workflow targets into buildable source files and request-time payloads that can be compiled, synced, selected, and handed to existing coding-agent hosts.
 
-AgentMakefile is a Makefile-style build system for agent prompt prefixes. It treats reusable rules, skills, policies, dependencies, permissions, and output contracts as structured inputs, then compiles them into stable prompt-prefix artifacts for each agent platform. Generated files such as `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `skills/index.md`, and `SKILL.md` outputs are build artifacts, not the source of truth.
+The core value is harness infrastructure:
 
-AgentMakefile now has two primary flows:
+- **Structured harness source of truth**: author reusable skills, rules, policies, permissions, dependencies, output contracts, and fallback behavior in AgentMakefile modules instead of hand-maintaining scattered Markdown files.
+- **Cross-platform skill compilation**: compile the same module into Codex skills, Claude Code skills, `skills/index.md`, `AGENTS.md`, `CLAUDE.md`, Cursor rules, OpenCode config, and Claude Code settings/hooks where supported.
+- **System skill sync**: sync generated Codex or Claude Code skill packages into a host skill root with a dry-run-first `agentmf skills sync` workflow.
+- **Guidance import and routing optimization**: scan existing `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, and related guidance files into an AgentMakefile routing module, then use `agentmf plugin payload` to choose only the relevant skills or instruction fragments for each request.
+- **Harness payload assembly**: return stable prompt prefixes, volatile context, guard/permission metadata, output contracts, and host-specific instructions without taking over the host's model or tool runtime.
+- **Explainable selection**: every request-time choice can return `selected_targets`, `selected_skills`, `selected_pipeline`, dependency closure, native skill artifact paths, and `selection_trace` rationale.
 
-- **Author once, compile everywhere**: write or maintain an AgentMakefile as the source of truth, then generate platform-native guidance such as `AGENTS.md`, `CLAUDE.md`, Cursor rules, `skills/index.md`, and Claude/Codex `SKILL.md` packages.
-- **Import existing skills, optimize selection**: plugin install can scan existing `SKILL.md` directories into a generated AgentMakefile skill-index module, then instruct the host/model to use `agentmf plugin payload` for request-specific skill choice, `selection_trace` rationale, and native skill artifact paths. Request matching uses deterministic normalization, a small built-in translation/alias layer, and lightweight semantic token overlap.
+Generated files such as `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `skills/index.md`, `.codex/skills/*/SKILL.md`, and `.claude/skills/*/SKILL.md` are build artifacts. AgentMakefile modules are the source of truth.
 
-Static files are the compatibility path for existing agents. The deeper integration path is runtime prompt-prefix assembly: an agent runtime consumes AgentMakefile IR directly, selects the relevant target and dependency graph for the current request, reuses stable prefix chunks, and appends volatile task context only at the end.
+AgentMakefile now supports two complementary directions:
 
-The near-term runtime direction is plugin-first: existing agent CLIs keep owning model calls and tool loops, while AgentMakefile provides `agentmf plugin payload`-style prompt assembly for each user request and optional implementation plan. A standalone `agentmf prompt` / `agentmf ask` / `agentmf exec` runtime can build on the same payload path later.
+- **AgentMakefile modules -> native skills**: write or maintain an AgentMakefile module, compile it into platform-native skills, and optionally sync those skills into Codex or Claude Code.
+- **Existing native guidance -> AgentMakefile routing graph**: scan installed `SKILL.md` packages, project `AGENTS.md` / `CLAUDE.md`, or other guidance files into a generated AgentMakefile module, then optimize request-time skill and instruction selection with `agentmf plugin payload`.
+
+Static files are the compatibility path for existing agents. The deeper integration path is harness-driven prompt-prefix assembly: an agent runtime or host adapter consumes AgentMakefile IR, selects the relevant target and dependency graph for the current request, reuses stable prefix chunks, and appends volatile task context only at the end.
+
+The near-term direction is plugin-first: existing agent CLIs keep owning model calls, streaming, tool loops, approvals, and UI, while AgentMakefile provides `agentmf plugin payload`-style harness assembly for each user request and optional implementation plan. A standalone `agentmf prompt` / `agentmf ask` / `agentmf exec` runtime is a later optional path built on the same harness interfaces.
 
 Design details live in [docs/agentsfile_design_spec.md](docs/agentsfile_design_spec.md).
+The agent harness architecture lives in [docs/agentmf_agent_harness_architecture.md](docs/agentmf_agent_harness_architecture.md).
 The proposed runtime CLI design lives in [docs/agentmf_runtime_cli_spec.md](docs/agentmf_runtime_cli_spec.md).
+The guidance ingestion design lives in [docs/agentmf_guidance_ingestion_spec.md](docs/agentmf_guidance_ingestion_spec.md).
+The benchmark CLI design lives in [docs/agentmf_benchmark_cli_spec.md](docs/agentmf_benchmark_cli_spec.md).
 The plugin-first adapter design lives in [docs/agentmf_plugin_adapter_spec.md](docs/agentmf_plugin_adapter_spec.md).
 Example host adapter flows live in [docs/agentmf_plugin_adapter_examples.md](docs/agentmf_plugin_adapter_examples.md).
 The current runtime walkthrough lives in [docs/agentmf_step_by_step_demo.md](docs/agentmf_step_by_step_demo.md).
@@ -23,9 +35,15 @@ This repository is self-hosted by the root [AgentMakefile](AgentMakefile), which
 
 Reusable rule modules live under [modules/](modules/). For example, the Karpathy / Andrej guidelines are represented as [modules/karpathy/AgentMakefile](modules/karpathy/AgentMakefile), unknown repository security rails are represented as [modules/unknown-repo-security/AgentMakefile](modules/unknown-repo-security/AgentMakefile), Superpowers is represented as [modules/superpowers/AgentMakefile](modules/superpowers/AgentMakefile), and Oh My OpenAgent is represented as [modules/oh-my-openagent/AgentMakefile](modules/oh-my-openagent/AgentMakefile). Demo files under [demos/](demos/) compose these modules and choose output backends.
 
-The [unknown repository security demo](demos/unknown-repo-security/AgentMakefile) proves the hard-rails path end to end by compiling soft Markdown guidance, Cursor rules, Claude Code settings and hooks, and OpenCode configuration from one AgentMakefile. The [runtime walkthrough demo](demos/runtime-walkthrough/AgentMakefile) exercises prompt fragments, a generated `skills/index.md` catalog, Claude/Codex skill-package outputs, runtime dry-run planning, JSON Schema output validation, plugin payloads, provider echo, tool interception, sandbox preflight, and fallback handling. The same runtime path can also start from imported `SKILL.md` packages: `agentmf skills scan` turns existing skills into an AgentMakefile routing graph, and `agentmf plugin payload` selects the best skill closure for each request.
+The [unknown repository security demo](demos/unknown-repo-security/AgentMakefile) proves the hard-rails path end to end by compiling soft Markdown guidance, Cursor rules, Claude Code settings and hooks, and OpenCode configuration from one AgentMakefile. The [runtime walkthrough demo](demos/runtime-walkthrough/AgentMakefile) exercises prompt fragments, a generated `skills/index.md` catalog, Claude/Codex skill-package outputs, runtime dry-run planning, JSON Schema output validation, plugin payloads, provider echo, tool interception, sandbox preflight, and fallback handling. The same runtime path can also start from imported guidance: today's `agentmf skills scan` turns existing `SKILL.md` packages into an AgentMakefile routing graph, and the planned guidance importer extends that bridge to `AGENTS.md`, `CLAUDE.md`, single `SKILL.md` files, and other host-native instruction files.
 
 This structure is intended to support target selection, dependency-aware rebuilds, and cache-friendly prompt layout: stable compiled guidance can stay byte-for-byte deterministic, while volatile task context such as the current user request, active files, and diffs can be appended later by the runtime.
+
+In AgentMakefile, a target is a **compilable agent harness pipeline**, not a
+shell recipe. A target can combine dependencies, skills, policies, prompt
+fragments, context rules, guards, permissions, fallback behavior, and output
+contracts, then lower that pipeline into native Markdown guidance, skill
+packages, prompt fragments, plugin payloads, or future runtime plans.
 
 MVP 0 supports deterministic compilation from a YAML `AgentMakefile` into:
 
@@ -45,8 +63,8 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `agentmf prompt` emits a deterministic final prompt payload by combining the selected stable prefix with volatile request, plan, context-file, and git context, without calling a model or running tools.
 - `agentmf ask` reuses the same prompt payload path and runs a one-shot provider call; the first provider is the deterministic local `echo` adapter.
 - `agentmf exec --apply --tool-call TOOL:INPUT` is the first gated tool-loop prototype: it evaluates guards and permissions, applies prototype sandbox preflight checks, records the provider tool-call interception contract, runs only explicitly allowed tool calls, and plans or optionally executes internal fallback actions for blocked calls.
-- `agentmf plugin install` scans existing skills, writes a plugin-local AgentMakefile when requested, and emits model instructions telling hosts to call `agentmf plugin payload` before loading skills.
-- `agentmf plugin payload` exposes `selected_skills`, generated Codex/Claude skill artifact paths, and `selection_trace` rationale so host adapters can use AgentMakefile as an explainable skill-routing layer. Request routing can match either explicit target `match` terms or the `match` terms of skills referenced by a target.
+- `agentmf plugin install` scans existing skills, writes a plugin-local AgentMakefile when requested, and emits model instructions telling hosts to call `agentmf plugin payload` before loading skills. The planned generalized importer will let the same install path read `AGENTS.md`, `CLAUDE.md`, standalone `SKILL.md`, and related guidance sources.
+- `agentmf plugin payload` exposes `selected_skills`, `selected_pipeline`, generated Codex/Claude skill artifact paths, and `selection_trace` rationale so host adapters can use AgentMakefile as an explainable harness-routing layer. Request routing can match either explicit target `match` terms or the `match` terms of skills referenced by a target.
 - `agentmf skills scan` imports existing `SKILL.md` directories into a generated AgentMakefile skill-index module, with an optional bootstrap skill represented as an explicit target dependency.
 - `agentmf skills sync` compiles an AgentMakefile module into host-native Codex or Claude Code skill packages and syncs them to a host skill root only when `--write` is set.
 - Request selection normalizes punctuation and hyphenation, expands common Chinese/English development intents, and falls back to deterministic token-overlap matching before returning `AMF118`.

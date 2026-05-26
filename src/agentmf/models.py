@@ -172,6 +172,7 @@ class IRTarget(StrictModel):
     output_format: List[str] = Field(default_factory=list)
     output_schema: Dict[str, Any] = Field(default_factory=dict)
     fallback: Dict[str, List[Union[str, Dict[str, Any]]]] = Field(default_factory=dict)
+    pipeline: Dict[str, Any] = Field(default_factory=dict)
 
 
 class IRPermission(StrictModel):

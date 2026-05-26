@@ -24,8 +24,14 @@ host agent user input
   -> host agent model/tool runtime
 ```
 
-The near-term product is a cross-platform prompt assembly plugin. A standalone
-AgentMakefile CLI runtime can remain a later option.
+The near-term product is a cross-platform prompt assembly plugin and host
+adapter surface. In broader terms, this is the AgentMakefile agent harness
+boundary: AgentMakefile owns guidance ingestion, normalized behavior IR,
+request-time selection, prompt-prefix assembly, guard and permission contracts,
+host payloads, and benchmark evidence. The host owns the live model/tool
+session. The top-level harness architecture is specified in
+[agentmf_agent_harness_architecture.md](agentmf_agent_harness_architecture.md).
+A standalone AgentMakefile CLI runtime can remain a later option.
 
 ## Goals
 
@@ -94,24 +100,28 @@ The host agent remains responsible for:
 The plugin adapter is responsible only for producing structured prompt payloads
 and explaining how they were built.
 
-## Major Feature: Skill Import and Selection Optimization
+## Major Feature: Guidance Import and Selection Optimization
 
-The plugin adapter is also the bridge from existing skill ecosystems into
-AgentMakefile. In the forward direction, an AgentMakefile source compiles into
-Claude/Codex `SKILL.md` packages and `skills/index.md`. In the reverse
-direction, a host can scan an existing `SKILL.md` tree into a generated
-AgentMakefile skill-index module, then call `agentmf plugin payload` for each
-user request.
+The plugin adapter is also the bridge from existing skill and instruction
+ecosystems into AgentMakefile. In the forward direction, an AgentMakefile source
+compiles into Claude/Codex `SKILL.md` packages, `skills/index.md`, `AGENTS.md`,
+`CLAUDE.md`, and other host-native outputs. In the reverse direction, a host can
+scan an existing guidance corpus into a generated AgentMakefile guidance-index
+module, then call `agentmf plugin payload` for each user request.
 
 For plugin installation, the adapter should run `agentmf plugin install` over
-the host's configured skill roots. That command writes or returns the generated
-AgentMakefile and emits model-facing instructions that tell the host to call
-`agentmf plugin payload` before choosing skills for each user request.
+the host's configured guidance roots. The first implemented input is
+`*/SKILL.md`, but the intended importer also reads `AGENTS.md`, `CLAUDE.md`,
+single `SKILL.md` files, `skills/index.md`, Cursor rules, and similar
+prompt-prefix files. That command writes or returns the generated AgentMakefile
+and emits model-facing instructions that tell the host to call
+`agentmf plugin payload` before choosing skills or instruction fragments for
+each user request.
 
 This makes AgentMakefile useful even before a team has hand-authored modules:
 
-- existing skills remain usable as native platform artifacts
-- generated AgentMakefile targets encode skill match terms
+- existing skills and project instruction files remain usable as native platform artifacts
+- generated AgentMakefile targets encode skill and guidance match terms
 - bootstrap skills become explicit dependency edges
 - `selected_skills` tells the host which native skill packages to load
 - `selection_trace` explains the matched terms, candidate ranking, priority,
@@ -119,8 +129,8 @@ This makes AgentMakefile useful even before a team has hand-authored modules:
 - request matching is deterministic but layered: raw substring, normalized
   substring, built-in translation/alias expansion, then semantic token overlap
 
-The goal is not to replace native skill packages. The goal is to provide a
-structured, explainable routing layer above them.
+The goal is not to replace native skill packages or project instruction files.
+The goal is to provide a structured, explainable routing layer above them.
 
 ## Plugin Payload
 
@@ -137,6 +147,34 @@ The adapter emits one JSON object:
     "superpowers:verification-before-completion",
     "superpowers:receiving-code-review"
   ],
+  "selected_pipeline": {
+    "target_closure": ["repo.inspect", "repo.security_review"],
+    "targets": [
+      {
+        "target": "repo.security_review",
+        "deps": ["repo.inspect"],
+        "skills": [
+          "superpowers:verification-before-completion",
+          "superpowers:receiving-code-review"
+        ],
+        "policies": ["verify_before_completion"],
+        "context_ops": [],
+        "prompt_ops": [],
+        "action_ops": [
+          {
+            "type": "action",
+            "source": "target",
+            "payload": {"name": "inspect_security_risk"},
+            "raw": {"action": "inspect_security_risk"}
+          }
+        ],
+        "guard_ops": [],
+        "permission_ops": [],
+        "fallback_ops": [],
+        "output_contracts": {"format": ["findings"], "schema": {}}
+      }
+    ]
+  },
   "selection_trace": {
     "mode": "request",
     "algorithm": "normalize_translate_semantic_priority_score_name",
@@ -233,9 +271,10 @@ its own prompt format or use the fields directly if it has native cache-control
 or prompt-section support.
 
 `selected_skills` and `skill_artifacts` make skill routing explicit for hosts
-that can load generated `SKILL.md` files. Hosts that cannot load native skills
-can still rely on `stable_prefix.content`, which already includes the selected
-skill guidance.
+that can load generated `SKILL.md` files. `selected_pipeline` exposes the
+compiled agent harness pipeline for the selected target closure. Hosts that
+cannot load native skills can still rely on `stable_prefix.content`, which
+already includes the selected skill guidance.
 
 `selection_trace` explains why a target was selected. For request-based
 selection it records the normalized request, expanded request terms, matched
@@ -370,6 +409,8 @@ Options:
 
 ```text
 --skills-dir PATH      # repeatable, scans PATH/*/SKILL.md
+--source PATH          # planned repeatable guidance source: AGENTS.md, CLAUDE.md, SKILL.md, skills dir, or rules dir
+--source-type auto|skill-dir|skill-md|agents-md|claude-md|skills-index|cursor-rule
 --host codex|claude-code|cursor|opencode|generic
 --namespace NAME
 --package-name NAME
@@ -394,8 +435,8 @@ Options:
 Rules:
 
 - `plugin install` is the install-time bootstrap path: scan native skill
-  packages, generate the AgentMakefile skill index, and emit model instructions
-  to use `plugin payload` at request time.
+  packages or broader guidance sources, generate the AgentMakefile guidance
+  index, and emit model instructions to use `plugin payload` at request time.
 - `skills sync` is the forward installation path: compile AgentMakefile modules
   into native `SKILL.md` packages and copy them into a host skill root. It is
   dry-run by default and refuses to overwrite changed installed skills without

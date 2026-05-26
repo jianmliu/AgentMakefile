@@ -10,9 +10,31 @@ This document breaks the design spec into implementation tasks using a Superpowe
 
 ## Goal
 
-Build AgentMakefile from the current MVP 0 prototype into the staged compiler described in `docs/agentsfile_design_spec.md`.
+Build AgentMakefile from the current MVP 0 prototype into the portable agent
+harness specification, compiler, and host adapter layer described in
+`docs/agentsfile_design_spec.md` and
+`docs/agentmf_agent_harness_architecture.md`.
 
 The next implementation work should be incremental: each task should add a narrow behavior, include fixture-driven tests, and keep the CLI usable after every merge.
+
+## Product Boundary
+
+The selected product direction is Option A:
+
+- AgentMakefile is a harness specification, compiler, and host adapter layer.
+- Existing coding-agent hosts own model calls, streaming, tool loops, approval
+  UX, terminal/editor UI, and native sandbox execution.
+- AgentMakefile owns guidance ingestion, normalized IR, deterministic
+  selection, prompt-prefix assembly, guard and permission contracts, native
+  artifact generation, host payloads, and benchmark evidence.
+- Each target defines a compilable agent harness pipeline: dependency closure,
+  selected skills, policies, prompt operations, context rules, guards,
+  permissions, fallback behavior, and output contracts.
+
+Option B remains future work:
+
+- A standalone `agentmf` agent runtime can be built later on the same harness
+  IR, payloads, permission contracts, and prompt objects.
 
 ## Current Context
 
@@ -1480,6 +1502,112 @@ Acceptance:
 - Existing modified installed skills are protected unless `--force` is set.
 - CLI JSON exposes the planned files and host integration instructions.
 
+### AMF-PAD-014 Multi-Source Guidance Ingestion
+
+Status: planned.
+
+Goal: generalize reverse import from existing `SKILL.md` package directories to
+broader guidance corpora such as `AGENTS.md`, `CLAUDE.md`, standalone
+`SKILL.md`, `skills/index.md`, Cursor rules, and framework Markdown guidance.
+
+Implementation:
+
+- Add `agentmf guidance scan`.
+- Add a `guidance_scanner` facade that can dispatch to source readers by
+  source type.
+- Preserve the existing `agentmf skills scan` path by treating it as the
+  `skill-dir` source reader.
+- Support first-slice readers for `skill-dir`, `skill-md`, `agents-md`, and
+  `claude-md`.
+- Emit a generated AgentMakefile with `metadata.module_type: guidance-index`.
+- Represent imported Markdown files as guidance-backed targets with
+  `implementation.source` and `implementation.source_type`.
+- Preserve native `selected_skills` behavior for real skill package inputs.
+- Extend `agentmf plugin install` with planned `--source` / `--source-type`
+  options while keeping `--skills-dir` compatibility.
+
+Acceptance:
+
+- A `SKILL.md` directory scan still produces the same selectable skill targets.
+- A standalone `SKILL.md` can be imported into a generated AgentMakefile.
+- A project `AGENTS.md` can be imported as a routeable guidance target.
+- A project `CLAUDE.md` can be imported as a routeable guidance target.
+- `agentmf plugin payload` can select imported guidance targets and return
+  `selection_trace`.
+- Existing `agentmf skills scan` and `agentmf plugin install --skills-dir`
+  commands remain compatible.
+
+Plan: `docs/superpowers/plans/2026-05-26-agentmf-guidance-ingestion.md`.
+
+### AMF-HARNESS-001 Target Pipeline IR
+
+Status: implemented.
+
+Goal: make each target a compilable agent harness pipeline instead of only a
+Markdown instruction block or legacy action list.
+
+Implementation:
+
+- Add `pipeline` to normalized `IRTarget`.
+- Normalize legacy `steps: [{action: ...}]` into `action_ops`.
+- Normalize typed `select_context` steps into `context_ops`.
+- Normalize typed `link_prompt` / `prompt` steps into `prompt_ops`.
+- Include policy steps, policy guards, target guards, fallback behavior, skills,
+  policies, deps, and output contracts in the target pipeline.
+- Preserve existing `steps` and `target_contracts` for compatibility.
+- Expose selected `target_pipelines` in runtime dry-run plans.
+
+Acceptance:
+
+- A target with typed steps produces a structured pipeline in the normalized IR.
+- Legacy `action` steps remain valid and appear as action operations.
+- `agentmf run --dry-run` exposes selected target pipelines alongside existing
+  contracts.
+
+### AMF-HARNESS-002 Selected Pipeline in Plugin Payload
+
+Status: implemented.
+
+Goal: let host adapters inspect the selected harness pipeline, not only the
+selected target and skill names.
+
+Implementation:
+
+- Add `selected_pipeline` to `agentmf plugin payload`.
+- Include the selected `target_closure`.
+- Include the runtime `target_pipelines` generated for that closure.
+
+Acceptance:
+
+- Plugin payload JSON includes `selected_pipeline.target_closure`.
+- Plugin payload JSON includes structured target pipeline operations.
+- Existing `selected_skills`, `skill_artifacts`, and `selection_trace` remain
+  unchanged.
+
+### AMF-PAD-015 Benchmark CLI First Slice
+
+Status: planned.
+
+Goal: make AgentMakefile's prompt-size, cache-stability, and skill-selection
+benefits measurable through a deterministic `agentmf benchmark skills` command.
+
+Implementation:
+
+- Add `agentmf benchmark skills`.
+- Reuse plugin payload selection traces, selected skills, stable prefix hashes,
+  and prompt-size comparison data.
+- Support inline cases, JSON output, Markdown output, report writing, and
+  fail-on-mismatch diagnostics for expected labels.
+
+Acceptance:
+
+- A benchmark case can report selected targets, selected skills, selected
+  native skill artifacts, stable prefix hash, baseline size, and savings.
+- Markdown output is suitable for demos and README examples.
+- JSON output is suitable for CI and future benchmark suites.
+
+Plan: `docs/superpowers/plans/2026-05-26-agentmf-benchmark-cli.md`.
+
 ## Post-MVP Runtime Work
 
 These tasks should not block compiler milestones:
@@ -1548,9 +1676,15 @@ Completed:
 - AMF-PAD-008 Superpowers skill routing graph.
 - AMF-PAD-009 skill import and selection optimization.
 - AMF-PAD-010 request normalization and semantic matching.
+- AMF-PAD-011 plugin install skill index bootstrap.
+- AMF-PAD-012 skill-match-derived target routing.
+- AMF-PAD-013 system skill sync and host integration instructions.
+- AMF-HARNESS-001 target pipeline IR.
+- AMF-HARNESS-002 selected pipeline in plugin payload.
 
 Next:
 
-No explicit next task is currently listed.
+- AMF-PAD-014 Multi-Source Guidance Ingestion.
+- AMF-PAD-015 Benchmark CLI First Slice.
 
 This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks through the current `agentmf exec` contract. The next step should be a new milestone decision: either deepen provider-backed execution, package host adapters, or prepare the project for release.

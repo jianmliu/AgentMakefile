@@ -117,6 +117,10 @@ def create_plugin_payload(
         "request": request,
         "selected_targets": list(run_result.plan["link_plan"]["selected_targets"]),
         "selected_skills": selected_skills,
+        "selected_pipeline": {
+            "target_closure": list(run_result.plan["link_plan"]["target_closure"]),
+            "targets": list(run_result.plan.get("target_pipelines", [])),
+        },
         "skill_artifacts": _skill_artifacts(selected_skills),
         "selection_trace": run_result.plan["link_plan"].get("selection_trace", {}),
         "stable_prefix": {
