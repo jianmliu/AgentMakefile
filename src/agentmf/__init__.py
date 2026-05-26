@@ -5,6 +5,7 @@ from agentmf.compiler import CompileResult, compile_agentmakefile
 from agentmf.loader import load_source
 from agentmf.models import AgentMakefileSource
 from agentmf.plugin import PluginPayloadResult, create_plugin_payload
+from agentmf.plugin_install import PluginInstallPayloadResult, create_plugin_install_payload
 from agentmf.prompt import PromptPayloadResult, create_prompt_payload
 from agentmf.runtime import RunPlanResult, create_run_plan
 from agentmf.selector import LinkPlanResult, create_link_plan
@@ -17,6 +18,7 @@ __all__ = [
     "ExecPayloadResult",
     "LinkPlanResult",
     "PluginPayloadResult",
+    "PluginInstallPayloadResult",
     "PromptPayloadResult",
     "RunPlanResult",
     "compile_agentmakefile",
@@ -24,6 +26,7 @@ __all__ = [
     "create_exec_payload",
     "create_link_plan",
     "create_plugin_payload",
+    "create_plugin_install_payload",
     "create_prompt_payload",
     "create_run_plan",
     "load_source",

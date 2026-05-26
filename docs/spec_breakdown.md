@@ -1396,6 +1396,34 @@ Acceptance:
   skills through semantic token overlap.
 - Selection traces show which matching layer caused each candidate to match.
 
+### AMF-PAD-011 Plugin Install Skill Index Bootstrap
+
+Status: implemented.
+
+Goal: make plugin installation bootstrap the skill-selection graph from the
+host's existing native skills, then tell the model to use AgentMakefile payloads
+for request-time skill selection.
+
+Implementation:
+
+- Add `agentmf plugin install`.
+- Scan one or more `--skills-dir` roots through the existing skill scanner.
+- Optionally write the generated skill-index AgentMakefile to
+  `.agentmf/plugin/AgentMakefile` or a caller-provided `--out` path.
+- Return `model_instructions` telling the host/model to call
+  `agentmf plugin payload --file <generated AgentMakefile>` before choosing
+  skills for each request.
+- Include `next_payload_command` so plugin installers can copy or invoke the
+  request-time command directly.
+
+Acceptance:
+
+- A plugin install call can scan an existing `SKILL.md` tree and write a valid
+  AgentMakefile.
+- The generated AgentMakefile works with `agentmf plugin payload`.
+- The install payload explicitly names `selected_skills` and
+  `selection_trace` as the request-time fields the model should inspect.
+
 ## Post-MVP Runtime Work
 
 These tasks should not block compiler milestones:

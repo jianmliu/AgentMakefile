@@ -16,10 +16,28 @@ prompt-prefix linking, volatile context packaging, and trace data.
 
 ## Minimal Command Adapter
 
+A plugin can bootstrap from already-installed skills at install time:
+
+```bash
+agentmf plugin install \
+  --skills-dir ~/.codex/skills \
+  --host codex \
+  --namespace superpowers \
+  --bootstrap-skill using-superpowers \
+  --out .agentmf/plugin/AgentMakefile \
+  --write \
+  --format json
+```
+
+The returned `model_instructions` should be added to the host/plugin bootstrap
+guidance. It tells the model to call `agentmf plugin payload` against the
+generated AgentMakefile before selecting or loading native skills.
+
 A host that can run a local command can request a payload with JSON output:
 
 ```bash
 agentmf plugin payload \
+  --file .agentmf/plugin/AgentMakefile \
   --host codex \
   --request "review code" \
   --format json

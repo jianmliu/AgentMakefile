@@ -103,6 +103,11 @@ direction, a host can scan an existing `SKILL.md` tree into a generated
 AgentMakefile skill-index module, then call `agentmf plugin payload` for each
 user request.
 
+For plugin installation, the adapter should run `agentmf plugin install` over
+the host's configured skill roots. That command writes or returns the generated
+AgentMakefile and emits model-facing instructions that tell the host to call
+`agentmf plugin payload` before choosing skills for each user request.
+
 This makes AgentMakefile useful even before a team has hand-authored modules:
 
 - existing skills remain usable as native platform artifacts
@@ -333,9 +338,10 @@ Native adapters should be thin translators over the generic payload protocol.
 
 ## CLI Surface
 
-Initial plugin command:
+Initial plugin commands:
 
 ```bash
+agentmf plugin install
 agentmf plugin payload [REQUEST]
 ```
 
@@ -354,8 +360,25 @@ Options:
 --format json|text
 ```
 
+`agentmf plugin install` options:
+
+```text
+--skills-dir PATH      # repeatable, scans PATH/*/SKILL.md
+--host codex|claude-code|cursor|opencode|generic
+--namespace NAME
+--package-name NAME
+--package-description TEXT
+--bootstrap-skill NAME
+--out .agentmf/plugin/AgentMakefile
+--write
+--format json|text
+```
+
 Rules:
 
+- `plugin install` is the install-time bootstrap path: scan native skill
+  packages, generate the AgentMakefile skill index, and emit model instructions
+  to use `plugin payload` at request time.
 - Positional `REQUEST` and `--request` are mutually exclusive.
 - `--target` bypasses request matching.
 - `--plan` is loaded into volatile context only.

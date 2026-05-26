@@ -10,6 +10,7 @@ from agentmf.ask import create_ask_payload
 from agentmf.compiler import compile_agentmakefile
 from agentmf.loader import load_source_with_diagnostics
 from agentmf.plugin import create_plugin_payload
+from agentmf.plugin_install import DEFAULT_PLUGIN_AGENTMAKEFILE, create_plugin_install_payload
 from agentmf.prompt import create_prompt_payload
 from agentmf.runtime import create_run_plan
 from agentmf.selector import create_link_plan
@@ -108,6 +109,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     plugin_payload_cmd.add_argument("--include-git-diff", action="store_true")
     plugin_payload_cmd.add_argument("--context-file", action="append", dest="context_files")
     plugin_payload_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    plugin_install_cmd = plugin_subcommands.add_parser(
+        "install",
+        help="scan skills into a plugin AgentMakefile and emit model instructions",
+    )
+    plugin_install_cmd.add_argument("--skills-dir", action="append", dest="skills_dirs", required=True)
+    plugin_install_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    plugin_install_cmd.add_argument("--namespace")
+    plugin_install_cmd.add_argument("--package-name", default="scanned-skills")
+    plugin_install_cmd.add_argument("--package-description")
+    plugin_install_cmd.add_argument("--bootstrap-skill")
+    plugin_install_cmd.add_argument("--out", default=str(DEFAULT_PLUGIN_AGENTMAKEFILE))
+    plugin_install_cmd.add_argument("--write", action="store_true")
+    plugin_install_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
     skills_cmd = subparsers.add_parser("skills", help="skill index commands")
     skills_subcommands = skills_cmd.add_subparsers(dest="skills_command", required=True)
@@ -480,6 +494,8 @@ def _exec(args: argparse.Namespace) -> int:
 def _plugin(args: argparse.Namespace) -> int:
     if args.plugin_command == "payload":
         return _plugin_payload(args)
+    if args.plugin_command == "install":
+        return _plugin_install(args)
     return 2
 
 
@@ -562,6 +578,43 @@ def _plugin_payload(args: argparse.Namespace) -> int:
             prefix = result.payload["stable_prefix"]
             print(f"  stable prefix: {prefix['chars']} chars, ~{prefix['approx_tokens']} tokens")
             print(f"  stable prefix hash: {prefix['hash']}")
+    return 1 if not result.ok else 0
+
+
+def _plugin_install(args: argparse.Namespace) -> int:
+    result = create_plugin_install_payload(
+        skill_dirs=[Path(path) for path in args.skills_dirs],
+        host=args.host,
+        namespace=args.namespace,
+        package_name=args.package_name,
+        package_description=args.package_description,
+        bootstrap_skill=args.bootstrap_skill,
+        out_path=Path(args.out),
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "plugin_install_payload": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print("Plugin install payload:")
+            print(f"  host: {result.payload['host']}")
+            print(f"  AgentMakefile: {result.payload['agentmakefile']['path']}")
+            print(f"  wrote: {result.payload['agentmakefile']['wrote']}")
+            print(f"  next payload command: {result.payload['next_payload_command']}")
+            print("\nModel instructions:")
+            print(result.payload["model_instructions"])
     return 1 if not result.ok else 0
 
 

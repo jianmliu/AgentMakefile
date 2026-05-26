@@ -21,20 +21,25 @@ skill-index module, and lets the plugin payload optimize which skills should be
 loaded for a specific request.
 
 ```bash
-agentmf skills scan \
+agentmf plugin install \
   --skills-dir ~/.codex/skills \
+  --host codex \
   --namespace superpowers \
   --bootstrap-skill using-superpowers \
   --package-name scanned-superpowers \
   --out /tmp/superpowers.AgentMakefile \
-  --write
+  --write \
+  --format json
 ```
 
 The generated AgentMakefile contains one `skills:` entry and one `skill.*`
 target per scanned skill. When `--bootstrap-skill` is provided, every
 non-bootstrap skill target depends on that bootstrap target. This converts
 bootstrap rules such as `using-superpowers` into explicit dependency edges.
-A host can then use the same runtime selection path:
+The install payload also includes `model_instructions` and
+`next_payload_command`, which tell the host/model to run the request-time
+payload command before loading skills. A host can then use the same runtime
+selection path:
 
 ```bash
 agentmf plugin payload \

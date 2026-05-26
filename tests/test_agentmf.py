@@ -719,6 +719,109 @@ def test_cli_skills_scan_writes_valid_agentmakefile_for_plugin_skill_selection(t
     ]
 
 
+def test_plugin_install_scans_skills_and_instructs_model_to_use_payload(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir,
+        "using-superpowers",
+        "Use when starting any development task and choosing the relevant skill.",
+        "## When to Use\n\n- Any development task\n- Choose workflow\n",
+    )
+    _write_skill(
+        skills_dir,
+        "test-driven-development",
+        "Use when implementing any feature or bugfix, before writing implementation code.",
+        "## When to Use\n\n- New features\n- Bug fixes\n",
+    )
+    agentmakefile = tmp_path / ".agentmf" / "plugin" / "AgentMakefile"
+
+    from agentmf.plugin import create_plugin_payload
+    from agentmf.plugin_install import create_plugin_install_payload
+
+    install = create_plugin_install_payload(
+        skill_dirs=[skills_dir],
+        host="codex",
+        namespace="superpowers",
+        package_name="scanned-superpowers",
+        bootstrap_skill="using-superpowers",
+        out_path=agentmakefile,
+        write=True,
+    )
+
+    assert install.ok, install.diagnostics.format()
+    assert agentmakefile.exists()
+    assert install.payload["agentmakefile"]["path"] == str(agentmakefile)
+    assert install.payload["agentmakefile"]["wrote"] is True
+    assert "agentmf plugin payload" in install.payload["model_instructions"]
+    assert "--file" in install.payload["next_payload_command"]
+    assert str(agentmakefile) in install.payload["next_payload_command"]
+
+    selected = create_plugin_payload(
+        path=agentmakefile,
+        host="codex",
+        request="implement this feature",
+    )
+
+    assert selected.ok, selected.diagnostics.format()
+    assert selected.payload["selected_targets"] == ["skill.test-driven-development"]
+    assert selected.payload["selected_skills"] == [
+        "superpowers:using-superpowers",
+        "superpowers:test-driven-development",
+    ]
+
+
+def test_cli_plugin_install_outputs_json_model_instruction(tmp_path: Path, capsys) -> None:
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir,
+        "using-superpowers",
+        "Use when starting any development task and choosing the relevant skill.",
+        "## When to Use\n\n- Any development task\n",
+    )
+    _write_skill(
+        skills_dir,
+        "writing-plans",
+        "Use when you have a spec or requirements for a multi-step task, before touching code.",
+        "## When to Use\n\n- Implementation plans\n- Break down specs\n",
+    )
+    agentmakefile = tmp_path / "PluginAgentMakefile"
+
+    exit_code = main(
+        [
+            "plugin",
+            "install",
+            "--skills-dir",
+            str(skills_dir),
+            "--host",
+            "codex",
+            "--namespace",
+            "superpowers",
+            "--package-name",
+            "scanned-superpowers",
+            "--bootstrap-skill",
+            "using-superpowers",
+            "--out",
+            str(agentmakefile),
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    install_payload = payload["plugin_install_payload"]
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert agentmakefile.exists()
+    assert install_payload["host"] == "codex"
+    assert install_payload["agentmakefile"]["path"] == str(agentmakefile)
+    assert "agentmf plugin payload" in install_payload["model_instructions"]
+    assert "selected_skills" in install_payload["model_instructions"]
+    assert "selection_trace" in install_payload["model_instructions"]
+
+
 def test_skill_scan_keeps_feature_implementation_from_routing_to_review_skill(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"
     _write_skill(

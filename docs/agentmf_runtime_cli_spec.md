@@ -39,7 +39,7 @@ There is also a reverse-input mode for existing skill ecosystems:
 
 ```text
 existing SKILL.md packages
-  -> agentmf skills scan
+  -> agentmf plugin install
   -> generated AgentMakefile skill-index module
   -> agentmf plugin payload
   -> selected skills + selection_trace + stable prefix
@@ -49,7 +49,9 @@ existing SKILL.md packages
 This mode makes skill selection optimization a first-class runtime use case.
 Instead of loading an all-in-one skill index, a host can ask AgentMakefile which
 skill-backed targets match the current request, inspect the explanation, and
-load only the relevant native skill artifacts.
+load only the relevant native skill artifacts. `agentmf skills scan` remains
+the lower-level import primitive; `agentmf plugin install` wraps it with
+install-time model instructions for plugin hosts.
 
 ## Goals
 

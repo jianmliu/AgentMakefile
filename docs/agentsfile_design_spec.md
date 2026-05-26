@@ -3168,6 +3168,8 @@ agentmf compile --target cursor-rule
 agentmf compile --target claude-skill
 agentmf compile --target codex-skill
 agentmf compile --target skills-index
+agentmf plugin install --skills-dir <dir> --out .agentmf/plugin/AgentMakefile --write
+agentmf plugin payload --file .agentmf/plugin/AgentMakefile --request <text>
 agentmf skills scan --skills-dir <dir> --out AgentMakefile
 agentmf compile --all
 ```
@@ -3763,7 +3765,26 @@ Behavior:
 * when a bootstrap skill is configured, emit that bootstrap target as a
   dependency of all other generated skill targets
 * keep generated AgentMakefile output as an import/bridge path; curated modules
-  may still replace or refine generated match rules later
+  can still replace it as the long-term source of truth
+
+#### plugin install
+
+Input:
+
+```text
+<skills-dir>/*/SKILL.md
+```
+
+Behavior:
+
+* wrap `skills scan` for plugin installation
+* optionally write the generated skill-index AgentMakefile to
+  `.agentmf/plugin/AgentMakefile` or the caller's `--out` path
+* return `model_instructions` telling the host/model to call
+  `agentmf plugin payload` before selecting skills for each user request
+* return `next_payload_command` so adapters can invoke the request-time
+  selection path directly
+* keep request-specific selection in `plugin payload`, not in the install step
 
 ---
 

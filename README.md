@@ -7,7 +7,7 @@ AgentMakefile is a Makefile-style build system for agent prompt prefixes. It tre
 AgentMakefile now has two primary flows:
 
 - **Author once, compile everywhere**: write or maintain an AgentMakefile as the source of truth, then generate platform-native guidance such as `AGENTS.md`, `CLAUDE.md`, Cursor rules, `skills/index.md`, and Claude/Codex `SKILL.md` packages.
-- **Import existing skills, optimize selection**: scan existing `SKILL.md` directories into a generated AgentMakefile skill-index module, then use `agentmf plugin payload` to choose the request-specific skills, explain the selection with `selection_trace`, and expose native skill artifact paths to the host. Request matching uses deterministic normalization, a small built-in translation/alias layer, and lightweight semantic token overlap.
+- **Import existing skills, optimize selection**: plugin install can scan existing `SKILL.md` directories into a generated AgentMakefile skill-index module, then instruct the host/model to use `agentmf plugin payload` for request-specific skill choice, `selection_trace` rationale, and native skill artifact paths. Request matching uses deterministic normalization, a small built-in translation/alias layer, and lightweight semantic token overlap.
 
 Static files are the compatibility path for existing agents. The deeper integration path is runtime prompt-prefix assembly: an agent runtime consumes AgentMakefile IR directly, selects the relevant target and dependency graph for the current request, reuses stable prefix chunks, and appends volatile task context only at the end.
 
@@ -45,6 +45,7 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `agentmf prompt` emits a deterministic final prompt payload by combining the selected stable prefix with volatile request, plan, context-file, and git context, without calling a model or running tools.
 - `agentmf ask` reuses the same prompt payload path and runs a one-shot provider call; the first provider is the deterministic local `echo` adapter.
 - `agentmf exec --apply --tool-call TOOL:INPUT` is the first gated tool-loop prototype: it evaluates guards and permissions, applies prototype sandbox preflight checks, records the provider tool-call interception contract, runs only explicitly allowed tool calls, and plans or optionally executes internal fallback actions for blocked calls.
+- `agentmf plugin install` scans existing skills, writes a plugin-local AgentMakefile when requested, and emits model instructions telling hosts to call `agentmf plugin payload` before loading skills.
 - `agentmf plugin payload` exposes `selected_skills`, generated Codex/Claude skill artifact paths, and `selection_trace` rationale so host adapters can use AgentMakefile as an explainable skill-routing layer.
 - `agentmf skills scan` imports existing `SKILL.md` directories into a generated AgentMakefile skill-index module, with an optional bootstrap skill represented as an explicit target dependency.
 - Request selection normalizes punctuation and hyphenation, expands common Chinese/English development intents, and falls back to deterministic token-overlap matching before returning `AMF118`.
@@ -68,6 +69,7 @@ agentmf run --file AgentMakefile --target project.default --dry-run --output-jso
 agentmf prompt --file AgentMakefile --request "review code" --plan docs/superpowers/plans/2026-05-25-agentmf-plugin-adapter.md --include-git-status --format json
 agentmf ask --file AgentMakefile --request "review code" --provider echo --format json
 agentmf exec --file modules/unknown-repo-security/AgentMakefile --target repo.security_review --provider echo --tool-call "bash:git status" --sandbox-profile read-only --execute-fallbacks --apply --format json
+agentmf plugin install --skills-dir ~/.codex/skills --namespace superpowers --bootstrap-skill using-superpowers --out .agentmf/plugin/AgentMakefile --write --format json
 agentmf plugin payload --host codex --request "review code" --format json
 agentmf plugin payload --host codex --target project.default --plan docs/superpowers/plans/2026-05-25-agentmf-plugin-adapter.md --include-git-status --format json
 agentmf skills scan --skills-dir ~/.codex/skills --namespace superpowers --bootstrap-skill using-superpowers --out /tmp/superpowers.AgentMakefile --write
