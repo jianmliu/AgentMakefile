@@ -209,6 +209,9 @@ requires `--apply`; autonomous model-driven tool selection remains future work.
 --target NAME
 --backend agents-fragments|claude-fragments
 --tool-call TOOL:INPUT
+--output-json JSON
+--sandbox-profile none|read-only|workspace-write
+--execute-fallbacks
 --format text|json
 --trace PATH
 --dry-run
@@ -398,6 +401,87 @@ The first prototype requires `--apply`, accepts explicit `--tool-call`
 arguments, supports the local `bash` tool, and blocks any call whose permission
 decision is `ask` or `deny`.
 
+### AMF-M4-010 Output Validation Dry-Run
+
+Status: implemented.
+
+Evaluate proposed output objects against selected target output contracts
+without executing workflow steps. `agentmf run --dry-run --output-json JSON`
+checks selected target and policy `output_format` entries plus
+`output_schema.required` fields, then reports missing fields and valid/invalid
+status in `output_validation`.
+
+### AMF-M4-011 Fallback Handling for Blocked Tool Calls
+
+Status: implemented.
+
+When `agentmf exec` blocks a tool call because its permission action is `ask` or
+`deny`, the prototype now emits a dry-run `fallback_handling` plan. It maps the
+blocked call to selected target `fallback.blocked` actions when available and
+does not execute fallback actions automatically.
+
+### AMF-M4-012 Sandbox Profile Metadata
+
+Status: implemented.
+
+Add `agentmf exec --sandbox-profile` metadata for `none`, `read-only`, and
+`workspace-write`. The first implementation records requested sandbox posture
+in the exec payload; AMF-M4-014 extends this from metadata into prototype
+preflight enforcement for supported local tool calls.
+
+### AMF-M4-013 Richer Output Schema Validation
+
+Status: implemented.
+
+Extend output validation beyond required-field checks by evaluating simple
+JSON-schema `properties.<field>.type` constraints. The current validator
+supports `string`, `array`, `object`, `boolean`, `integer`, `number`, and
+`null`, and reports type errors alongside missing fields.
+
+### AMF-M4-014 Sandbox Enforcement Integration
+
+Status: implemented.
+
+Apply sandbox profile decisions inside `agentmf exec` before local tool
+execution. The prototype enforces `read-only` by blocking obvious write-like
+bash commands such as `touch`, `rm`, `mv`, `cp`, `mkdir`, `tee`, and shell
+write redirections even when permission rules would otherwise allow the call.
+The `workspace-write` profile allows normal workspace-local writes while
+blocking simple write operands that target absolute paths or parent-directory
+escapes. This is a local preflight integration layer, not a replacement for a
+host OS sandbox.
+
+### AMF-M4-015 Fallback Execution Prototype
+
+Status: implemented.
+
+Add `agentmf exec --execute-fallbacks` to opt into running selected target
+`fallback.blocked` actions after a tool call is blocked. The current execution
+engine is intentionally internal-only: each fallback action records an
+`internal_noop` result so hosts can verify fallback routing and payload shape
+without granting fallback actions their own external tool authority.
+
+### AMF-M4-016 Provider-Backed Tool-Call Interception Contract
+
+Status: implemented.
+
+Add a structured `tool_interception` contract to `agentmf exec` payloads. The
+contract records the provider identity, the expected host/provider event flow,
+each provider tool-call id, the permission and sandbox decisions applied by
+AgentMakefile, and the result status that the host would return to the
+provider. This keeps the current prototype deterministic while defining the
+boundary a real provider-backed loop must honor before executing tools.
+
+### AMF-M4-017 Full JSON Schema Validator Integration
+
+Status: implemented.
+
+Replace the handwritten output-schema type checker with `jsonschema`-backed
+validation while preserving the existing `missing_fields` and `type_errors`
+compatibility fields. Runtime output validation now also reports
+`schema_errors` for full JSON Schema constraints such as `enum`, `minItems`,
+`additionalProperties`, and nested `items` schemas.
+
 ## Acceptance Criteria
 
 - Users can generate a final prompt from a request without a model call.
@@ -412,3 +496,14 @@ decision is `ask` or `deny`.
   tools.
 - Tool execution is available only through the explicitly gated `agentmf exec`
   prototype.
+- Output validation dry-run explains missing output contract fields.
+- Blocked tool calls report planned fallback actions when configured.
+- Exec payloads apply prototype sandbox preflight checks for supported local
+  tool calls.
+- Output validation reports simple schema type mismatches.
+- `agentmf exec --execute-fallbacks` records executed internal fallback results
+  for blocked tool calls with configured fallback actions.
+- Exec payloads expose a provider tool-call interception contract tying
+  provider requests to permission, sandbox, and host result decisions.
+- Output validation reports full JSON Schema constraint failures as structured
+  schema errors.

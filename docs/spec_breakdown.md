@@ -853,6 +853,208 @@ Acceptance:
 - Allowed bash calls execute and capture stdout/stderr.
 - `ask` and `deny` calls are blocked and not executed.
 
+### AMF-M4-010 Add Output Validation Dry-Run
+
+Status: implemented.
+
+Goal: evaluate proposed runtime outputs against selected target output
+contracts without executing workflow steps.
+
+Implementation:
+
+- Add `proposed_output` to `agentmf.runtime.create_run_plan`.
+- Add `agentmf run --output-json JSON`.
+- Add `output_validation` to runtime dry-run output.
+- Validate selected target and policy `output_format` entries as required
+  fields.
+- Validate `output_schema.required` entries as required fields.
+- Mark the output validation runtime phase as `evaluated_dry_run` when a
+  proposed output object is supplied.
+
+Acceptance:
+
+- JSON dry-run output reports required fields, present fields, missing fields,
+  and valid/invalid status.
+- Complete proposed outputs are marked valid.
+- Missing output contract fields are marked invalid.
+- Output validation dry-run never executes workflow steps.
+
+### AMF-M4-011 Add Fallback Handling for Blocked Tool Calls
+
+Status: implemented.
+
+Goal: make blocked tool calls produce a traceable fallback plan without
+executing fallback actions automatically.
+
+Implementation:
+
+- Add `fallback_handling` to `agentmf exec` payloads.
+- Detect blocked tool results from permission `ask`, permission `deny`, and
+  unsupported tools.
+- Map blocked tool calls to selected target `fallback.blocked` actions.
+- Report planned fallback actions with target, trigger, and status.
+- Report `not_planned` when a call is blocked and no selected target defines a
+  matching fallback.
+
+Acceptance:
+
+- Blocked tool calls include planned fallback actions when the target defines
+  `fallback.blocked`.
+- Blocked tool calls without fallback contracts are reported as `not_planned`.
+- Fallback handling is dry-run only and does not execute fallback actions.
+
+### AMF-M4-012 Add Sandbox Profile Metadata for Exec
+
+Status: implemented.
+
+Goal: make `agentmf exec` expose requested sandbox posture in structured
+payloads.
+
+Implementation:
+
+- Add `sandbox_profile` to `agentmf.tool_loop.create_exec_payload`.
+- Add `agentmf exec --sandbox-profile none|read-only|workspace-write`.
+- Include `sandbox` metadata in exec payloads with profile, filesystem,
+  network, supported profiles, mode, and enforcement status.
+- Include the selected sandbox profile in `execution.sandbox_profile`.
+- Reject unknown sandbox profiles with stable diagnostic `AMF143`.
+
+Acceptance:
+
+- Exec payloads include sandbox metadata for the requested profile.
+- CLI `agentmf exec --sandbox-profile ...` passes the selected profile through
+  to the payload.
+- Unknown sandbox profiles are rejected before runtime planning or tool
+  execution.
+- Sandbox profile payloads make the current enforcement mode explicit.
+
+### AMF-M4-013 Add Richer Output Schema Validation
+
+Status: implemented.
+
+Goal: validate basic JSON schema property types in addition to required output
+fields.
+
+Implementation:
+
+- Extend runtime output validation to inspect `output_schema.properties`.
+- Support simple JSON-schema `type` values: `string`, `array`, `object`,
+  `boolean`, `integer`, `number`, and `null`.
+- Report type mismatches as `type_errors` with field, expected type, and actual
+  type.
+- Keep unsupported schema keywords ignored until a full JSON Schema validator
+  milestone.
+
+Acceptance:
+
+- Output validation reports type errors for mismatched schema property types.
+- Valid proposed outputs with matching property types remain valid.
+- Missing-field and type-error results are reported together in the same
+  dry-run payload.
+
+### AMF-M4-014 Add Sandbox Enforcement Integration
+
+Status: implemented.
+
+Goal: make `agentmf exec` apply the requested sandbox profile before running
+local tool calls.
+
+Implementation:
+
+- Mark `read-only` and `workspace-write` sandbox profiles as prototype
+  preflight-enforced in exec payloads.
+- Block obvious write-like bash commands and write redirections under the
+  `read-only` profile even when permissions allow the command.
+- Allow workspace-local write-like commands under `workspace-write`.
+- Block simple absolute-path or parent-directory write operands under
+  `workspace-write`.
+- Report sandbox blocks as structured blocked tool results with a stable
+  reason and selected sandbox profile.
+
+Acceptance:
+
+- `read-only` blocks allowed write-like bash calls before subprocess execution.
+- `workspace-write` allows allowed workspace-local write calls.
+- Sandbox-blocked calls include `reason`, `permission_action`, and
+  `sandbox_profile` in the tool result.
+
+### AMF-M4-015 Add Fallback Execution Prototype
+
+Status: implemented.
+
+Goal: let hosts opt into executing selected target fallback actions for blocked
+tool calls without granting fallback actions external tool authority.
+
+Implementation:
+
+- Add `execute_fallbacks` to `create_exec_payload`.
+- Add `agentmf exec --execute-fallbacks`.
+- Keep default fallback behavior as dry-run planning.
+- When enabled, record each configured `fallback.blocked` action as an
+  executed internal no-op result.
+- Report fallback execution status in JSON payloads and text output.
+
+Acceptance:
+
+- `agentmf exec` defaults to planned fallback actions only.
+- `agentmf exec --execute-fallbacks` records executed fallback results for
+  blocked calls with configured fallback actions.
+- Fallback execution uses `internal_noop` and does not run additional external
+  tools.
+
+### AMF-M4-016 Add Provider-Backed Tool-Call Interception Contract
+
+Status: implemented.
+
+Goal: define the host/runtime boundary for provider-requested tool calls before
+introducing an autonomous provider-driven loop.
+
+Implementation:
+
+- Add `provider` to `create_exec_payload`.
+- Add `agentmf exec --provider`.
+- Preserve optional provider tool-call ids through permission evaluation and
+  tool results.
+- Add `tool_interception` to exec payloads with provider identity, event flow,
+  host boundary responsibilities, per-call permission action, sandbox profile,
+  final interception decision, block reason, and result status.
+- Keep execution deterministic; the provider is not called from `agentmf exec`
+  in this milestone.
+
+Acceptance:
+
+- API callers can provide provider tool-call ids and see them in the
+  interception contract.
+- CLI callers can set `agentmf exec --provider`.
+- Interception records tie each provider tool-call request to permission,
+  sandbox, and host-result decisions.
+
+### AMF-M4-017 Add Full JSON Schema Validator Integration
+
+Status: implemented.
+
+Goal: replace the simple output property type checker with JSON Schema
+validation while keeping the previous output validation fields stable.
+
+Implementation:
+
+- Add `jsonschema` as a runtime dependency.
+- Validate policy and target `output_schema` contracts with
+  `Draft202012Validator`.
+- Preserve `required_fields`, `missing_fields`, and `type_errors` output for
+  compatibility.
+- Add `schema_errors` for full JSON Schema failures not already represented by
+  `missing_fields` or `type_errors`.
+- Report deterministic source, path, validator, and message fields for each
+  schema error.
+
+Acceptance:
+
+- Output validation reports nested JSON Schema failures such as `enum`,
+  `minItems`, `items`, and `additionalProperties`.
+- Existing missing-field and type-error contracts remain available.
+- Full-schema failures mark output validation invalid.
+
 ### AMF-M4-CLI-000 Specify Prompt-Aware Runtime CLI
 
 Status: documented.
@@ -1028,10 +1230,9 @@ Acceptance:
 
 These tasks should not block compiler milestones:
 
-- Host-level tool-call interception.
-- Sandbox integration.
-- Output validation.
-- Fallback execution.
+- Provider-backed tool-call interception beyond the current contract.
+- Host OS sandbox integration beyond prototype preflight checks.
+- External fallback actions beyond internal no-op execution.
 
 ## Recommended Execution Order
 
@@ -1072,6 +1273,14 @@ Completed:
 - AMF-M4-007 provider adapter for one-shot `agentmf ask`.
 - AMF-M4-008 permission dry-run for proposed tool calls.
 - AMF-M4-009 gated tool loop prototype.
+- AMF-M4-010 output validation dry-run.
+- AMF-M4-011 fallback handling for blocked tool calls.
+- AMF-M4-012 sandbox profile metadata for exec.
+- AMF-M4-013 richer output schema validation.
+- AMF-M4-014 sandbox enforcement integration.
+- AMF-M4-015 fallback execution prototype.
+- AMF-M4-016 provider-backed tool-call interception contract.
+- AMF-M4-017 full JSON Schema validator integration.
 - AMF-M4-CLI-000 prompt-aware runtime CLI spec.
 - AMF-PAD-001 plugin adapter protocol spec.
 - AMF-PAD-002 plugin payload builder.
@@ -1082,7 +1291,6 @@ Completed:
 
 Next:
 
-1. AMF-M4-010 output validation dry-run.
-2. AMF-M4-011 fallback handling for blocked tool calls.
+No explicit next task is currently listed.
 
-This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks. The next runtime work should validate outputs and blocked-call fallback behavior now that prompt assembly, guard dry-run, permission dry-run, provider adapter seams, and a gated tool-loop prototype exist.
+This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks through the current `agentmf exec` contract. The next step should be a new milestone decision: either deepen provider-backed execution, package host adapters, or prepare the project for release.

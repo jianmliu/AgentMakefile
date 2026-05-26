@@ -49,6 +49,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
     run_cmd.add_argument("--dry-run", action="store_true")
     run_cmd.add_argument("--permission-check", action="append", dest="permission_checks")
+    run_cmd.add_argument("--output-json")
     run_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
     prompt_cmd = subparsers.add_parser("prompt", help="emit a deterministic prompt payload")
@@ -86,6 +87,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     exec_cmd.add_argument("--target", action="append", dest="targets")
     exec_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
     exec_cmd.add_argument("--tool-call", action="append", dest="tool_calls")
+    exec_cmd.add_argument("--provider", default="host")
+    exec_cmd.add_argument("--sandbox-profile", choices=["none", "read-only", "workspace-write"], default="workspace-write")
+    exec_cmd.add_argument("--execute-fallbacks", action="store_true")
     exec_cmd.add_argument("--apply", action="store_true")
     exec_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
@@ -215,6 +219,9 @@ def _select(args: argparse.Namespace) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     proposed_tool_calls = _parse_permission_checks(args.permission_checks)
+    proposed_output = _parse_output_json(args.output_json)
+    if proposed_output is _INVALID_OUTPUT_JSON:
+        return 2
     result = create_run_plan(
         path=Path(args.file),
         request=args.request,
@@ -222,6 +229,7 @@ def _run(args: argparse.Namespace) -> int:
         backend=args.backend,
         dry_run=args.dry_run,
         proposed_tool_calls=proposed_tool_calls,
+        proposed_output=proposed_output,
     )
     if args.format == "json":
         print(
@@ -283,8 +291,30 @@ def _run(args: argparse.Namespace) -> int:
                     "  permission: "
                     f"{tool_call['tool']} {tool_call['input']} -> {tool_call['action']}"
                 )
+            output_validation = result.plan["output_validation"]
+            print(
+                "  output validation: "
+                f"{output_validation['status']}, provided={output_validation['provided']}"
+            )
             print("  execution: not performed")
     return 1 if not result.ok else 0
+
+
+_INVALID_OUTPUT_JSON = object()
+
+
+def _parse_output_json(output_json: Optional[str]) -> Optional[dict]:
+    if output_json is None:
+        return None
+    try:
+        payload = json.loads(output_json)
+    except json.JSONDecodeError as exc:
+        print(f"error: invalid --output-json: {exc}", file=sys.stderr)
+        return _INVALID_OUTPUT_JSON
+    if not isinstance(payload, dict):
+        print("error: --output-json must decode to a JSON object", file=sys.stderr)
+        return _INVALID_OUTPUT_JSON
+    return payload
 
 
 def _parse_permission_checks(permission_checks: Optional[List[str]]) -> List[dict]:
@@ -387,7 +417,10 @@ def _exec(args: argparse.Namespace) -> int:
         target_names=args.targets,
         backend=args.backend,
         tool_calls=_parse_tool_call_specs(args.tool_calls),
+        provider=args.provider,
         apply=args.apply,
+        sandbox_profile=args.sandbox_profile,
+        execute_fallbacks=args.execute_fallbacks,
     )
     if args.format == "json":
         print(
@@ -422,6 +455,11 @@ def _exec(args: argparse.Namespace) -> int:
                         "  blocked: "
                         f"{tool_result['tool']} {tool_result['input']} ({tool_result['reason']})"
                     )
+            fallback_handling = result.payload["fallback_handling"]
+            print(
+                "  fallback handling: "
+                f"{fallback_handling['status']}, executed={fallback_handling['executed']}"
+            )
     return 1 if not result.ok else 0
 
 

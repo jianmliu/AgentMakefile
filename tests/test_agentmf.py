@@ -2215,6 +2215,288 @@ permissions:
     ]
 
 
+def test_runtime_output_validation_dry_run_reports_missing_fields(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    output_format:
+      - findings
+      - verification_result
+    output_schema:
+      required:
+        - changed_files
+        - risk_summary
+    steps:
+      - action: review_code
+""",
+    )
+
+    result = create_run_plan(
+        path,
+        target_names=["review.task"],
+        dry_run=True,
+        proposed_output={
+            "findings": [],
+            "changed_files": ["src/example.py"],
+        },
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["runtime_phases"][6] == {
+        "name": "output_validation",
+        "status": "evaluated_dry_run",
+    }
+    assert result.plan["output_validation"] == {
+        "mode": "dry_run",
+        "executed": False,
+        "provided": True,
+        "status": "invalid",
+        "targets": [
+            {
+                "target": "review.task",
+                "required_fields": [
+                    "findings",
+                    "verification_result",
+                    "changed_files",
+                    "risk_summary",
+                ],
+                "present_fields": ["changed_files", "findings"],
+                "missing_fields": ["verification_result", "risk_summary"],
+                "type_errors": [],
+                "status": "invalid",
+            }
+        ],
+    }
+
+
+def test_runtime_output_validation_dry_run_accepts_complete_output(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+policies:
+  verify_policy:
+    output_format:
+      - risk_summary
+targets:
+  review.task:
+    policies:
+      - verify_policy
+    output_format:
+      - findings
+    output_schema:
+      required:
+        - changed_files
+    steps:
+      - action: review_code
+""",
+    )
+
+    result = create_run_plan(
+        path,
+        target_names=["review.task"],
+        dry_run=True,
+        proposed_output={
+            "findings": [],
+            "risk_summary": "low",
+            "changed_files": ["src/example.py"],
+        },
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["output_validation"]["status"] == "valid"
+    assert result.plan["output_validation"]["targets"] == [
+        {
+            "target": "review.task",
+            "required_fields": ["risk_summary", "findings", "changed_files"],
+            "present_fields": ["changed_files", "findings", "risk_summary"],
+            "missing_fields": [],
+            "type_errors": [],
+            "status": "valid",
+        }
+    ]
+
+
+def test_runtime_output_validation_dry_run_reports_schema_type_errors(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    output_schema:
+      type: object
+      required:
+        - summary
+        - changed_files
+        - risk_score
+        - approved
+      properties:
+        summary:
+          type: string
+        changed_files:
+          type: array
+        risk_score:
+          type: number
+        approved:
+          type: boolean
+    steps:
+      - action: review_code
+""",
+    )
+
+    result = create_run_plan(
+        path,
+        target_names=["review.task"],
+        dry_run=True,
+        proposed_output={
+            "summary": 42,
+            "changed_files": "src/example.py",
+            "risk_score": "high",
+            "approved": "yes",
+        },
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["output_validation"]["status"] == "invalid"
+    assert result.plan["output_validation"]["targets"] == [
+        {
+            "target": "review.task",
+            "required_fields": ["summary", "changed_files", "risk_score", "approved"],
+            "present_fields": ["approved", "changed_files", "risk_score", "summary"],
+            "missing_fields": [],
+            "type_errors": [
+                {"field": "approved", "expected": "boolean", "actual": "string"},
+                {"field": "changed_files", "expected": "array", "actual": "string"},
+                {"field": "risk_score", "expected": "number", "actual": "string"},
+                {"field": "summary", "expected": "string", "actual": "integer"},
+            ],
+            "status": "invalid",
+        }
+    ]
+
+
+def test_runtime_output_validation_dry_run_accepts_schema_types(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    output_schema:
+      type: object
+      required:
+        - summary
+        - changed_files
+        - risk_score
+        - approved
+      properties:
+        summary:
+          type: string
+        changed_files:
+          type: array
+        risk_score:
+          type: number
+        approved:
+          type: boolean
+    steps:
+      - action: review_code
+""",
+    )
+
+    result = create_run_plan(
+        path,
+        target_names=["review.task"],
+        dry_run=True,
+        proposed_output={
+            "summary": "ok",
+            "changed_files": ["src/example.py"],
+            "risk_score": 0.5,
+            "approved": True,
+        },
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["output_validation"]["status"] == "valid"
+    assert result.plan["output_validation"]["targets"] == [
+        {
+            "target": "review.task",
+            "required_fields": ["summary", "changed_files", "risk_score", "approved"],
+            "present_fields": ["approved", "changed_files", "risk_score", "summary"],
+            "missing_fields": [],
+            "type_errors": [],
+            "status": "valid",
+        }
+    ]
+
+
+def test_runtime_output_validation_dry_run_reports_json_schema_errors(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    output_schema:
+      type: object
+      required:
+        - findings
+      properties:
+        findings:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required:
+              - severity
+            properties:
+              severity:
+                type: string
+                enum:
+                  - low
+                  - medium
+                  - high
+            additionalProperties: false
+      additionalProperties: false
+    steps:
+      - action: review_code
+""",
+    )
+
+    result = create_run_plan(
+        path,
+        target_names=["review.task"],
+        dry_run=True,
+        proposed_output={
+            "findings": [
+                {
+                    "severity": "critical",
+                    "extra": True,
+                }
+            ],
+            "unexpected": "field",
+        },
+    )
+
+    assert result.ok, result.diagnostics.format()
+    target = result.plan["output_validation"]["targets"][0]
+    assert result.plan["output_validation"]["status"] == "invalid"
+    assert target["status"] == "invalid"
+    assert target["missing_fields"] == []
+    assert [
+        (error["source"], error["path"], error["validator"])
+        for error in target["schema_errors"]
+    ] == [
+        ("target", [], "additionalProperties"),
+        ("target", ["findings"], "minItems"),
+        ("target", ["findings", 0], "additionalProperties"),
+        ("target", ["findings", 0, "severity"], "enum"),
+    ]
+
+
 def test_runtime_execution_without_dry_run_is_rejected(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -2394,6 +2676,45 @@ permissions:
     ]
 
 
+def test_cli_run_dry_run_accepts_output_json_validation(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    output_format:
+      - findings
+      - verification_result
+    steps:
+      - action: review_code
+""",
+    )
+
+    exit_code = main(
+        [
+            "run",
+            "--file",
+            str(path),
+            "--target",
+            "review.task",
+            "--dry-run",
+            "--output-json",
+            '{"findings": []}',
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["runtime_plan"]["output_validation"]["status"] == "invalid"
+    assert payload["runtime_plan"]["output_validation"]["targets"][0]["missing_fields"] == [
+        "verification_result"
+    ]
+
+
 def test_exec_payload_requires_apply_before_tool_execution(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -2475,6 +2796,7 @@ permissions:
         "applied": True,
         "tool_loop": "prototype",
         "supported_tools": ["bash"],
+        "sandbox_profile": "workspace-write",
     }
     assert result.payload["runtime_plan"]["permission_evaluation"]["tool_calls"] == [
         {
@@ -2529,6 +2851,514 @@ permissions:
     ]
 
 
+def test_exec_payload_plans_fallback_for_blocked_tool_calls(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    fallback:
+      blocked:
+        - summarize_blocker
+        - ask_for_permission
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "npm install*": deny
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[
+            {"tool": "bash", "input": "npm install"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["tool_results"] == [
+        {
+            "tool": "bash",
+            "input": "npm install",
+            "status": "blocked",
+            "reason": "permission_deny",
+            "permission_action": "deny",
+        }
+    ]
+    assert result.payload["fallback_handling"] == {
+        "mode": "dry_run",
+        "executed": False,
+        "status": "planned",
+        "blocked_tool_calls": [
+            {
+                "tool": "bash",
+                "input": "npm install",
+                "reason": "permission_deny",
+                "permission_action": "deny",
+                "fallbacks": [
+                    {
+                        "target": "review.task",
+                        "trigger": "blocked",
+                        "actions": ["summarize_blocker", "ask_for_permission"],
+                        "status": "planned",
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_exec_payload_reports_no_fallback_for_blocked_tool_calls_without_contract(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  defaults:
+    bash: ask
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[
+            {"tool": "bash", "input": "python3 -V"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["fallback_handling"] == {
+        "mode": "dry_run",
+        "executed": False,
+        "status": "not_planned",
+        "blocked_tool_calls": [
+            {
+                "tool": "bash",
+                "input": "python3 -V",
+                "reason": "permission_ask",
+                "permission_action": "ask",
+                "fallbacks": [],
+            }
+        ],
+    }
+
+
+def test_exec_payload_includes_sandbox_profile_metadata(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "printf *": allow
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[
+            {"tool": "bash", "input": "printf sandbox"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+        sandbox_profile="read-only",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["sandbox"] == {
+        "profile": "read-only",
+        "mode": "prototype_preflight",
+        "enforced": True,
+        "filesystem": "read_only_preflight",
+        "network": "not_configured",
+        "supported_profiles": ["none", "read-only", "workspace-write"],
+    }
+    assert result.payload["execution"]["sandbox_profile"] == "read-only"
+
+
+def test_exec_payload_rejects_unknown_sandbox_profile(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[],
+        apply=True,
+        sandbox_profile="root",
+    )
+
+    assert not result.ok
+    assert result.payload == {}
+    assert [
+        (item.code, item.message, item.location, item.hint)
+        for item in result.diagnostics.items
+    ] == [
+        (
+            "AMF143",
+            "unsupported sandbox profile: root",
+            "exec.sandbox_profile",
+            "use one of: none, read-only, workspace-write",
+        )
+    ]
+
+
+def test_exec_payload_read_only_sandbox_blocks_write_like_bash(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "touch *": allow
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[
+            {"tool": "bash", "input": "touch created.txt"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+        sandbox_profile="read-only",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert not (tmp_path / "created.txt").exists()
+    assert result.payload["sandbox"]["enforced"] is True
+    assert result.payload["tool_results"] == [
+        {
+            "tool": "bash",
+            "input": "touch created.txt",
+            "status": "blocked",
+            "reason": "sandbox_read_only",
+            "permission_action": "allow",
+            "sandbox_profile": "read-only",
+        }
+    ]
+
+
+def test_exec_payload_workspace_write_sandbox_allows_write_like_bash(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "touch *": allow
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[
+            {"tool": "bash", "input": "touch created.txt"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+        sandbox_profile="workspace-write",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert (tmp_path / "created.txt").exists()
+    assert result.payload["sandbox"]["enforced"] is True
+    assert result.payload["tool_results"][0]["status"] == "executed"
+
+
+def test_exec_payload_emits_provider_tool_interception_contract(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "printf *": allow
+      "touch *": allow
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        provider="echo",
+        tool_calls=[
+            {"id": "call_allowed", "tool": "bash", "input": "printf provider-ok"},
+            {"id": "call_blocked", "tool": "bash", "input": "touch created.txt"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+        sandbox_profile="read-only",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["tool_interception"] == {
+        "version": 1,
+        "mode": "provider_tool_call_interception",
+        "provider": "echo",
+        "status": "evaluated",
+        "events": [
+            "provider_tool_call_requested",
+            "agentmf_permission_evaluated",
+            "agentmf_sandbox_evaluated",
+            "host_tool_result_returned",
+        ],
+        "host_boundary": {
+            "provider_requests_tool_call": True,
+            "agentmf_evaluates_permissions": True,
+            "agentmf_evaluates_sandbox": True,
+            "host_executes_allowed_call": True,
+            "host_returns_tool_result_to_provider": True,
+        },
+        "tool_calls": [
+            {
+                "id": "call_allowed",
+                "tool": "bash",
+                "input": "printf provider-ok",
+                "permission_action": "allow",
+                "sandbox_profile": "read-only",
+                "interception_decision": "allow",
+                "result_status": "executed",
+            },
+            {
+                "id": "call_blocked",
+                "tool": "bash",
+                "input": "touch created.txt",
+                "permission_action": "allow",
+                "sandbox_profile": "read-only",
+                "interception_decision": "block",
+                "block_reason": "sandbox_read_only",
+                "result_status": "blocked",
+            },
+        ],
+    }
+
+
+def test_exec_payload_execute_fallbacks_runs_internal_fallback_actions(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    fallback:
+      blocked:
+        - summarize_blocker
+        - ask_for_permission
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "npm install*": deny
+""",
+    )
+
+    from agentmf.tool_loop import create_exec_payload
+
+    result = create_exec_payload(
+        path=path,
+        target_names=["review.task"],
+        tool_calls=[
+            {"tool": "bash", "input": "npm install"},
+        ],
+        apply=True,
+        cwd=tmp_path,
+        execute_fallbacks=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["fallback_handling"] == {
+        "mode": "prototype",
+        "executed": True,
+        "status": "executed",
+        "blocked_tool_calls": [
+            {
+                "tool": "bash",
+                "input": "npm install",
+                "reason": "permission_deny",
+                "permission_action": "deny",
+                "fallbacks": [
+                    {
+                        "target": "review.task",
+                        "trigger": "blocked",
+                        "actions": ["summarize_blocker", "ask_for_permission"],
+                        "status": "executed",
+                        "results": [
+                            {
+                                "action": "summarize_blocker",
+                                "status": "executed",
+                                "execution": "internal_noop",
+                            },
+                            {
+                                "action": "ask_for_permission",
+                                "status": "executed",
+                                "execution": "internal_noop",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_cli_exec_execute_fallbacks_outputs_executed_fallbacks(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    fallback:
+      blocked:
+        - summarize_blocker
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "npm install*": deny
+""",
+    )
+
+    exit_code = main(
+        [
+            "exec",
+            "--file",
+            str(path),
+            "--target",
+            "review.task",
+            "--tool-call",
+            "bash:npm install",
+            "--execute-fallbacks",
+            "--apply",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["exec_payload"]["fallback_handling"]["status"] == "executed"
+    assert payload["exec_payload"]["fallback_handling"]["blocked_tool_calls"][0]["fallbacks"][0]["results"] == [
+        {
+            "action": "summarize_blocker",
+            "status": "executed",
+            "execution": "internal_noop",
+        }
+    ]
+
+
+def test_cli_exec_provider_flag_outputs_tool_interception_contract(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    steps:
+      - action: review_code
+permissions:
+  rules:
+    bash:
+      "printf *": allow
+""",
+    )
+
+    exit_code = main(
+        [
+            "exec",
+            "--file",
+            str(path),
+            "--target",
+            "review.task",
+            "--provider",
+            "echo",
+            "--tool-call",
+            "bash:printf cli-provider",
+            "--apply",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["exec_payload"]["tool_interception"]["provider"] == "echo"
+    assert payload["exec_payload"]["tool_interception"]["tool_calls"] == [
+        {
+            "id": "tool_call_0",
+            "tool": "bash",
+            "input": "printf cli-provider",
+            "permission_action": "allow",
+            "sandbox_profile": "workspace-write",
+            "interception_decision": "allow",
+            "result_status": "executed",
+        }
+    ]
+
+
 def test_cli_exec_json_runs_allowed_tool_call(tmp_path: Path, capsys) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -2554,6 +3384,8 @@ permissions:
             "review.task",
             "--tool-call",
             "bash:printf cli-ok",
+            "--sandbox-profile",
+            "workspace-write",
             "--apply",
             "--format",
             "json",
@@ -2574,6 +3406,7 @@ permissions:
             "stderr": "",
         }
     ]
+    assert payload["exec_payload"]["sandbox"]["profile"] == "workspace-write"
 
 
 def test_cli_run_dry_run_text_reports_guard_evaluation(tmp_path: Path, capsys) -> None:

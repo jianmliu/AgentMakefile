@@ -5,6 +5,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from jsonschema import Draft202012Validator
+
 from agentmf.compiler import compile_agentmakefile
 from agentmf.diagnostics import Diagnostics
 from agentmf.ir import normalize
@@ -51,6 +53,7 @@ def create_run_plan(
     backend: str = "agents-fragments",
     dry_run: bool = False,
     proposed_tool_calls: Optional[List[Dict[str, str]]] = None,
+    proposed_output: Optional[Dict[str, Any]] = None,
 ) -> RunPlanResult:
     diagnostics = Diagnostics()
     if not dry_run:
@@ -92,20 +95,26 @@ def create_run_plan(
         },
         "link_plan": link_result.plan,
         "prompt_prefix": prompt_prefix,
-        "runtime_phases": _runtime_phases(proposed_tool_calls or []),
+        "runtime_phases": _runtime_phases(proposed_tool_calls or [], proposed_output),
         "target_contracts": [_target_contract(target) for target in target_closure],
         "policy_contracts": _policy_contracts(target_closure),
         "guard_evaluation": _guard_evaluation(target_closure),
         "permission_contract": _permission_contract(ir),
         "permission_evaluation": _permission_evaluation(ir, proposed_tool_calls or []),
+        "output_validation": _output_validation(target_closure, proposed_output),
     }
     return RunPlanResult(diagnostics, plan)
 
 
-def _runtime_phases(proposed_tool_calls: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def _runtime_phases(
+    proposed_tool_calls: List[Dict[str, str]],
+    proposed_output: Optional[Dict[str, Any]],
+) -> List[Dict[str, str]]:
     phases = [dict(phase) for phase in RUNTIME_PHASES]
     if proposed_tool_calls:
         phases[4] = {"name": "permission_enforcement", "status": "evaluated_dry_run"}
+    if proposed_output is not None:
+        phases[6] = {"name": "output_validation", "status": "evaluated_dry_run"}
     return phases
 
 
@@ -291,13 +300,16 @@ def _evaluate_tool_call(ir: AgentRuleIR, tool_call: Dict[str, str]) -> Dict[str,
     else:
         action = IMPLICIT_PERMISSION_ACTION
         source = "implicit_default"
-    return {
+    result = {
         "tool": tool,
         "input": input_text,
         "action": action,
         "source": source,
         "matched_rules": [_permission_record(permission) for permission in matches],
     }
+    if "id" in tool_call:
+        result["id"] = tool_call["id"]
+    return result
 
 
 def _most_restrictive_action(actions: List[PermissionAction]) -> PermissionAction:
@@ -310,3 +322,204 @@ def _permission_record(permission: IRPermission) -> Dict[str, str]:
         "pattern": permission.pattern,
         "action": permission.action,
     }
+
+
+def _output_validation(
+    targets: List[IRTarget],
+    proposed_output: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    target_records = [
+        _target_output_validation(target, proposed_output)
+        for target in targets
+    ]
+    if proposed_output is None:
+        status = "not_evaluated"
+    elif any(record["status"] == "invalid" for record in target_records):
+        status = "invalid"
+    else:
+        status = "valid"
+    return {
+        "mode": "dry_run",
+        "executed": False,
+        "provided": proposed_output is not None,
+        "status": status,
+        "targets": target_records,
+    }
+
+
+def _target_output_validation(
+    target: IRTarget,
+    proposed_output: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    required_fields = _target_required_output_fields(target)
+    present_fields = sorted(proposed_output) if proposed_output is not None else []
+    missing_fields = [
+        field
+        for field in required_fields
+        if proposed_output is not None and field not in proposed_output
+    ]
+    type_errors = _schema_type_errors(target, proposed_output)
+    schema_errors = _schema_validation_errors(target, proposed_output)
+    if proposed_output is None:
+        status = "planned"
+    elif missing_fields or type_errors or schema_errors:
+        status = "invalid"
+    else:
+        status = "valid"
+    record = {
+        "target": target.name,
+        "required_fields": required_fields,
+        "present_fields": present_fields,
+        "missing_fields": missing_fields,
+        "type_errors": type_errors,
+        "status": status,
+    }
+    if schema_errors:
+        record["schema_errors"] = schema_errors
+    return record
+
+
+def _target_required_output_fields(target: IRTarget) -> List[str]:
+    fields: List[str] = []
+    for policy in target.policies:
+        fields.extend(policy.output_format)
+        fields.extend(_schema_required_fields(policy.output_schema))
+    fields.extend(target.output_format)
+    fields.extend(_schema_required_fields(target.output_schema))
+    return _unique_preserving_order(fields)
+
+
+def _schema_required_fields(output_schema: Dict[str, Any]) -> List[str]:
+    required = output_schema.get("required", [])
+    if not isinstance(required, list):
+        return []
+    return [field for field in required if isinstance(field, str)]
+
+
+def _schema_type_errors(target: IRTarget, proposed_output: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    if proposed_output is None:
+        return []
+    errors = []
+    schema_properties: Dict[str, Any] = {}
+    for policy in target.policies:
+        schema_properties.update(_schema_properties(policy.output_schema))
+    schema_properties.update(_schema_properties(target.output_schema))
+    for field in sorted(schema_properties):
+        if field not in proposed_output:
+            continue
+        expected_type = _schema_property_type(schema_properties[field])
+        if expected_type is None:
+            continue
+        if not _matches_json_schema_type(proposed_output[field], expected_type):
+            errors.append(
+                {
+                    "field": field,
+                    "expected": expected_type,
+                    "actual": _json_value_type(proposed_output[field]),
+                }
+            )
+    return errors
+
+
+def _schema_validation_errors(
+    target: IRTarget,
+    proposed_output: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if proposed_output is None:
+        return []
+    errors = []
+    for source, schema in _output_schema_sources(target):
+        validator = Draft202012Validator(schema)
+        for error in sorted(validator.iter_errors(proposed_output), key=_jsonschema_error_sort_key):
+            if error.validator == "required" and not error.path:
+                continue
+            if error.validator == "type" and len(error.path) == 1:
+                continue
+            errors.append(
+                {
+                    "source": source,
+                    "path": list(error.path),
+                    "validator": str(error.validator),
+                    "message": error.message,
+                }
+            )
+    return errors
+
+
+def _output_schema_sources(target: IRTarget) -> List[tuple[str, Dict[str, Any]]]:
+    sources: List[tuple[str, Dict[str, Any]]] = []
+    for policy in target.policies:
+        if policy.output_schema:
+            sources.append(("policy", policy.output_schema))
+    if target.output_schema:
+        sources.append(("target", target.output_schema))
+    return sources
+
+
+def _jsonschema_error_sort_key(error: Any) -> tuple[str, str, str]:
+    path = ".".join(str(part) for part in error.path)
+    schema_path = ".".join(str(part) for part in error.schema_path)
+    return (path, str(error.validator), schema_path)
+
+
+def _schema_properties(output_schema: Dict[str, Any]) -> Dict[str, Any]:
+    properties = output_schema.get("properties", {})
+    if not isinstance(properties, dict):
+        return {}
+    return properties
+
+
+def _schema_property_type(property_schema: Any) -> Optional[str]:
+    if not isinstance(property_schema, dict):
+        return None
+    schema_type = property_schema.get("type")
+    if not isinstance(schema_type, str):
+        return None
+    return schema_type
+
+
+def _matches_json_schema_type(value: Any, schema_type: str) -> bool:
+    if schema_type == "string":
+        return isinstance(value, str)
+    if schema_type == "array":
+        return isinstance(value, list)
+    if schema_type == "object":
+        return isinstance(value, dict)
+    if schema_type == "boolean":
+        return isinstance(value, bool)
+    if schema_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if schema_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if schema_type == "null":
+        return value is None
+    return True
+
+
+def _json_value_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _unique_preserving_order(values: List[str]) -> List[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
