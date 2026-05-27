@@ -855,12 +855,13 @@ def _apply_merge_duplicate_targets_change(
         )
         return
 
+    records = []
     for raw_path in module_paths:
         source_path = Path(str(raw_path))
         record = _load_module_record(source_path, source_map, diagnostics)
-        if record is None:
-            continue
-        _merge_duplicates_in_module(record["data"], duplicate_names)
+        if record is not None:
+            records.append(record)
+    _merge_duplicates_across_modules(records, duplicate_names)
 
 
 def _load_module_record(
@@ -890,60 +891,76 @@ def _load_module_record(
     return record
 
 
-def _merge_duplicates_in_module(data: Dict[str, Any], duplicate_names: Dict[str, Any]) -> None:
-    skills = data.get("skills")
-    if not isinstance(skills, dict) or not skills:
-        return
-    targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
+def _merge_duplicates_across_modules(
+    records: List[Dict[str, Any]],
+    duplicate_names: Dict[str, Any],
+) -> None:
+    """Build a global relative_source -> (module_data, skill_name) map across
+    every loaded module in scope, then merge each duplicate into its primary.
 
-    relative_to_skill: Dict[str, str] = {}
-    for skill_name, skill in skills.items():
-        if not isinstance(skill, dict):
+    Handles same-module and cross-module dup groups uniformly: the primary's
+    `match.user_intent` and `merged_duplicates` are appended in whichever
+    module holds the primary, and the duplicate is removed (with its
+    `skill.<name>` target and `metadata.skill_count`) from whichever module
+    holds it.
+    """
+    rel_to_entry: Dict[str, tuple[Dict[str, Any], str]] = {}
+    for record in records:
+        data = record["data"]
+        skills = data.get("skills")
+        if not isinstance(skills, dict):
             continue
-        impl = skill.get("implementation")
-        if isinstance(impl, dict):
+        for skill_name, skill in skills.items():
+            if not isinstance(skill, dict):
+                continue
+            impl = skill.get("implementation")
+            if not isinstance(impl, dict):
+                continue
             rel = impl.get("relative_source")
             if isinstance(rel, str):
-                relative_to_skill[rel] = skill_name
+                rel_to_entry[rel] = (data, skill_name)
 
-    removed = 0
     for original_name, paths in duplicate_names.items():
         if not isinstance(paths, list) or len(paths) < 2:
             continue
-        primary_path = str(paths[0])
-        primary_name = relative_to_skill.get(primary_path)
-        if primary_name is None or primary_name not in skills:
+        primary_entry = rel_to_entry.get(str(paths[0]))
+        if primary_entry is None:
             continue
-        primary_skill = skills[primary_name]
+        primary_data, primary_skill_name = primary_entry
+        primary_skills = primary_data.get("skills") if isinstance(primary_data.get("skills"), dict) else {}
+        primary_skill = primary_skills.get(primary_skill_name)
         if not isinstance(primary_skill, dict):
             continue
-        primary_target_name = f"skill.{primary_name}"
-        primary_target = targets.get(primary_target_name) if isinstance(targets.get(primary_target_name), dict) else None
+        primary_targets = primary_data.get("targets") if isinstance(primary_data.get("targets"), dict) else {}
+        primary_target_name = f"skill.{primary_skill_name}"
+        primary_target = primary_targets.get(primary_target_name) if isinstance(primary_targets.get(primary_target_name), dict) else None
 
         for duplicate_path in paths[1:]:
-            duplicate_name = relative_to_skill.get(str(duplicate_path))
-            if duplicate_name is None or duplicate_name == primary_name or duplicate_name not in skills:
+            duplicate_entry = rel_to_entry.get(str(duplicate_path))
+            if duplicate_entry is None:
                 continue
-            duplicate_skill = skills[duplicate_name]
+            duplicate_data, duplicate_skill_name = duplicate_entry
+            if duplicate_data is primary_data and duplicate_skill_name == primary_skill_name:
+                continue
+            duplicate_skills = duplicate_data.get("skills") if isinstance(duplicate_data.get("skills"), dict) else {}
+            duplicate_skill = duplicate_skills.get(duplicate_skill_name)
             if not isinstance(duplicate_skill, dict):
                 continue
             _merge_user_intent(primary_skill, duplicate_skill)
-            duplicate_target_name = f"skill.{duplicate_name}"
-            duplicate_target = targets.get(duplicate_target_name) if isinstance(targets.get(duplicate_target_name), dict) else None
+            duplicate_targets = duplicate_data.get("targets") if isinstance(duplicate_data.get("targets"), dict) else {}
+            duplicate_target_name = f"skill.{duplicate_skill_name}"
+            duplicate_target = duplicate_targets.get(duplicate_target_name) if isinstance(duplicate_targets.get(duplicate_target_name), dict) else None
             if primary_target is not None and duplicate_target is not None:
                 _merge_user_intent(primary_target, duplicate_target)
-            _record_merged_duplicate(primary_skill, duplicate_name, duplicate_skill, str(original_name))
-            del skills[duplicate_name]
-            if duplicate_target_name in targets:
-                del targets[duplicate_target_name]
-            removed += 1
-
-    if removed:
-        metadata = data.get("metadata")
-        if isinstance(metadata, dict):
-            count = metadata.get("skill_count")
-            if isinstance(count, int):
-                metadata["skill_count"] = max(0, count - removed)
+            _record_merged_duplicate(primary_skill, duplicate_skill_name, duplicate_skill, str(original_name))
+            del duplicate_skills[duplicate_skill_name]
+            if duplicate_target_name in duplicate_targets:
+                del duplicate_targets[duplicate_target_name]
+            duplicate_metadata = duplicate_data.get("metadata")
+            if isinstance(duplicate_metadata, dict):
+                count = duplicate_metadata.get("skill_count")
+                if isinstance(count, int):
+                    duplicate_metadata["skill_count"] = max(0, count - 1)
 
 
 def _merge_user_intent(primary: Dict[str, Any], duplicate: Dict[str, Any]) -> None:

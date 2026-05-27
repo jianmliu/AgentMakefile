@@ -1904,6 +1904,145 @@ targets:
     assert load_source(module_path).targets["skill.coding.review"].match["user_intent"] == ["review"]
 
 
+def test_candidate_patch_merges_duplicate_targets_across_modules(tmp_path: Path) -> None:
+    """Cross-module dup: primary in module A, duplicate in module B.
+
+    The merger must locate both via relative_source, drop the duplicate
+    from module B (skill + matching target + skill_count), and append a
+    merged_duplicates entry on the primary in module A.
+    """
+    module_a = tmp_path / "cat-a" / "AgentMakefile"
+    module_b = tmp_path / "cat-b" / "AgentMakefile"
+    module_a.parent.mkdir(parents=True)
+    module_b.parent.mkdir(parents=True)
+    module_a.write_text(
+        """\
+version: "0.1"
+metadata:
+  skill_count: 1
+skills:
+  cat-a.shared:
+    namespace: smoke
+    description: primary copy.
+    implementation:
+      source: skills/shared-a/SKILL.md
+      relative_source: cat-a/shared/SKILL.md
+      original_name: shared
+    match:
+      user_intent:
+        - run shared from a
+targets:
+  skill.cat-a.shared:
+    match:
+      user_intent:
+        - run shared from a
+    skills:
+      - smoke:cat-a.shared
+    steps:
+      - use_skill: smoke:cat-a.shared
+"""
+    )
+    module_b.write_text(
+        """\
+version: "0.1"
+metadata:
+  skill_count: 1
+skills:
+  cat-b.shared:
+    namespace: smoke
+    description: duplicate copy.
+    implementation:
+      source: skills/shared-b/SKILL.md
+      relative_source: cat-b/shared/SKILL.md
+      original_name: shared
+    match:
+      user_intent:
+        - run shared from b
+targets:
+  skill.cat-b.shared:
+    match:
+      user_intent:
+        - run shared from b
+    skills:
+      - smoke:cat-b.shared
+    steps:
+      - use_skill: smoke:cat-b.shared
+"""
+    )
+    proposal_path = tmp_path / "cross.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-cross",
+                "title": "Merge duplicate across category modules",
+                "scope": {"modules": [str(module_a), str(module_b)], "targets": []},
+                "evidence": [{"event_id": "sha256:cross", "reason": "cross-module duplicate"}],
+                "changes": [
+                    {
+                        "type": "merge_duplicate_targets",
+                        "duplicate_original_names": {
+                            "shared": [
+                                "cat-a/shared/SKILL.md",
+                                "cat-b/shared/SKILL.md",
+                            ]
+                        },
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_candidate_patch_payload, create_compile_evaluate_payload
+
+    patch_result = create_candidate_patch_payload(
+        proposal_file=proposal_path,
+        out_dir=tmp_path / "candidates",
+        write=False,
+    )
+    eval_result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+
+    assert patch_result.ok, patch_result.diagnostics.format()
+    assert patch_result.payload["patch_status"] == "generated"
+    assert patch_result.payload["unsupported_changes"] == []
+    assert {str(module_a), str(module_b)} == set(patch_result.payload["touched_files"])
+    assert eval_result.ok, eval_result.diagnostics.format()
+    assert eval_result.payload["promotion_report"]["status"] == "passed"
+
+    candidate_paths = {Path(entry["source"]): Path(entry["path"]) for entry in eval_result.payload["candidate_files"]}
+    candidate_a = load_source(candidate_paths[module_a])
+    candidate_b = load_source(candidate_paths[module_b])
+
+    assert "cat-a.shared" in candidate_a.skills
+    assert candidate_a.skills["cat-a.shared"].implementation["merged_duplicates"] == [
+        {
+            "skill": "cat-b.shared",
+            "source": "skills/shared-b/SKILL.md",
+            "relative_source": "cat-b/shared/SKILL.md",
+            "original_name": "shared",
+        }
+    ]
+    assert candidate_a.skills["cat-a.shared"].match["user_intent"] == [
+        "run shared from a",
+        "run shared from b",
+    ]
+    assert candidate_a.targets["skill.cat-a.shared"].match["user_intent"] == [
+        "run shared from a",
+        "run shared from b",
+    ]
+    assert "cat-b.shared" not in candidate_b.skills
+    assert "skill.cat-b.shared" not in candidate_b.targets
+    assert candidate_b.metadata["skill_count"] == 0
+    assert load_source(module_a).skills["cat-a.shared"].implementation.get("merged_duplicates") is None
+    assert "cat-b.shared" in load_source(module_b).skills
+
+
 def test_compile_evaluate_workspace_disambiguates_modules_sharing_basename(tmp_path: Path) -> None:
     cat_a = tmp_path / "cat-a"
     cat_b = tmp_path / "cat-b"
