@@ -2138,6 +2138,142 @@ targets:
     assert load_source(module_path).skills["coding.review-2"].description == "Review alternate."
 
 
+def test_compile_evaluate_runs_compile_and_selector_gates(tmp_path: Path) -> None:
+    """When proposal.evaluation declares selector_tests, evaluate must run
+    each candidate AgentMakefile through `compile_agentmakefile` and through
+    `create_link_plan` against the declared (request, expected_target)
+    pairs. promotion_report carries the results and gates promotion status.
+    """
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.review:
+    priority: 70
+    match:
+      user_intent:
+        - existing review trigger
+    steps:
+      - action: inspect
+""",
+    )
+    proposal_path = tmp_path / "gated.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "gated-passing",
+                "title": "Add reviewing-diff trigger",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.review"]},
+                "evidence": [{"event_id": "sha256:gate", "reason": "test"}],
+                "changes": [
+                    {
+                        "type": "update_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.review",
+                        "add_terms": ["please review this diff"],
+                    }
+                ],
+                "evaluation": {
+                    "commands": [],
+                    "status": "not_run",
+                    "selector_tests": [
+                        {"request": "please review this diff", "expected_target": "skill.review"}
+                    ],
+                },
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    report = result.payload["promotion_report"]
+    assert report["status"] == "passed"
+    assert len(report["compile_results"]) == 1
+    assert report["compile_results"][0]["status"] == "passed"
+    assert len(report["selector_test_results"]) == 1
+    selector = report["selector_test_results"][0]
+    assert selector["status"] == "passed"
+    assert selector["request"] == "please review this diff"
+    assert selector["expected_target"] == "skill.review"
+    assert selector["actual_target"] == "skill.review"
+
+
+def test_compile_evaluate_selector_gate_fails_when_actual_target_differs(tmp_path: Path) -> None:
+    """A selector_test whose expected_target doesn't match the actual route
+    flips promotion_report.status to 'failed' even when validate and
+    compile both pass."""
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.review:
+    priority: 70
+    match:
+      user_intent:
+        - existing review trigger
+    steps:
+      - action: inspect
+""",
+    )
+    proposal_path = tmp_path / "gated-fail.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "gated-failing",
+                "title": "Selector gate sanity",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.review"]},
+                "evidence": [{"event_id": "sha256:gate-fail", "reason": "test"}],
+                "changes": [
+                    {
+                        "type": "update_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.review",
+                        "add_terms": ["unrelated phrase"],
+                    }
+                ],
+                "evaluation": {
+                    "commands": [],
+                    "status": "not_run",
+                    "selector_tests": [
+                        # The patch adds a phrase but expects routing of a
+                        # totally unrelated request to land on skill.review —
+                        # there's no matching term so the gate must fail.
+                        {"request": "totally unrelated quokka inquiry", "expected_target": "skill.review"}
+                    ],
+                },
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    report = result.payload["promotion_report"]
+    assert report["status"] == "failed"
+    selector = report["selector_test_results"][0]
+    assert selector["status"] == "failed"
+    assert selector["actual_target"] is None or selector["actual_target"] != "skill.review"
+
+
 def test_compile_evaluate_loop_validates_candidate_in_isolated_workspace(tmp_path: Path) -> None:
     module_path = write_agentmakefile(
         tmp_path,

@@ -402,10 +402,17 @@ def create_compile_evaluate_payload(
             }
         )
 
+    compile_results = _evaluate_compile_gate(candidate_records, workspace) if write else []
+    selector_test_results = _evaluate_selector_test_gate(candidate_records, proposal) if write else []
+
     status = "passed"
     if unsupported and not candidate_records:
         status = "skipped_unsupported_change"
     if any(result["status"] == "failed" for result in validation_results):
+        status = "failed"
+    if any(result["status"] == "failed" for result in compile_results):
+        status = "failed"
+    if any(result["status"] == "failed" for result in selector_test_results):
         status = "failed"
     return CompileEvaluateResult(
         diagnostics,
@@ -419,11 +426,102 @@ def create_compile_evaluate_payload(
                 "status": status,
                 "requires_review": True,
                 "validations": validation_results,
+                "compile_results": compile_results,
+                "selector_test_results": selector_test_results,
                 "commands": proposal.get("evaluation", {}).get("commands", []),
                 "unsupported_changes": unsupported,
             },
         },
     )
+
+
+def _evaluate_compile_gate(
+    candidate_records: list[Dict[str, str]],
+    workspace: Path,
+) -> list[Dict[str, Any]]:
+    """Compile each candidate AgentMakefile to the lightweight
+    `agents-fragments` backend. The candidate is written to the workspace
+    already; we just need to drive the compiler and capture diagnostics.
+    """
+    from agentmf.compiler import compile_agentmakefile
+
+    results: list[Dict[str, Any]] = []
+    for record in candidate_records:
+        path = Path(record["path"])
+        if not path.exists():
+            results.append({"path": str(path), "status": "not_run", "diagnostics": []})
+            continue
+        # Compile into a per-candidate scratch dir so different candidates
+        # don't fight over output filenames; we only care about pass/fail.
+        out_dir = workspace / "_compile" / path.stem
+        try:
+            compile_result = compile_agentmakefile(
+                path=path,
+                out_dir=out_dir,
+                targets=["agents-fragments"],
+                write=False,
+            )
+        except Exception as exc:  # defensive: surface unexpected compiler crash
+            results.append({"path": str(path), "status": "failed", "diagnostics": [{"reason": str(exc)}]})
+            continue
+        results.append(
+            {
+                "path": str(path),
+                "status": "passed" if compile_result.ok else "failed",
+                "diagnostics": compile_result.diagnostics.to_list(),
+            }
+        )
+    return results
+
+
+def _evaluate_selector_test_gate(
+    candidate_records: list[Dict[str, str]],
+    proposal: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    """Run any (request, expected_target) pairs declared at
+    proposal.evaluation.selector_tests against the candidate files. The
+    test passes if any candidate routes the request to expected_target.
+    """
+    evaluation = proposal.get("evaluation")
+    if not isinstance(evaluation, dict):
+        return []
+    selector_tests = evaluation.get("selector_tests") or []
+    if not isinstance(selector_tests, list) or not selector_tests:
+        return []
+
+    from agentmf.selector import create_link_plan
+
+    candidate_paths = [Path(record["path"]) for record in candidate_records if Path(record["path"]).exists()]
+    results: list[Dict[str, Any]] = []
+    for entry in selector_tests:
+        if not isinstance(entry, dict):
+            continue
+        request_text = entry.get("request")
+        expected = entry.get("expected_target")
+        if not isinstance(request_text, str) or not isinstance(expected, str):
+            continue
+        actual_target: Optional[str] = None
+        diagnostics_records: list[Dict[str, Any]] = []
+        for path in candidate_paths:
+            plan_result = create_link_plan(path, request=request_text)
+            if plan_result.diagnostics.has_errors:
+                diagnostics_records.extend(plan_result.diagnostics.to_list())
+                continue
+            selected = (plan_result.plan or {}).get("selected_targets") or []
+            if selected:
+                actual_target = selected[0]
+                if actual_target == expected:
+                    break
+        results.append(
+            {
+                "request": request_text,
+                "expected_target": expected,
+                "actual_target": actual_target,
+                "status": "passed" if actual_target == expected else "failed",
+                "diagnostics": diagnostics_records,
+            }
+        )
+    return results
 
 
 @dataclass

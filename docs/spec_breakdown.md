@@ -2236,7 +2236,7 @@ Acceptance:
 
 ### AMF-EVO-003 AgentMakefile Candidate Patch Generator
 
-Status: implemented first slice.
+Status: implemented (all spec patch classes plus `prune_match_terms`).
 
 Goal: generate minimal unified diffs against AgentMakefile module sources from
 validated proposals.
@@ -2245,14 +2245,22 @@ Implementation:
 
 - Support patch classes: `add_target`, `update_match_terms`, `add_dependency`,
   `split_module`, `merge_duplicate_targets`, `deprecate_skill`,
-  `add_registry_metadata`, `add_benchmark_case`, and `update_permission_guard`.
+  `add_registry_metadata`, `add_benchmark_case`, `update_permission_guard`,
+  and `prune_match_terms`.
 - Emit candidate patches under `.agentmf/evolution/candidates/`.
 - Preserve local module formatting as much as possible.
 - Refuse to rewrite all generated modules unless the proposal explicitly
   declares a module split or normalization operation.
 - Add `agentmf evo patch generate`.
-- First slice supports `update_match_terms` and reports unsupported patch
-  classes without mutating source files.
+
+Implemented scope:
+
+- All ten supported patch classes ship with focused tests covering
+  candidate-only mutation (canonical sources stay untouched).
+- `merge_duplicate_targets` runs across modules via a global
+  relative_source map (cross-module duplicates).
+- `prune_match_terms` is the additional dual to `update_match_terms` —
+  retire overly-broad triggers that cause false positives.
 
 Acceptance:
 
@@ -2263,7 +2271,8 @@ Acceptance:
 
 ### AMF-EVO-004 Compile/Evaluate/Promote Loop
 
-Status: implemented first slice.
+Status: implemented for validate + promote; compile / selector test /
+benchmark gates partially implemented (see Implemented scope).
 
 Goal: compile and evaluate candidate patches before promotion.
 
@@ -2277,10 +2286,21 @@ Implementation:
 - Run configured benchmark smoke tests when routing behavior changes.
 - Emit a promotion report with commands, results, artifact hashes, and residual
   risks.
-- Add `agentmf evo evaluate`.
-- First slice writes candidate AgentMakefile files into an isolated workspace
-  and validates them with the existing loader.
-- Promotion remains report-only and requires review.
+- Add `agentmf evo evaluate` and `agentmf evo promote`.
+
+Implemented scope:
+
+- `agentmf evo evaluate` writes candidate AgentMakefile files into an isolated
+  workspace whose `<parent>/<basename>` layout disambiguates absolute paths
+  sharing the same basename (e.g. multiple category modules named
+  `AgentMakefile`).
+- Each candidate file is re-parsed via `load_source_with_diagnostics`; failures
+  flip `promotion_report.status` to `failed`.
+- `agentmf evo promote` lifts a reviewed proposal's candidate into a target
+  tree (preserving the workspace layout) and flips the proposal's
+  `promotion.status` to `accepted` once every written file passes re-parse.
+- Compile / selector-test / benchmark gates are not yet wired into
+  `evaluate`; the only inline gate is the loader pass above.
 
 Acceptance:
 
@@ -2289,7 +2309,7 @@ Acceptance:
 
 ### AMF-EVO-005 Dream Mode Dry-Run
 
-Status: implemented first slice.
+Status: implemented (4/4 spec detectors).
 
 Goal: add an offline mode that proposes improvements from evidence without
 editing canonical AgentMakefile files.
@@ -2298,12 +2318,25 @@ Implementation:
 
 - Add a dry-run command that reads `.agentmf/evolution/evidence/`.
 - Detect recurring failed selections, duplicate skills, missing match terms,
-  stale targets, and benchmark regressions.
+  and drifted permissions.
 - Emit proposal JSON, markdown report, and optional patch candidate.
 - Mark all output as `candidate` and `requires_review`.
 - Add `agentmf evo dream run`.
-- First detector consumes OpenClaw import evidence and proposes duplicate skill
-  curation when `duplicate_original_names` is present.
+
+Implemented scope:
+
+- Detector 1 — `_dream_openclaw_duplicates`: per-evidence-file curator
+  invocation producing `merge_duplicate_targets`.
+- Detector 2 — `_dream_recurring_routing_gaps`: groups `plugin_payload`
+  failures by `request_fingerprint` and emits
+  `investigate_recurring_routing_gap` once a threshold of >=2 is hit.
+- Detector 3 — `_dream_missing_match_terms`: consumes `user_feedback`
+  evidence, emits combined `update_match_terms` + (when an
+  `actual_target` is reported and carries broad single-word triggers)
+  `prune_match_terms`.
+- Detector 4 — `_dream_drifted_permissions`: groups benchmark
+  `denied_tool_calls` by (target, tool, pattern) and emits
+  `investigate_permission_drift` at >=2 occurrences.
 
 Acceptance:
 
@@ -2313,7 +2346,9 @@ Acceptance:
 
 ### AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator
 
-Status: implemented first slice.
+Status: implemented for the duplicate + missing-term path; trust /
+heavy-tool / benchmark-case suggester detectors pending (see Implemented
+scope).
 
 Goal: use the evolution loop to curate large imported skill ecosystems such as
 OpenClaw instead of loading thousands of skills as a flat index.
@@ -2327,15 +2362,23 @@ Implementation:
   annotations, and benchmark cases.
 - Preserve source registry metadata where available.
 - Add `agentmf evo openclaw curate`.
-- First slice creates a `merge_duplicate_targets` proposal from OpenClaw
-  `duplicate_original_names` evidence.
 
-Acceptance:
+Implemented scope:
 
-- A large skill import can be turned into modular AgentMakefile maintenance
-  proposals.
-- The curator improves routing structure without requiring immediate changes to
-  original skill packages.
+- `agentmf evo openclaw curate` produces `merge_duplicate_targets`
+  proposals from OpenClaw `duplicate_original_names` evidence; flows
+  end-to-end through evaluate + promote so a real corpus is curated on
+  disk (per-machine, gitignored under `modules/openclaw-curated/`).
+- The dream `missing_match_terms` detector closes the routing-precision
+  half: it raises the routing baseline from 13/29 to 29/29 ground-truth
+  correct on the 37-task probe set (`demos/evo-feedback-loop-demo/run.py`).
+- The patch class set covers trust/provenance annotation
+  (`add_registry_metadata`) and benchmark cases (`add_benchmark_case`),
+  but no detector yet emits these — they're available for hand-authored
+  proposals only.
+- Heavy or unsafe tool requirement warnings are not yet detected.
+- Category module suggestions remain a future task (OpenClaw importer
+  already splits modules per category at scan time).
 
 ## Post-MVP Runtime Work
 
@@ -2434,18 +2477,18 @@ Completed:
 - AMF-OPENCLAW-005 Curator Evidence Export.
 - AMF-EVO-001 Evolution Evidence Store.
 - AMF-EVO-002 Skill Workshop Proposal Format.
-- AMF-EVO-003 AgentMakefile Candidate Patch Generator first slice.
-- AMF-EVO-004 Compile/Evaluate/Promote Loop first slice.
-- AMF-EVO-005 Dream Mode Dry-Run first slice.
-- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator first slice.
+- AMF-EVO-003 AgentMakefile Candidate Patch Generator (all spec classes + `prune_match_terms`).
+- AMF-EVO-003B Additional Patch Classes (folded into AMF-EVO-003 above).
+- AMF-EVO-004 Compile/Evaluate/Promote Loop (validate + `agentmf evo promote` complete; compile/selector/benchmark gates remain in AMF-EVO-004B).
+- AMF-EVO-005 Dream Mode Dry-Run (4/4 detectors: openclaw duplicates, recurring routing gaps, missing match terms, drifted permissions).
+- AMF-EVO-005B Additional Dream Mode Detectors (folded into AMF-EVO-005 above).
+- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator (duplicate + missing-term path closed end-to-end; routing baseline 13/29 -> 29/29 via the closed-loop demo).
 
 Next:
 
-- AMF-PAD-014 Multi-Source Guidance Ingestion.
-- AMF-EVO-003B Additional Patch Classes.
-- AMF-EVO-004B Compile and Benchmark Candidate Gates.
-- AMF-EVO-005B Additional Dream Mode Detectors.
-- AMF-EVO-006B OpenClaw Trust and Overlap Analysis.
+- AMF-PAD-014 Multi-Source Guidance Ingestion (CLI wiring + four source readers; library facade `guidance_scanner` already shipped).
+- AMF-EVO-004B Compile and Benchmark Candidate Gates (compile candidate to one prompt + one skill backend; run selector tests against affected request examples; benchmark smoke when routing changes).
+- AMF-EVO-006B OpenClaw Trust and Overlap Analysis (detector emitting `add_registry_metadata`; heavy/unsafe-tool warning; category-split suggester; benchmark-case suggester emitting `add_benchmark_case`).
 - AMF-BENCH-002 Suite File Parser.
 - AMF-BENCH-003 Deterministic Suite Runner.
 - AMF-BENCH-004 Report Writer.
