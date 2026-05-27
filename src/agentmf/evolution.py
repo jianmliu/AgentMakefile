@@ -760,10 +760,13 @@ def _candidate_source_files_for_proposal(
             unsupported.append({"type": "unknown", "reason": "change is not an object"})
             continue
         change_type = change.get("type")
-        if change_type != "update_match_terms":
+        if change_type == "update_match_terms":
+            _apply_update_match_terms_change(change, proposal, source_map, diagnostics)
+        elif change_type == "merge_duplicate_targets":
+            _apply_merge_duplicate_targets_change(change, proposal, source_map, diagnostics)
+        else:
             unsupported.append({"type": change_type or "unknown", "reason": "patch class is not implemented yet"})
             continue
-        _apply_update_match_terms_change(change, proposal, source_map, diagnostics)
 
     candidate_files = []
     for source_path, record in source_map.items():
@@ -795,19 +798,9 @@ def _apply_update_match_terms_change(
         )
         return
     source_path = Path(str(module_path))
-    record = source_map.get(source_path)
+    record = _load_module_record(source_path, source_map, diagnostics)
     if record is None:
-        try:
-            original_content = source_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            diagnostics.error("AMF226", f"could not read AgentMakefile source: {source_path}", "evo.patch.module", str(exc))
-            return
-        data = yaml.safe_load(original_content) or {}
-        if not isinstance(data, dict):
-            diagnostics.error("AMF226", f"AgentMakefile source must be a mapping: {source_path}", "evo.patch.module")
-            return
-        record = {"original_content": original_content, "data": data}
-        source_map[source_path] = record
+        return
 
     data = record["data"]
     targets = data.setdefault("targets", {})
@@ -827,6 +820,170 @@ def _apply_update_match_terms_change(
         if term_text and term_text not in user_intent:
             user_intent.append(term_text)
     match["user_intent"] = user_intent
+
+
+def _apply_merge_duplicate_targets_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    duplicate_names = change.get("duplicate_original_names")
+    if not isinstance(duplicate_names, dict) or not duplicate_names:
+        diagnostics.error(
+            "AMF226",
+            "merge_duplicate_targets requires duplicate_original_names mapping",
+            "evo.patch.changes",
+        )
+        return
+
+    module_paths = change.get("modules") or proposal.get("scope", {}).get("modules", [])
+    if change.get("module"):
+        module_paths = [change["module"]]
+    if not module_paths:
+        diagnostics.error(
+            "AMF226",
+            "merge_duplicate_targets requires at least one module in scope or change",
+            "evo.patch.changes",
+        )
+        return
+
+    for raw_path in module_paths:
+        source_path = Path(str(raw_path))
+        record = _load_module_record(source_path, source_map, diagnostics)
+        if record is None:
+            continue
+        _merge_duplicates_in_module(record["data"], duplicate_names)
+
+
+def _load_module_record(
+    source_path: Path,
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> Optional[Dict[str, Any]]:
+    record = source_map.get(source_path)
+    if record is not None:
+        return record
+    try:
+        original_content = source_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        diagnostics.error(
+            "AMF226",
+            f"could not read AgentMakefile source: {source_path}",
+            "evo.patch.module",
+            str(exc),
+        )
+        return None
+    data = yaml.safe_load(original_content) or {}
+    if not isinstance(data, dict):
+        diagnostics.error("AMF226", f"AgentMakefile source must be a mapping: {source_path}", "evo.patch.module")
+        return None
+    record = {"original_content": original_content, "data": data}
+    source_map[source_path] = record
+    return record
+
+
+def _merge_duplicates_in_module(data: Dict[str, Any], duplicate_names: Dict[str, Any]) -> None:
+    skills = data.get("skills")
+    if not isinstance(skills, dict) or not skills:
+        return
+    targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
+
+    relative_to_skill: Dict[str, str] = {}
+    for skill_name, skill in skills.items():
+        if not isinstance(skill, dict):
+            continue
+        impl = skill.get("implementation")
+        if isinstance(impl, dict):
+            rel = impl.get("relative_source")
+            if isinstance(rel, str):
+                relative_to_skill[rel] = skill_name
+
+    removed = 0
+    for original_name, paths in duplicate_names.items():
+        if not isinstance(paths, list) or len(paths) < 2:
+            continue
+        primary_path = str(paths[0])
+        primary_name = relative_to_skill.get(primary_path)
+        if primary_name is None or primary_name not in skills:
+            continue
+        primary_skill = skills[primary_name]
+        if not isinstance(primary_skill, dict):
+            continue
+        primary_target_name = f"skill.{primary_name}"
+        primary_target = targets.get(primary_target_name) if isinstance(targets.get(primary_target_name), dict) else None
+
+        for duplicate_path in paths[1:]:
+            duplicate_name = relative_to_skill.get(str(duplicate_path))
+            if duplicate_name is None or duplicate_name == primary_name or duplicate_name not in skills:
+                continue
+            duplicate_skill = skills[duplicate_name]
+            if not isinstance(duplicate_skill, dict):
+                continue
+            _merge_user_intent(primary_skill, duplicate_skill)
+            duplicate_target_name = f"skill.{duplicate_name}"
+            duplicate_target = targets.get(duplicate_target_name) if isinstance(targets.get(duplicate_target_name), dict) else None
+            if primary_target is not None and duplicate_target is not None:
+                _merge_user_intent(primary_target, duplicate_target)
+            _record_merged_duplicate(primary_skill, duplicate_name, duplicate_skill, str(original_name))
+            del skills[duplicate_name]
+            if duplicate_target_name in targets:
+                del targets[duplicate_target_name]
+            removed += 1
+
+    if removed:
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict):
+            count = metadata.get("skill_count")
+            if isinstance(count, int):
+                metadata["skill_count"] = max(0, count - removed)
+
+
+def _merge_user_intent(primary: Dict[str, Any], duplicate: Dict[str, Any]) -> None:
+    duplicate_match = duplicate.get("match")
+    if not isinstance(duplicate_match, dict):
+        return
+    duplicate_intent = duplicate_match.get("user_intent")
+    if isinstance(duplicate_intent, str):
+        duplicate_intent = [duplicate_intent]
+    if not isinstance(duplicate_intent, list):
+        return
+    primary_match = primary.setdefault("match", {})
+    if not isinstance(primary_match, dict):
+        return
+    primary_intent = primary_match.get("user_intent")
+    if isinstance(primary_intent, str):
+        primary_intent = [primary_intent]
+    if not isinstance(primary_intent, list):
+        primary_intent = []
+    for term in duplicate_intent:
+        term_text = str(term)
+        if term_text and term_text not in primary_intent:
+            primary_intent.append(term_text)
+    primary_match["user_intent"] = primary_intent
+
+
+def _record_merged_duplicate(
+    primary_skill: Dict[str, Any],
+    duplicate_name: str,
+    duplicate_skill: Dict[str, Any],
+    original_name: str,
+) -> None:
+    impl = primary_skill.setdefault("implementation", {})
+    if not isinstance(impl, dict):
+        return
+    merged = impl.setdefault("merged_duplicates", [])
+    if not isinstance(merged, list):
+        return
+    dup_impl = duplicate_skill.get("implementation") if isinstance(duplicate_skill.get("implementation"), dict) else {}
+    merged.append(
+        {
+            "skill": duplicate_name,
+            "source": dup_impl.get("source"),
+            "relative_source": dup_impl.get("relative_source"),
+            "original_name": dup_impl.get("original_name") or original_name,
+        }
+    )
 
 
 def _change_module_path(change: Dict[str, Any], proposal: Dict[str, Any]) -> Optional[str]:

@@ -1702,6 +1702,144 @@ targets:
     assert "+      - inspect patch" in patch
 
 
+def test_candidate_patch_generator_merges_duplicate_openclaw_targets(tmp_path: Path) -> None:
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+metadata:
+  skill_count: 3
+skills:
+  coding.review:
+    namespace: smoke
+    description: Review primary.
+    implementation:
+      source: skills/review/SKILL.md
+      original_name: review
+      relative_source: coding/review/SKILL.md
+    match:
+      user_intent:
+        - review
+  coding.review-2:
+    namespace: smoke
+    description: Review alternate.
+    implementation:
+      source: skills/review-alt/SKILL.md
+      original_name: review
+      relative_source: coding/review-alt/SKILL.md
+    match:
+      user_intent:
+        - inspect patch
+  coding.debug:
+    namespace: smoke
+    description: Debug.
+    implementation:
+      source: skills/debug/SKILL.md
+      original_name: debug
+      relative_source: coding/debug/SKILL.md
+    match:
+      user_intent:
+        - debug
+targets:
+  skill.coding.review:
+    match:
+      user_intent:
+        - review
+    skills:
+      - smoke:coding.review
+    steps:
+      - use_skill: smoke:coding.review
+      - link_prompt:
+          source: skills/review/SKILL.md
+  skill.coding.review-2:
+    match:
+      user_intent:
+        - inspect patch
+    skills:
+      - smoke:coding.review-2
+    steps:
+      - use_skill: smoke:coding.review-2
+      - link_prompt:
+          source: skills/review-alt/SKILL.md
+  skill.coding.debug:
+    match:
+      user_intent:
+        - debug
+    skills:
+      - smoke:coding.debug
+    steps:
+      - use_skill: smoke:coding.debug
+""",
+    )
+    proposal_path = tmp_path / "duplicate.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-merge",
+                "title": "Merge duplicate review targets",
+                "scope": {"modules": [str(module_path)], "targets": []},
+                "evidence": [{"event_id": "sha256:evidence", "reason": "duplicate review skills"}],
+                "changes": [
+                    {
+                        "type": "merge_duplicate_targets",
+                        "duplicate_original_names": {
+                            "review": [
+                                "coding/review/SKILL.md",
+                                "coding/review-alt/SKILL.md",
+                            ]
+                        },
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_candidate_patch_payload, create_compile_evaluate_payload
+
+    patch_result = create_candidate_patch_payload(
+        proposal_file=proposal_path,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        write=False,
+    )
+    eval_result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / ".agentmf" / "evolution" / "worktrees",
+        write=True,
+    )
+    candidate_source = load_source(Path(eval_result.payload["candidate_files"][0]["path"]))
+
+    assert patch_result.ok, patch_result.diagnostics.format()
+    assert patch_result.payload["patch_status"] == "generated"
+    assert patch_result.payload["unsupported_changes"] == []
+    assert "-  coding.review-2:" in patch_result.payload["patch"]
+    assert "-  skill.coding.review-2:" in patch_result.payload["patch"]
+    assert eval_result.ok, eval_result.diagnostics.format()
+    assert eval_result.payload["promotion_report"]["status"] == "passed"
+    assert "coding.review-2" not in candidate_source.skills
+    assert "skill.coding.review-2" not in candidate_source.targets
+    assert candidate_source.skills["coding.review"].match["user_intent"] == [
+        "review",
+        "inspect patch",
+    ]
+    assert candidate_source.targets["skill.coding.review"].match["user_intent"] == [
+        "review",
+        "inspect patch",
+    ]
+    assert candidate_source.skills["coding.review"].implementation["merged_duplicates"] == [
+        {
+            "skill": "coding.review-2",
+            "source": "skills/review-alt/SKILL.md",
+            "relative_source": "coding/review-alt/SKILL.md",
+            "original_name": "review",
+        }
+    ]
+    assert candidate_source.metadata["skill_count"] == 2
+    assert load_source(module_path).skills["coding.review-2"].description == "Review alternate."
+
+
 def test_compile_evaluate_loop_validates_candidate_in_isolated_workspace(tmp_path: Path) -> None:
     module_path = write_agentmakefile(
         tmp_path,
