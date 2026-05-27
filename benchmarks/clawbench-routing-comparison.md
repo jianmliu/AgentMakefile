@@ -16,19 +16,38 @@ downstream pass rate.
 | Task | root | curated/.tmp | curated/plugins | curated/skills | curated/uncategorized | curated/vendor_imports |
 | --- | --- | --- | --- | --- | --- | --- |
 | `methodology-review` | `methodology.review` | `skill..tmp.figma-generate-design` | _no match_ | _no match_ | _no match_ | _no match_ |
-| `methodology-plan` | `methodology.execute_plan` | `skill..tmp.brainstorming` | `skill.plugins.documents` | _no match_ | `skill.uncategorized.apple-reminders` | _no match_ |
-| `methodology-debug` | `methodology.debug` | `skill..tmp.browser` | `skill.plugins.m5-onboard` | _no match_ | `skill.uncategorized.mcporter` | _no match_ |
+| `methodology-plan` | `methodology.execute_plan` | `skill..tmp.executing-plans` | `skill.plugins.documents` | _no match_ | `skill.uncategorized.himalaya` | _no match_ |
+| `methodology-debug` | `methodology.debug` | `skill..tmp.web-perf` | `skill.plugins.m5-onboard` | _no match_ | `skill.uncategorized.mcporter` | _no match_ |
 | `methodology-finish` | `methodology.finish` | `skill..tmp.attack-path-analysis` | `skill.plugins.stripe-projects` | _no match_ | `skill.uncategorized.apple-reminders` | _no match_ |
-| `bundled-1password` | _no match_ | `skill..tmp.circleci-cli` | `skill.plugins.documents` | _no match_ | `skill.uncategorized.songsee` | _no match_ |
+| `bundled-1password` | _no match_ | `skill..tmp.openai-platform-api-key` | `skill.plugins.documents` | _no match_ | `skill.uncategorized.songsee` | _no match_ |
 | `bundled-apple-notes` | _no match_ | `skill..tmp.hubspot` | `skill.plugins.documents` | `skill.skills.imagegen` | `skill.uncategorized.bear-notes` | `skill.vendor_imports.jupyter-notebook` |
-| `plugins-presentations` | _no match_ | `skill..tmp.finishing-a-development-branch` | `skill.plugins.documents` | _no match_ | `skill.uncategorized.bear-notes` | _no match_ |
+| `plugins-presentations` | _no match_ | `skill..tmp.hubspot` | `skill.plugins.presentations` | _no match_ | `skill.uncategorized.bear-notes` | _no match_ |
 | `plugins-spreadsheet` | _no match_ | `skill..tmp.finishing-a-development-branch` | _no match_ | _no match_ | `skill.uncategorized.himalaya` | _no match_ |
-| `vendor-aspnet` | _no match_ | `skill..tmp.finishing-a-development-branch` | `skill.plugins.m5-onboard` | _no match_ | _no match_ | `skill.vendor_imports.jupyter-notebook` |
-| `vendor-stripe` | `omo.plan` | `skill..tmp.uml-and-software-architecture-visualization` | `skill.plugins.build-mcpb` | _no match_ | _no match_ | `skill.vendor_imports.cloudflare-deploy` |
+| `vendor-aspnet` | _no match_ | `skill..tmp.openai-api-troubleshooting` | `skill.plugins.m5-onboard` | _no match_ | _no match_ | `skill.vendor_imports.jupyter-notebook` |
+| `vendor-stripe` | `omo.plan` | `skill..tmp.uml-and-software-architecture-visualization` | `skill.plugins.build-mcpb` | _no match_ | _no match_ | `skill.vendor_imports.figma-create-design-system-rules` |
+
+## N-best alternatives (top-2 below selected)
+
+Auxiliary signal — what other targets the selector considered.
+A downstream agent can use this to recover when the top-1 is
+wrong but the correct skill ranks #2 or #3.
+
+| Task | root | curated/.tmp | curated/plugins | curated/skills | curated/uncategorized | curated/vendor_imports |
+| --- | --- | --- | --- | --- | --- | --- |
+| `methodology-review` | `review.task`, `methodology.request_review` | `skill..tmp.finishing-a-development-branch`, `skill..tmp.gh-address-comments` | _none_ | _none_ | _none_ | _none_ |
+| `methodology-plan` | `methodology.plan`, `code.change` | `skill..tmp.subagent-driven-development`, `skill..tmp.using-git-worktrees` | _none_ | _none_ | `skill.uncategorized.apple-reminders` | _none_ |
+| `methodology-debug` | `code.change` | `skill..tmp.browser`, `skill..tmp.chunk` | _none_ | _none_ | _none_ | _none_ |
+| `methodology-finish` | `methodology.default`, `methodology.bootstrap` | `skill..tmp.finding-discovery`, `skill..tmp.fix-finding` | _none_ | _none_ | _none_ | _none_ |
+| `bundled-1password` | _none_ | `skill..tmp.circleci-cli` | _none_ | _none_ | _none_ | _none_ |
+| `bundled-apple-notes` | _none_ | `skill..tmp.twilio-content-template-builder`, `skill..tmp.twilio-whatsapp-manage-senders` | `skill.plugins.cardputer-buddy` | _none_ | `skill.uncategorized.skill-creator`, `skill.uncategorized.apple-notes` | `skill.vendor_imports.winui-app` |
+| `plugins-presentations` | _none_ | `skill..tmp.twilio-content-template-builder`, `skill..tmp.twilio-whatsapp-manage-senders` | `skill.plugins.documents` | _none_ | _none_ | _none_ |
+| `plugins-spreadsheet` | _none_ | `skill..tmp.twilio-customer-support-architect`, `skill..tmp.twilio-sendgrid-webhooks` | _none_ | _none_ | _none_ | _none_ |
+| `vendor-aspnet` | _none_ | `skill..tmp.finishing-a-development-branch`, `skill..tmp.build-chatgpt-app` | _none_ | _none_ | _none_ | `skill.vendor_imports.chatgpt-apps`, `skill.vendor_imports.aspnet-core` |
+| `vendor-stripe` | `spec.breakdown`, `methodology.plan` | `skill..tmp.twilio-marketing-promotions-advisor`, `skill..tmp.expo-tailwind-setup` | `skill.plugins.claude-automation-recommender`, `skill.plugins.configure` | _none_ | _none_ | `skill.vendor_imports.cloudflare-deploy` |
 
 ## Aggregate
 
-| Source | Tasks matched | Tasks unmatched |
+| Source | Tasks matched (top-1) | Tasks unmatched |
 | --- | ---: | ---: |
 | `root` | 5 | 5 |
 | `curated/.tmp` | 10 | 0 |
@@ -49,45 +68,36 @@ Caveats:
   paths pointing at the local Codex/Claude install, so this report's
   results are reproducible only on the machine that produced them.
 
-## Precision verdict (hand judged)
+## Routing-precision history (hand judged)
 
-For each OpenClaw-flavoured task the corresponding correct skill DOES
-exist in one of the curated modules. The table below records whether
-the selector picked the right skill, a related-but-wrong skill, an
-unrelated skill, or nothing.
+Three commits attempt to improve OpenClaw routing precision; each
+commit's contribution is measured against the previous baseline on
+the 6 OpenClaw-domain tasks (the 4 methodology tasks always route
+correctly via the root AgentMakefile).
 
-| Task | Ground-truth skill present? | Best curated match | Verdict |
-| --- | --- | --- | --- |
-| `methodology-review` | n/a (methodology, not OpenClaw) | `methodology.review` (root) | ✓ correct via root |
-| `methodology-plan` | n/a | `methodology.execute_plan` (root) | ✓ correct via root |
-| `methodology-debug` | n/a | `methodology.debug` (root) | ✓ correct via root |
-| `methodology-finish` | n/a | `methodology.finish` (root) | ✓ correct via root |
-| `bundled-1password` | yes — `uncategorized.1password` | `uncategorized.songsee` | ✗ unrelated false positive |
-| `bundled-apple-notes` | yes — `uncategorized.apple-notes` | `uncategorized.bear-notes` | ⚠ wrong app, related domain |
-| `plugins-presentations` | yes — `plugins.presentations` | `plugins.documents` | ⚠ wrong skill, related domain |
-| `plugins-spreadsheet` | yes — `plugins.spreadsheets` | _no match_ | ✗ missed (correct skill exists, not picked) |
-| `vendor-aspnet` | yes — `vendor_imports.aspnet-core` | `vendor_imports.jupyter-notebook` | ✗ unrelated false positive |
-| `vendor-stripe` | yes — `plugins.stripe-projects` | `plugins.build-mcpb` (and root's `omo.plan` false-positive) | ✗ unrelated false positive |
+| Stage | Top-1 correct | N-best (top-3) contains correct |
+| --- | ---: | ---: |
+| Initial promote (curator only) | 0 / 6 | n/a |
+| + tie-break by matched-term length (`3064c96`) | 1 / 6 | n/a |
+| + N-best alternatives surfaced (`7b642a4`) | 1 / 6 | 2 / 6 |
 
-Headline:
+Concrete movers under each commit:
 
-- **4 of 4** methodology tasks routed correctly via the root AgentMakefile.
-- **0 of 6** OpenClaw-domain tasks routed to the right skill, even though
-  the right skill is present in the curated index for every one of them.
-- Promote increased skill coverage from 4/10 to 10/10 raw matches, but
-  precision went from 4/4 to 4/10. Net useful routings stayed at 4.
+- `3064c96` flipped `plugins-presentations` from `plugins.documents`
+  to `plugins.presentations` by breaking score ties on matched-term
+  length — the new `update_match_terms` proposal's long phrase
+  finally beats the neighbour's stray single word `Create`.
+- `7b642a4` surfaces `vendor_imports.aspnet-core` as an alternative
+  on `vendor-aspnet` even though top-1 still points elsewhere; a
+  downstream LLM agent can recover from the wrong top-1 because the
+  right skill is visible at rank #2/#3.
 
-Why: each curated skill's `match.user_intent` is derived from its
-description, which often shares broad vocabulary (`documents`,
-`create`, `setup`, `notes`) with neighbouring skills. The selector
-picks the first matching candidate by score, and when many skills
-score similarly on common tokens the choice is effectively arbitrary.
+Outstanding gap (still 4/6 OpenClaw tasks routing wrong):
 
-What would close the gap: the `missing_match_terms` dream-mode
-detector (spec EVO-005 third bullet, not yet implemented) is the
-right place to add the corrective signal — feed it `plugin_payload`
-evidence plus user-feedback records that say "this request should
-have routed to skill X" and have it emit `update_match_terms`
-proposals adding the request's distinctive tokens to skill X's
-`match.user_intent`. Without that loop, adding more skills to the
-index will keep diluting precision rather than improving it.
+- `bundled-1password`, `bundled-apple-notes`, `plugins-spreadsheet`,
+  `vendor-stripe` — these all have very generic neighbour skills with
+  overly-broad `match.user_intent` terms (`Create`, single-word
+  triggers). Curing them needs either user-feedback evidence that
+  drives the `missing_match_terms` dream detector to attach
+  distinguishing terms to the correct skill, or a follow-up patch
+  class that prunes overly-broad terms from the neighbour skills.

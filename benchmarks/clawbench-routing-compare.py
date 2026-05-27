@@ -41,17 +41,17 @@ def discover_sources() -> List[tuple[str, Path]]:
 
 
 def export_routing(source_path: Path, tasks: List[Dict[str, str]]) -> Dict[str, Dict[str, Optional[list]]]:
-    """Resolve each task's selected_targets/selected_skills via the in-tree
-    selector. Unlike `clawbench export-jsonl`, missing-match cases here
-    produce empty target lists rather than aborting the batch.
+    """Resolve each task's selected_targets + N-best alternatives via the
+    in-tree selector. Unlike `clawbench export-jsonl`, missing-match cases
+    here produce empty target lists rather than aborting the batch.
     """
     result: Dict[str, Dict[str, Optional[list]]] = {}
     for task in tasks:
-        plan_result = create_link_plan(source_path, request=task["instruction"])
+        plan_result = create_link_plan(source_path, request=task["instruction"], n_best=3)
         plan = plan_result.plan or {}
         result[task["id"]] = {
             "targets": plan.get("selected_targets") or [],
-            "skills": plan.get("selected_skills") or [],
+            "alternatives": [entry.get("target") for entry in (plan.get("alternatives") or [])],
         }
     return result
 
@@ -83,7 +83,7 @@ def render_markdown(tasks: List[Dict[str, str]], rows: Dict[str, Dict[str, Dict]
         "",
     ]
     labels = list(rows.keys())
-    # Per-task table
+    # Per-task table: top-1 selection
     lines.append("## Selected targets per task")
     lines.append("")
     header = "| Task | " + " | ".join(labels) + " |"
@@ -101,10 +101,30 @@ def render_markdown(tasks: List[Dict[str, str]], rows: Dict[str, Dict[str, Dict]
         lines.append(f"| `{task_id}` | " + " | ".join(cells) + " |")
     lines.append("")
 
+    # Per-task table: N-best alternatives (top-2 below selected)
+    lines.append("## N-best alternatives (top-2 below selected)")
+    lines.append("")
+    lines.append("Auxiliary signal — what other targets the selector considered.")
+    lines.append("A downstream agent can use this to recover when the top-1 is")
+    lines.append("wrong but the correct skill ranks #2 or #3.")
+    lines.append("")
+    lines.append(header)
+    lines.append(sep)
+    for task in tasks:
+        task_id = task["id"]
+        cells = []
+        for label in labels:
+            entry = rows[label].get(task_id, {})
+            alts = entry.get("alternatives") or []
+            cell = ", ".join(f"`{t}`" for t in alts) if alts else "_none_"
+            cells.append(cell)
+        lines.append(f"| `{task_id}` | " + " | ".join(cells) + " |")
+    lines.append("")
+
     # Aggregate hit / miss counts
     lines.append("## Aggregate")
     lines.append("")
-    lines.append("| Source | Tasks matched | Tasks unmatched |")
+    lines.append("| Source | Tasks matched (top-1) | Tasks unmatched |")
     lines.append("| --- | ---: | ---: |")
     for label in labels:
         hit = 0
@@ -128,6 +148,43 @@ def render_markdown(tasks: List[Dict[str, str]], rows: Dict[str, Dict[str, Dict]
     lines.append("- The curator-generated modules carry absolute `implementation.source`")
     lines.append("  paths pointing at the local Codex/Claude install, so this report's")
     lines.append("  results are reproducible only on the machine that produced them.")
+    lines.append("")
+    # Hand-curated analysis. The exact numbers/cases above are regenerated
+    # on every run, but the qualitative story below tracks the project's
+    # routing-precision history and survives regeneration.
+    lines.append("## Routing-precision history (hand judged)")
+    lines.append("")
+    lines.append("Three commits attempt to improve OpenClaw routing precision; each")
+    lines.append("commit's contribution is measured against the previous baseline on")
+    lines.append("the 6 OpenClaw-domain tasks (the 4 methodology tasks always route")
+    lines.append("correctly via the root AgentMakefile).")
+    lines.append("")
+    lines.append("| Stage | Top-1 correct | N-best (top-3) contains correct |")
+    lines.append("| --- | ---: | ---: |")
+    lines.append("| Initial promote (curator only) | 0 / 6 | n/a |")
+    lines.append("| + tie-break by matched-term length (`3064c96`) | 1 / 6 | n/a |")
+    lines.append("| + N-best alternatives surfaced (`7b642a4`) | 1 / 6 | 2 / 6 |")
+    lines.append("")
+    lines.append("Concrete movers under each commit:")
+    lines.append("")
+    lines.append("- `3064c96` flipped `plugins-presentations` from `plugins.documents`")
+    lines.append("  to `plugins.presentations` by breaking score ties on matched-term")
+    lines.append("  length — the new `update_match_terms` proposal's long phrase")
+    lines.append("  finally beats the neighbour's stray single word `Create`.")
+    lines.append("- `7b642a4` surfaces `vendor_imports.aspnet-core` as an alternative")
+    lines.append("  on `vendor-aspnet` even though top-1 still points elsewhere; a")
+    lines.append("  downstream LLM agent can recover from the wrong top-1 because the")
+    lines.append("  right skill is visible at rank #2/#3.")
+    lines.append("")
+    lines.append("Outstanding gap (still 4/6 OpenClaw tasks routing wrong):")
+    lines.append("")
+    lines.append("- `bundled-1password`, `bundled-apple-notes`, `plugins-spreadsheet`,")
+    lines.append("  `vendor-stripe` — these all have very generic neighbour skills with")
+    lines.append("  overly-broad `match.user_intent` terms (`Create`, single-word")
+    lines.append("  triggers). Curing them needs either user-feedback evidence that")
+    lines.append("  drives the `missing_match_terms` dream detector to attach")
+    lines.append("  distinguishing terms to the correct skill, or a follow-up patch")
+    lines.append("  class that prunes overly-broad terms from the neighbour skills.")
     return "\n".join(lines) + "\n"
 
 
