@@ -5,3 +5,7 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+
+# Per-machine promoted OpenClaw curation output (paths reference local
+# Codex/Claude installs; regenerate on demand via agentmf evo promote).
+modules/openclaw-curated/
