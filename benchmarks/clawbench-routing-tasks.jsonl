@@ -1,0 +1,10 @@
+{"id":"methodology-review","instruction":"review the diff before merging this PR"}
+{"id":"methodology-plan","instruction":"write an implementation plan for adding password reset"}
+{"id":"methodology-debug","instruction":"debug failing pytest in tests/test_auth.py"}
+{"id":"methodology-finish","instruction":"finish the development branch and open a pull request"}
+{"id":"bundled-1password","instruction":"retrieve a secret from 1Password CLI"}
+{"id":"bundled-apple-notes","instruction":"create a new Apple Note titled Standup"}
+{"id":"plugins-presentations","instruction":"create a presentation about Q4 results"}
+{"id":"plugins-spreadsheet","instruction":"build a spreadsheet tracking customer churn"}
+{"id":"vendor-aspnet","instruction":"scaffold an ASP.NET Core minimal API project"}
+{"id":"vendor-stripe","instruction":"set up Stripe Checkout for a subscription plan"}
