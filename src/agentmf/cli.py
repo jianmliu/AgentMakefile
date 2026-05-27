@@ -15,7 +15,16 @@ from agentmf.clawbench import (
     create_clawbench_result_summary,
 )
 from agentmf.compiler import compile_agentmakefile
-from agentmf.evolution import EVIDENCE_SOURCES, create_evolution_evidence_payload
+from agentmf.evolution import (
+    EVIDENCE_SOURCES,
+    PROMOTION_STATUSES,
+    create_candidate_patch_payload,
+    create_compile_evaluate_payload,
+    create_dream_mode_payload,
+    create_evolution_evidence_payload,
+    create_openclaw_curator_payload,
+    create_skill_workshop_proposal_payload,
+)
 from agentmf.loader import load_source_with_diagnostics
 from agentmf.openclaw import create_openclaw_import_payload
 from agentmf.plugin import create_plugin_payload
@@ -196,6 +205,60 @@ def main(argv: Optional[List[str]] = None) -> int:
     evo_evidence_add_cmd.add_argument("--timestamp")
     evo_evidence_add_cmd.add_argument("--write", action="store_true")
     evo_evidence_add_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    evo_proposal_cmd = evo_subcommands.add_parser("proposal", help="Skill Workshop proposal commands")
+    evo_proposal_subcommands = evo_proposal_cmd.add_subparsers(dest="evo_proposal_command", required=True)
+    evo_proposal_create_cmd = evo_proposal_subcommands.add_parser(
+        "create",
+        help="create a Skill Workshop proposal from evidence records",
+    )
+    evo_proposal_create_cmd.add_argument("--title", required=True)
+    evo_proposal_create_cmd.add_argument("--evidence-file", action="append", dest="evidence_files", default=[])
+    evo_proposal_create_cmd.add_argument("--module", action="append", dest="modules", default=[])
+    evo_proposal_create_cmd.add_argument("--target", action="append", dest="targets", default=[])
+    evo_proposal_create_cmd.add_argument("--change-json", action="append", dest="change_jsons", default=[])
+    evo_proposal_create_cmd.add_argument("--evaluation-command", action="append", dest="evaluation_commands", default=[])
+    evo_proposal_create_cmd.add_argument("--out-dir", default=".agentmf/evolution/candidates")
+    evo_proposal_create_cmd.add_argument("--timestamp")
+    evo_proposal_create_cmd.add_argument("--promotion-status", choices=sorted(PROMOTION_STATUSES), default="candidate")
+    evo_proposal_create_cmd.add_argument("--write", action="store_true")
+    evo_proposal_create_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    evo_patch_cmd = evo_subcommands.add_parser("patch", help="candidate patch commands")
+    evo_patch_subcommands = evo_patch_cmd.add_subparsers(dest="evo_patch_command", required=True)
+    evo_patch_generate_cmd = evo_patch_subcommands.add_parser(
+        "generate",
+        help="generate a reviewable candidate patch from a proposal",
+    )
+    evo_patch_generate_cmd.add_argument("--proposal-file", required=True)
+    evo_patch_generate_cmd.add_argument("--out-dir", default=".agentmf/evolution/candidates")
+    evo_patch_generate_cmd.add_argument("--write", action="store_true")
+    evo_patch_generate_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    evo_evaluate_cmd = evo_subcommands.add_parser("evaluate", help="compile and evaluate a proposal in isolation")
+    evo_evaluate_cmd.add_argument("--proposal-file", required=True)
+    evo_evaluate_cmd.add_argument("--workspace-dir", default=".agentmf/evolution/worktrees")
+    evo_evaluate_cmd.add_argument("--write", action="store_true")
+    evo_evaluate_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    evo_dream_cmd = evo_subcommands.add_parser("dream", help="Dream Mode dry-run commands")
+    evo_dream_subcommands = evo_dream_cmd.add_subparsers(dest="evo_dream_command", required=True)
+    evo_dream_run_cmd = evo_dream_subcommands.add_parser(
+        "run",
+        help="create proposal candidates from stored evidence without source mutation",
+    )
+    evo_dream_run_cmd.add_argument("--evidence-dir", default=".agentmf/evolution/evidence")
+    evo_dream_run_cmd.add_argument("--out-dir", default=".agentmf/evolution/candidates")
+    evo_dream_run_cmd.add_argument("--timestamp")
+    evo_dream_run_cmd.add_argument("--write", action="store_true")
+    evo_dream_run_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    evo_openclaw_cmd = evo_subcommands.add_parser("openclaw", help="OpenClaw curator commands")
+    evo_openclaw_subcommands = evo_openclaw_cmd.add_subparsers(dest="evo_openclaw_command", required=True)
+    evo_openclaw_curate_cmd = evo_openclaw_subcommands.add_parser(
+        "curate",
+        help="create OpenClaw curation proposals from importer evidence",
+    )
+    evo_openclaw_curate_cmd.add_argument("--evidence-file", required=True)
+    evo_openclaw_curate_cmd.add_argument("--out-dir", default=".agentmf/evolution/candidates")
+    evo_openclaw_curate_cmd.add_argument("--timestamp")
+    evo_openclaw_curate_cmd.add_argument("--write", action="store_true")
+    evo_openclaw_curate_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
     benchmark_cmd = subparsers.add_parser("benchmark", help="benchmark AgentMakefile harness behavior")
     benchmark_subcommands = benchmark_cmd.add_subparsers(dest="benchmark_command", required=True)
@@ -748,6 +811,16 @@ def _openclaw(args: argparse.Namespace) -> int:
 def _evo(args: argparse.Namespace) -> int:
     if args.evo_command == "evidence" and args.evo_evidence_command == "add":
         return _evo_evidence_add(args)
+    if args.evo_command == "proposal" and args.evo_proposal_command == "create":
+        return _evo_proposal_create(args)
+    if args.evo_command == "patch" and args.evo_patch_command == "generate":
+        return _evo_patch_generate(args)
+    if args.evo_command == "evaluate":
+        return _evo_evaluate(args)
+    if args.evo_command == "dream" and args.evo_dream_command == "run":
+        return _evo_dream_run(args)
+    if args.evo_command == "openclaw" and args.evo_openclaw_command == "curate":
+        return _evo_openclaw_curate(args)
     return 2
 
 
@@ -1275,6 +1348,174 @@ def _evo_evidence_add(args: argparse.Namespace) -> int:
             print(f"  source: {result.payload['record']['source']}")
             print(f"  path: {result.payload['path']}")
             print(f"  event: {result.payload['record']['event_id']}")
+    return 1 if not result.ok else 0
+
+
+def _evo_proposal_create(args: argparse.Namespace) -> int:
+    changes = []
+    for raw_change in args.change_jsons:
+        try:
+            change = json.loads(raw_change)
+        except json.JSONDecodeError as exc:
+            print(f"error: invalid --change-json: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(change, dict):
+            print("error: --change-json must decode to a JSON object", file=sys.stderr)
+            return 1
+        changes.append(change)
+
+    result = create_skill_workshop_proposal_payload(
+        title=args.title,
+        evidence_files=[Path(path) for path in args.evidence_files],
+        scope={
+            "modules": args.modules,
+            "targets": args.targets,
+        },
+        changes=changes,
+        evaluation_commands=args.evaluation_commands,
+        out_dir=Path(args.out_dir),
+        timestamp=args.timestamp,
+        promotion_status=args.promotion_status,
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "skill_workshop_proposal": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            action = "Wrote" if args.write else "Would write"
+            proposal = result.payload["proposal"]
+            print(f"{action} Skill Workshop proposal:")
+            print(f"  id: {proposal['proposal_id']}")
+            print(f"  status: {proposal['promotion']['status']}")
+            print(f"  proposal: {result.payload['paths']['proposal_json']}")
+            print(f"  report: {result.payload['paths']['markdown_report']}")
+    return 1 if not result.ok else 0
+
+
+def _evo_patch_generate(args: argparse.Namespace) -> int:
+    result = create_candidate_patch_payload(
+        proposal_file=Path(args.proposal_file),
+        out_dir=Path(args.out_dir),
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "candidate_patch": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            action = "Wrote" if args.write else "Would write"
+            print(f"{action} candidate patch:")
+            print(f"  status: {result.payload['patch_status']}")
+            print(f"  patch: {result.payload['paths']['patch']}")
+    return 1 if not result.ok else 0
+
+
+def _evo_evaluate(args: argparse.Namespace) -> int:
+    result = create_compile_evaluate_payload(
+        proposal_file=Path(args.proposal_file),
+        workspace_dir=Path(args.workspace_dir),
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "compile_evaluate": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print("Compile/evaluate result:")
+            print(f"  status: {result.payload['promotion_report']['status']}")
+            print(f"  workspace: {result.payload['workspace_dir']}")
+    return 1 if not result.ok else 0
+
+
+def _evo_dream_run(args: argparse.Namespace) -> int:
+    result = create_dream_mode_payload(
+        evidence_dir=Path(args.evidence_dir),
+        out_dir=Path(args.out_dir),
+        timestamp=args.timestamp,
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "dream_mode": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            action = "Wrote" if args.write else "Would write"
+            print(f"{action} Dream Mode candidates:")
+            print(f"  proposals: {result.payload['proposal_count']}")
+    return 1 if not result.ok else 0
+
+
+def _evo_openclaw_curate(args: argparse.Namespace) -> int:
+    result = create_openclaw_curator_payload(
+        evidence_file=Path(args.evidence_file),
+        out_dir=Path(args.out_dir),
+        timestamp=args.timestamp,
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "openclaw_curator": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            action = "Wrote" if args.write else "Would write"
+            print(f"{action} OpenClaw curator proposal:")
+            print(f"  proposals: {result.payload['proposal_count']}")
     return 1 if not result.ok else 0
 
 

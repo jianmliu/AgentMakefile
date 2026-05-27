@@ -176,6 +176,32 @@ Each candidate proposal has a machine-readable summary:
 }
 ```
 
+Implemented first slice:
+
+```bash
+agentmf evo proposal create \
+  --title "Curate duplicate OpenClaw review skills" \
+  --evidence-file .agentmf/evolution/evidence/registry/openclaw_import.jsonl \
+  --module modules/openclaw/coding/AgentMakefile \
+  --target skill.coding.review \
+  --change-json '{"type":"merge_duplicate_targets","target":"skill.coding.review"}' \
+  --evaluation-command "agentmf validate --file modules/openclaw/coding/AgentMakefile" \
+  --out-dir .agentmf/evolution/candidates \
+  --write \
+  --format json
+```
+
+This slice writes:
+
+```text
+.agentmf/evolution/candidates/<proposal-id>.proposal.json
+.agentmf/evolution/candidates/<proposal-id>.md
+```
+
+It does not generate or apply patches. Patch generation starts in
+AMF-EVO-003. Proposal promotion statuses are `candidate`, `rejected`,
+`accepted`, and `superseded`.
+
 ## Candidate Patch Generator
 
 The generator should produce minimal patches against AgentMakefile sources. It
@@ -201,6 +227,20 @@ Each patch must include:
 - The unified diff.
 - The commands needed to validate it.
 
+Implemented first slice:
+
+```bash
+agentmf evo patch generate \
+  --proposal-file .agentmf/evolution/candidates/<proposal-id>.proposal.json \
+  --out-dir .agentmf/evolution/candidates \
+  --write \
+  --format json
+```
+
+This slice supports `update_match_terms` changes against AgentMakefile target
+`match.user_intent` lists. Unsupported patch classes are reported as
+`skipped_unsupported_change` instead of mutating source files.
+
 ## Compile/Evaluate/Promote Loop
 
 Candidate evaluation should run in an isolated output directory:
@@ -220,6 +260,39 @@ Minimum gates:
 
 Promotion is explicit. The workflow can print a suggested command, open a PR, or
 stage a patch, but it must not silently merge.
+
+Implemented first slice:
+
+```bash
+agentmf evo evaluate \
+  --proposal-file .agentmf/evolution/candidates/<proposal-id>.proposal.json \
+  --workspace-dir .agentmf/evolution/worktrees/<proposal-id> \
+  --write \
+  --format json
+```
+
+This slice writes candidate AgentMakefile sources into an isolated workspace and
+runs internal AgentMakefile validation on the candidate files. It does not
+modify canonical sources and does not promote accepted changes.
+
+## Dream Mode Dry-Run
+
+Dream Mode reads stored evidence and emits reviewable candidate proposals under
+`.agentmf/evolution/candidates/`. It must not edit canonical AgentMakefile
+sources, generated host guidance, or installed skills.
+
+Implemented first slice:
+
+```bash
+agentmf evo dream run \
+  --evidence-dir .agentmf/evolution/evidence \
+  --out-dir .agentmf/evolution/candidates \
+  --write \
+  --format json
+```
+
+The first detector consumes OpenClaw import evidence and proposes duplicate
+skill curation when `duplicate_original_names` is present.
 
 ## OpenClaw Large Skill Ecosystem Curator
 
@@ -246,6 +319,19 @@ Curator outputs:
 - Trust and provenance annotations.
 - Heavy or unsafe tool requirement warnings.
 - Candidate benchmark cases for high-value skills.
+
+Implemented first slice:
+
+```bash
+agentmf evo openclaw curate \
+  --evidence-file .agentmf/evolution/evidence/registry/openclaw_import.jsonl \
+  --out-dir .agentmf/evolution/candidates \
+  --write \
+  --format json
+```
+
+This slice creates a `merge_duplicate_targets` proposal from OpenClaw
+`duplicate_original_names` evidence. It does not merge skills automatically.
 
 ## Relation to Registry Standards
 

@@ -1420,6 +1420,512 @@ def test_cli_evo_evidence_add_writes_openclaw_import_record(tmp_path: Path, caps
     assert json.loads(path.read_text())["summary"]["skill_count"] == 2
 
 
+def test_skill_workshop_proposal_writes_json_and_markdown_report(tmp_path: Path) -> None:
+    from agentmf.evolution import (
+        create_evolution_evidence_payload,
+        create_skill_workshop_proposal_payload,
+    )
+
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
+    evidence = create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload={
+            "root_path": "modules/openclaw/AgentMakefile",
+            "curator_evidence": {
+                "skill_count": 3,
+                "category_count": 1,
+                "categories": {"coding": 3},
+                "duplicate_original_names": {
+                    "review": ["coding/review/SKILL.md", "coding/review-alt/SKILL.md"]
+                },
+                "module_paths": ["coding/AgentMakefile"],
+            },
+        },
+        out_dir=evidence_dir,
+        timestamp="2026-05-27T00:00:00Z",
+        write=True,
+    )
+    assert evidence.ok, evidence.diagnostics.format()
+    evidence_file = evidence_dir / "registry" / "openclaw_import.jsonl"
+    out_dir = tmp_path / ".agentmf" / "evolution" / "candidates"
+
+    result = create_skill_workshop_proposal_payload(
+        title="Curate duplicate OpenClaw review skills",
+        evidence_files=[evidence_file],
+        scope={
+            "modules": ["modules/openclaw/coding/AgentMakefile"],
+            "targets": ["skill.coding.review"],
+        },
+        changes=[
+            {
+                "type": "merge_duplicate_targets",
+                "target": "skill.coding.review",
+                "reason": "duplicate original skill names in OpenClaw import",
+            }
+        ],
+        evaluation_commands=[
+            "agentmf validate --file modules/openclaw/coding/AgentMakefile",
+            "agentmf benchmark harness --file modules/openclaw/AgentMakefile --case \"review code\"",
+        ],
+        out_dir=out_dir,
+        timestamp="2026-05-27T00:00:01Z",
+        write=True,
+    )
+
+    proposal = result.payload["proposal"]
+    proposal_path = Path(result.payload["paths"]["proposal_json"])
+    report_path = Path(result.payload["paths"]["markdown_report"])
+    report = report_path.read_text()
+
+    assert result.ok, result.diagnostics.format()
+    assert proposal["proposal_id"].startswith("amf-evo-")
+    assert proposal["title"] == "Curate duplicate OpenClaw review skills"
+    assert proposal["scope"]["modules"] == ["modules/openclaw/coding/AgentMakefile"]
+    assert proposal["evidence"][0]["event_id"] == evidence.payload["record"]["event_id"]
+    assert proposal["changes"][0]["type"] == "merge_duplicate_targets"
+    assert proposal["evaluation"]["status"] == "not_run"
+    assert proposal["promotion"] == {"status": "candidate", "requires_review": True}
+    assert proposal_path.exists()
+    assert report_path.exists()
+    assert "# Curate duplicate OpenClaw review skills" in report
+    assert "merge_duplicate_targets" in report
+    assert "agentmf validate --file modules/openclaw/coding/AgentMakefile" in report
+
+
+def test_skill_workshop_proposal_rejects_unknown_promotion_status(tmp_path: Path) -> None:
+    from agentmf.evolution import create_skill_workshop_proposal_payload
+
+    result = create_skill_workshop_proposal_payload(
+        title="Invalid status proposal",
+        evidence_files=[],
+        scope={},
+        changes=[],
+        evaluation_commands=[],
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        promotion_status="ready",
+        write=False,
+    )
+
+    assert not result.ok
+    assert result.diagnostics.items[0].code == "AMF222"
+
+
+def test_cli_evo_proposal_create_writes_candidate_files(tmp_path: Path, capsys) -> None:
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence" / "registry"
+    evidence_dir.mkdir(parents=True)
+    evidence_file = evidence_dir / "openclaw_import.jsonl"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "event_id": "sha256:evidence",
+                "timestamp": "2026-05-27T00:00:00Z",
+                "source": "openclaw_import",
+                "summary": {"skill_count": 2, "categories": {"coding": 2}},
+                "artifact_refs": {"root_agentmakefile": "modules/openclaw/AgentMakefile"},
+            }
+        )
+        + "\n"
+    )
+    out_dir = tmp_path / ".agentmf" / "evolution" / "candidates"
+
+    exit_code = main(
+        [
+            "evo",
+            "proposal",
+            "create",
+            "--title",
+            "Improve OpenClaw coding skill routing",
+            "--evidence-file",
+            str(evidence_file),
+            "--module",
+            "modules/openclaw/coding/AgentMakefile",
+            "--target",
+            "skill.coding.review",
+            "--change-json",
+            json.dumps(
+                {
+                    "type": "match_rule_update",
+                    "target": "skill.coding.review",
+                    "reason": "OpenClaw evidence showed duplicate review skills",
+                }
+            ),
+            "--evaluation-command",
+            "agentmf validate --file modules/openclaw/coding/AgentMakefile",
+            "--out-dir",
+            str(out_dir),
+            "--timestamp",
+            "2026-05-27T00:00:01Z",
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    proposal_path = Path(payload["skill_workshop_proposal"]["paths"]["proposal_json"])
+    report_path = Path(payload["skill_workshop_proposal"]["paths"]["markdown_report"])
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert proposal_path.exists()
+    assert report_path.exists()
+    assert json.loads(proposal_path.read_text())["title"] == "Improve OpenClaw coding skill routing"
+    assert "Improve OpenClaw coding skill routing" in report_path.read_text()
+
+
+def test_candidate_patch_generator_writes_patch_without_mutating_source(tmp_path: Path) -> None:
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.coding.review:
+    match:
+      user_intent:
+        - review
+    steps:
+      - action: inspect
+""",
+    )
+    proposal_path = tmp_path / "candidate.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-testpatch",
+                "title": "Improve review routing",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.coding.review"]},
+                "evidence": [{"event_id": "sha256:evidence", "reason": "duplicate review skills"}],
+                "changes": [
+                    {
+                        "type": "update_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.coding.review",
+                        "add_terms": ["review code", "inspect patch"],
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_candidate_patch_payload
+
+    original_content = module_path.read_text()
+    result = create_candidate_patch_payload(
+        proposal_file=proposal_path,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        write=True,
+    )
+
+    patch_path = Path(result.payload["paths"]["patch"])
+    patch = patch_path.read_text()
+
+    assert result.ok, result.diagnostics.format()
+    assert patch_path.exists()
+    assert module_path.read_text() == original_content
+    assert result.payload["patch_status"] == "generated"
+    assert "amf-evo-testpatch" in result.payload["proposal_id"]
+    assert "+      - review code" in patch
+    assert "+      - inspect patch" in patch
+
+
+def test_compile_evaluate_loop_validates_candidate_in_isolated_workspace(tmp_path: Path) -> None:
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.coding.review:
+    match:
+      user_intent:
+        - review
+    steps:
+      - action: inspect
+""",
+    )
+    proposal_path = tmp_path / "candidate.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-evaluate",
+                "title": "Evaluate review routing patch",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.coding.review"]},
+                "evidence": [{"event_id": "sha256:evidence", "reason": "routing gap"}],
+                "changes": [
+                    {
+                        "type": "update_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.coding.review",
+                        "add_terms": ["review code"],
+                    }
+                ],
+                "evaluation": {
+                    "commands": ["agentmf validate --file AgentMakefile"],
+                    "status": "not_run",
+                },
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    workspace_dir = tmp_path / ".agentmf" / "evolution" / "worktrees" / "amf-evo-evaluate"
+    result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=workspace_dir,
+        write=True,
+    )
+
+    candidate_path = Path(result.payload["candidate_files"][0]["path"])
+    candidate_source = load_source(candidate_path)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["promotion_report"]["status"] == "passed"
+    assert result.payload["promotion_report"]["requires_review"] is True
+    assert candidate_path.exists()
+    assert candidate_path != module_path
+    assert candidate_source.targets["skill.coding.review"].match["user_intent"] == [
+        "review",
+        "review code",
+    ]
+    assert load_source(module_path).targets["skill.coding.review"].match["user_intent"] == ["review"]
+
+
+def test_dream_mode_dry_run_creates_openclaw_duplicate_proposal(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence" / "registry"
+    evidence_dir.mkdir(parents=True)
+    evidence_file = evidence_dir / "openclaw_import.jsonl"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "event_id": "sha256:openclaw",
+                "timestamp": "2026-05-27T00:00:00Z",
+                "source": "openclaw_import",
+                "summary": {
+                    "skill_count": 3,
+                    "categories": {"coding": 3},
+                    "duplicate_original_names": {
+                        "review": ["coding/review/SKILL.md", "coding/review-alt/SKILL.md"]
+                    },
+                    "module_paths": ["coding/AgentMakefile"],
+                },
+                "artifact_refs": {"root_agentmakefile": "modules/openclaw/AgentMakefile"},
+            }
+        )
+        + "\n"
+    )
+
+    from agentmf.evolution import create_dream_mode_payload
+
+    result = create_dream_mode_payload(
+        evidence_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T00:00:01Z",
+        write=True,
+    )
+
+    proposal_path = Path(result.payload["proposals"][0]["paths"]["proposal_json"])
+    proposal = json.loads(proposal_path.read_text())
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "dream_mode_dry_run"
+    assert result.payload["proposal_count"] == 1
+    assert result.payload["proposals"][0]["patch_status"] == "skipped_unsupported_change"
+    assert proposal["changes"][0]["type"] == "merge_duplicate_targets"
+    assert proposal["promotion"] == {"status": "candidate", "requires_review": True}
+
+
+def test_openclaw_curator_creates_duplicate_skill_proposal(tmp_path: Path) -> None:
+    evidence_file = tmp_path / "openclaw_import.jsonl"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "event_id": "sha256:openclaw",
+                "timestamp": "2026-05-27T00:00:00Z",
+                "source": "openclaw_import",
+                "summary": {
+                    "skill_count": 3,
+                    "categories": {"coding": 3},
+                    "duplicate_original_names": {
+                        "review": ["coding/review/SKILL.md", "coding/review-alt/SKILL.md"]
+                    },
+                    "module_paths": ["coding/AgentMakefile"],
+                },
+                "artifact_refs": {"root_agentmakefile": "modules/openclaw/AgentMakefile"},
+            }
+        )
+        + "\n"
+    )
+
+    from agentmf.evolution import create_openclaw_curator_payload
+
+    result = create_openclaw_curator_payload(
+        evidence_file=evidence_file,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T00:00:01Z",
+        write=True,
+    )
+
+    proposal = result.payload["proposal"]["proposal"]
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "openclaw_curator"
+    assert proposal["title"] == "Curate duplicate OpenClaw skills"
+    assert proposal["changes"][0]["type"] == "merge_duplicate_targets"
+    assert proposal["changes"][0]["duplicate_original_names"] == {
+        "review": ["coding/review/SKILL.md", "coding/review-alt/SKILL.md"]
+    }
+
+
+def test_cli_evo_patch_generate_and_evaluate_candidate(tmp_path: Path, capsys) -> None:
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.coding.review:
+    match:
+      user_intent:
+        - review
+    steps:
+      - action: inspect
+""",
+    )
+    proposal_path = tmp_path / "candidate.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-cli",
+                "title": "CLI patch and evaluate",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.coding.review"]},
+                "evidence": [{"event_id": "sha256:evidence", "reason": "routing gap"}],
+                "changes": [
+                    {
+                        "type": "update_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.coding.review",
+                        "add_terms": ["review code"],
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+    patch_dir = tmp_path / ".agentmf" / "evolution" / "candidates"
+
+    patch_exit = main(
+        [
+            "evo",
+            "patch",
+            "generate",
+            "--proposal-file",
+            str(proposal_path),
+            "--out-dir",
+            str(patch_dir),
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+    patch_payload = json.loads(capsys.readouterr().out)
+    eval_exit = main(
+        [
+            "evo",
+            "evaluate",
+            "--proposal-file",
+            str(proposal_path),
+            "--workspace-dir",
+            str(tmp_path / ".agentmf" / "evolution" / "worktrees" / "amf-evo-cli"),
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+    eval_payload = json.loads(capsys.readouterr().out)
+
+    assert patch_exit == 0
+    assert patch_payload["ok"] is True
+    assert Path(patch_payload["candidate_patch"]["paths"]["patch"]).exists()
+    assert eval_exit == 0
+    assert eval_payload["ok"] is True
+    assert eval_payload["compile_evaluate"]["promotion_report"]["status"] == "passed"
+
+
+def test_cli_evo_dream_run_and_openclaw_curate(tmp_path: Path, capsys) -> None:
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence" / "registry"
+    evidence_dir.mkdir(parents=True)
+    evidence_file = evidence_dir / "openclaw_import.jsonl"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "event_id": "sha256:openclaw",
+                "timestamp": "2026-05-27T00:00:00Z",
+                "source": "openclaw_import",
+                "summary": {
+                    "skill_count": 3,
+                    "categories": {"coding": 3},
+                    "duplicate_original_names": {
+                        "review": ["coding/review/SKILL.md", "coding/review-alt/SKILL.md"]
+                    },
+                    "module_paths": ["coding/AgentMakefile"],
+                },
+                "artifact_refs": {"root_agentmakefile": "modules/openclaw/AgentMakefile"},
+            }
+        )
+        + "\n"
+    )
+    out_dir = tmp_path / ".agentmf" / "evolution" / "candidates"
+
+    curate_exit = main(
+        [
+            "evo",
+            "openclaw",
+            "curate",
+            "--evidence-file",
+            str(evidence_file),
+            "--out-dir",
+            str(out_dir),
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+    curate_payload = json.loads(capsys.readouterr().out)
+    dream_exit = main(
+        [
+            "evo",
+            "dream",
+            "run",
+            "--evidence-dir",
+            str(tmp_path / ".agentmf" / "evolution" / "evidence"),
+            "--out-dir",
+            str(out_dir),
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+    dream_payload = json.loads(capsys.readouterr().out)
+
+    assert curate_exit == 0
+    assert curate_payload["ok"] is True
+    assert curate_payload["openclaw_curator"]["proposal_count"] == 1
+    assert dream_exit == 0
+    assert dream_payload["ok"] is True
+    assert dream_payload["dream_mode"]["proposal_count"] == 1
+
+
 def _write_skill(skills_dir: Path, name: str, description: str, body: str) -> Path:
     skill_dir = skills_dir / name
     skill_dir.mkdir(parents=True)

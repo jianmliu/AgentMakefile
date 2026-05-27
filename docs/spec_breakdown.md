@@ -2209,7 +2209,7 @@ Acceptance:
 
 ### AMF-EVO-002 Skill Workshop Proposal Format
 
-Status: planned.
+Status: implemented.
 
 Goal: define a machine-readable proposal format for human-reviewable
 AgentMakefile improvements.
@@ -2221,16 +2221,22 @@ Implementation:
 - Add a markdown report renderer for workshop proposals.
 - Support proposal status values such as `candidate`, `rejected`, `accepted`,
   and `superseded`.
+- Add `agentmf evo proposal create`.
+- Load evidence records from JSONL evidence files.
+- Write `.proposal.json` and `.md` report files under
+  `.agentmf/evolution/candidates/` only when `--write` is set.
+- Keep patch generation and source mutation out of this milestone.
 
 Acceptance:
 
 - A candidate proposal can explain what would change, why it was proposed, and
   which evidence supports it.
 - Proposal files can be reviewed without reading raw traces.
+- Invalid promotion statuses are rejected with stable diagnostics.
 
 ### AMF-EVO-003 AgentMakefile Candidate Patch Generator
 
-Status: planned.
+Status: implemented first slice.
 
 Goal: generate minimal unified diffs against AgentMakefile module sources from
 validated proposals.
@@ -2244,16 +2250,20 @@ Implementation:
 - Preserve local module formatting as much as possible.
 - Refuse to rewrite all generated modules unless the proposal explicitly
   declares a module split or normalization operation.
+- Add `agentmf evo patch generate`.
+- First slice supports `update_match_terms` and reports unsupported patch
+  classes without mutating source files.
 
 Acceptance:
 
 - Candidate patches are small, reviewable, and tied to a proposal id.
 - Patch generation is deterministic for a fixed evidence bundle and compiler
   version.
+- Canonical AgentMakefile sources are not modified by patch generation.
 
 ### AMF-EVO-004 Compile/Evaluate/Promote Loop
 
-Status: planned.
+Status: implemented first slice.
 
 Goal: compile and evaluate candidate patches before promotion.
 
@@ -2267,6 +2277,10 @@ Implementation:
 - Run configured benchmark smoke tests when routing behavior changes.
 - Emit a promotion report with commands, results, artifact hashes, and residual
   risks.
+- Add `agentmf evo evaluate`.
+- First slice writes candidate AgentMakefile files into an isolated workspace
+  and validates them with the existing loader.
+- Promotion remains report-only and requires review.
 
 Acceptance:
 
@@ -2275,7 +2289,7 @@ Acceptance:
 
 ### AMF-EVO-005 Dream Mode Dry-Run
 
-Status: planned.
+Status: implemented first slice.
 
 Goal: add an offline mode that proposes improvements from evidence without
 editing canonical AgentMakefile files.
@@ -2287,6 +2301,9 @@ Implementation:
   stale targets, and benchmark regressions.
 - Emit proposal JSON, markdown report, and optional patch candidate.
 - Mark all output as `candidate` and `requires_review`.
+- Add `agentmf evo dream run`.
+- First detector consumes OpenClaw import evidence and proposes duplicate skill
+  curation when `duplicate_original_names` is present.
 
 Acceptance:
 
@@ -2296,7 +2313,7 @@ Acceptance:
 
 ### AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator
 
-Status: planned.
+Status: implemented first slice.
 
 Goal: use the evolution loop to curate large imported skill ecosystems such as
 OpenClaw instead of loading thousands of skills as a flat index.
@@ -2309,6 +2326,9 @@ Implementation:
 - Propose category splits, target merges, match-rule improvements, trust
   annotations, and benchmark cases.
 - Preserve source registry metadata where available.
+- Add `agentmf evo openclaw curate`.
+- First slice creates a `merge_duplicate_targets` proposal from OpenClaw
+  `duplicate_original_names` evidence.
 
 Acceptance:
 
@@ -2413,15 +2433,19 @@ Completed:
 - AMF-OPENCLAW-004 Selection Smoke Test.
 - AMF-OPENCLAW-005 Curator Evidence Export.
 - AMF-EVO-001 Evolution Evidence Store.
+- AMF-EVO-002 Skill Workshop Proposal Format.
+- AMF-EVO-003 AgentMakefile Candidate Patch Generator first slice.
+- AMF-EVO-004 Compile/Evaluate/Promote Loop first slice.
+- AMF-EVO-005 Dream Mode Dry-Run first slice.
+- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator first slice.
 
 Next:
 
 - AMF-PAD-014 Multi-Source Guidance Ingestion.
-- AMF-EVO-002 Skill Workshop Proposal Format.
-- AMF-EVO-003 AgentMakefile Candidate Patch Generator.
-- AMF-EVO-004 Compile/Evaluate/Promote Loop.
-- AMF-EVO-005 Dream Mode Dry-Run.
-- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator.
+- AMF-EVO-003B Additional Patch Classes.
+- AMF-EVO-004B Compile and Benchmark Candidate Gates.
+- AMF-EVO-005B Additional Dream Mode Detectors.
+- AMF-EVO-006B OpenClaw Trust and Overlap Analysis.
 - AMF-BENCH-002 Suite File Parser.
 - AMF-BENCH-003 Deterministic Suite Runner.
 - AMF-BENCH-004 Report Writer.

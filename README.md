@@ -84,6 +84,11 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `agentmf skills scan` imports existing `SKILL.md` directories into a generated AgentMakefile skill-index module, with an optional bootstrap skill represented as an explicit target dependency. Scanned skill targets now emit pipeline steps that `use_skill` and `link_prompt` to the source `SKILL.md`.
 - `agentmf openclaw scan` imports local OpenClaw-style recursive skill trees into category-split AgentMakefile modules, writes a root index when requested, and returns curator evidence for duplicate original names, category counts, and generated module paths.
 - `agentmf evo evidence add` appends redacted, hash-addressed evidence records under `.agentmf/evolution/evidence/`; the first concrete source is `openclaw_import`, which turns importer curator evidence into input for later Skill Workshop proposals.
+- `agentmf evo proposal create` turns evidence JSONL records into reviewable Skill Workshop candidate files: one machine-readable `.proposal.json` and one Markdown report. It does not generate or apply patches.
+- `agentmf evo patch generate` creates reviewable unified diffs from supported proposal changes. The first patch class is `update_match_terms`.
+- `agentmf evo evaluate` writes candidate AgentMakefile sources into an isolated workspace and validates them without mutating canonical sources.
+- `agentmf evo dream run` consumes stored evidence and emits candidate proposals; the first detector handles OpenClaw duplicate skill evidence.
+- `agentmf evo openclaw curate` turns OpenClaw `duplicate_original_names` evidence into a `merge_duplicate_targets` Skill Workshop proposal.
 - `agentmf skills sync` compiles an AgentMakefile module into host-native Codex or Claude Code skill packages and syncs them to a host skill root only when `--write` is set.
 - `agentmf benchmark harness` reports selected targets, selected skills, selected pipeline size, stable prefix hashes, guard/permission coverage, selection-trace quality, and baseline comparisons against `agents-md`, `claude-md`, `skills-index`, explicit files, or all scanned `SKILL.md` files without calling a model.
 - `agentmf clawbench export` emits a ClawBench-compatible harness trace bundle for one task instruction: selected AgentMakefile targets, skills, pipeline operations, stable prefix content/hash, volatile context, guard/permission/fallback ops, output contracts, and downstream execution metadata with execution disabled.
@@ -123,6 +128,11 @@ agentmf plugin payload --host codex --target project.default --plan docs/superpo
 agentmf skills scan --skills-dir ~/.codex/skills --namespace superpowers --bootstrap-skill using-superpowers --out /tmp/superpowers.AgentMakefile --write
 agentmf openclaw scan --skills-dir /path/to/openclaw/skills --namespace openclaw --out modules/openclaw --write --format json
 agentmf evo evidence add --source openclaw_import --payload-file /tmp/openclaw-import.json --out-dir .agentmf/evolution/evidence --write --format json
+agentmf evo proposal create --title "Curate duplicate OpenClaw review skills" --evidence-file .agentmf/evolution/evidence/registry/openclaw_import.jsonl --module modules/openclaw/coding/AgentMakefile --target skill.coding.review --change-json '{"type":"merge_duplicate_targets","target":"skill.coding.review"}' --evaluation-command "agentmf validate --file modules/openclaw/coding/AgentMakefile" --write --format json
+agentmf evo patch generate --proposal-file .agentmf/evolution/candidates/amf-evo-example.proposal.json --write --format json
+agentmf evo evaluate --proposal-file .agentmf/evolution/candidates/amf-evo-example.proposal.json --workspace-dir .agentmf/evolution/worktrees/amf-evo-example --write --format json
+agentmf evo dream run --evidence-dir .agentmf/evolution/evidence --out-dir .agentmf/evolution/candidates --write --format json
+agentmf evo openclaw curate --evidence-file .agentmf/evolution/evidence/registry/openclaw_import.jsonl --out-dir .agentmf/evolution/candidates --write --format json
 agentmf skills sync --file modules/oh-my-openagent/AgentMakefile --host codex --write --format json
 agentmf benchmark harness --file modules/superpowers/AgentMakefile --case "implement this feature" --baseline agents-md --format json
 agentmf benchmark harness --file modules/superpowers/AgentMakefile --case "implement this feature" --baseline all-skills --baseline-skills-dir ~/.codex/skills --format json
