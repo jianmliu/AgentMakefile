@@ -26,6 +26,7 @@ STOPWORDS = {
     "on",
     "or",
     "please",
+    "run",
     "the",
     "this",
     "to",
@@ -132,6 +133,8 @@ def build_request_profile(request: str) -> RequestProfile:
 def match_term(profile: RequestProfile, term: str) -> dict | None:
     normalized_term = normalize_text(term)
     if not normalized_term:
+        return None
+    if not canonical_tokens(normalized_term):
         return None
     if term.lower() in profile.original.lower():
         return _detail(term, "substring", 100, term)

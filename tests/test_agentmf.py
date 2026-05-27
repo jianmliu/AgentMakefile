@@ -469,6 +469,47 @@ targets:
     ]
 
 
+def test_link_plan_ignores_single_character_match_terms(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.security-scan:
+    priority: 80
+    match:
+      user_intent:
+        - security scan
+    steps:
+      - action: scan
+  skill.figma:
+    priority: 90
+    match:
+      user_intent:
+        - g
+    steps:
+      - action: design
+  skill.runner:
+    priority: 90
+    match:
+      user_intent:
+        - run
+    steps:
+      - action: run
+""",
+    )
+
+    result = create_link_plan(path, request="run a full security scan and validate findings")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.security-scan"]
+    candidate_targets = [
+        candidate["target"] for candidate in result.plan["selection_trace"]["candidates"]
+    ]
+    assert "skill.figma" not in candidate_targets
+    assert "skill.runner" not in candidate_targets
+
+
 def test_link_plan_translates_chinese_request_to_skill_intent(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
