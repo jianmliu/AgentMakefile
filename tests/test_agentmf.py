@@ -1904,6 +1904,114 @@ targets:
     assert load_source(module_path).targets["skill.coding.review"].match["user_intent"] == ["review"]
 
 
+def test_compile_evaluate_workspace_disambiguates_modules_sharing_basename(tmp_path: Path) -> None:
+    cat_a = tmp_path / "cat-a"
+    cat_b = tmp_path / "cat-b"
+    cat_a.mkdir()
+    cat_b.mkdir()
+
+    def _write(module_dir: Path, primary_name: str, duplicate_name: str, primary_rel: str, duplicate_rel: str) -> Path:
+        path = module_dir / "AgentMakefile"
+        path.write_text(
+            "version: \"0.1\"\n"
+            "metadata:\n"
+            "  skill_count: 2\n"
+            "skills:\n"
+            f"  {primary_name}:\n"
+            "    namespace: smoke\n"
+            "    description: primary.\n"
+            "    implementation:\n"
+            f"      source: skills/{primary_rel}\n"
+            f"      relative_source: {primary_rel}\n"
+            "      original_name: shared\n"
+            "    match:\n"
+            "      user_intent:\n"
+            "        - alpha\n"
+            f"  {duplicate_name}:\n"
+            "    namespace: smoke\n"
+            "    description: duplicate.\n"
+            "    implementation:\n"
+            f"      source: skills/{duplicate_rel}\n"
+            f"      relative_source: {duplicate_rel}\n"
+            "      original_name: shared\n"
+            "    match:\n"
+            "      user_intent:\n"
+            "        - beta\n"
+            "targets:\n"
+            f"  skill.{primary_name}:\n"
+            "    match:\n"
+            "      user_intent:\n"
+            "        - alpha\n"
+            "    skills:\n"
+            f"      - smoke:{primary_name}\n"
+            "    steps:\n"
+            f"      - use_skill: smoke:{primary_name}\n"
+            f"  skill.{duplicate_name}:\n"
+            "    match:\n"
+            "      user_intent:\n"
+            "        - beta\n"
+            "    skills:\n"
+            f"      - smoke:{duplicate_name}\n"
+            "    steps:\n"
+            f"      - use_skill: smoke:{duplicate_name}\n"
+        )
+        return path
+
+    module_a = _write(cat_a, "cat_a.primary", "cat_a.duplicate", "cat-a/primary/SKILL.md", "cat-a/duplicate/SKILL.md")
+    module_b = _write(cat_b, "cat_b.primary", "cat_b.duplicate", "cat-b/primary/SKILL.md", "cat-b/duplicate/SKILL.md")
+    proposal_path = tmp_path / "multi.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-multi",
+                "title": "Merge across modules sharing basename",
+                "scope": {"modules": [str(module_a), str(module_b)], "targets": []},
+                "evidence": [{"event_id": "sha256:evidence", "reason": "two modules"}],
+                "changes": [
+                    {
+                        "type": "merge_duplicate_targets",
+                        "module": str(module_a),
+                        "duplicate_original_names": {
+                            "shared": ["cat-a/primary/SKILL.md", "cat-a/duplicate/SKILL.md"]
+                        },
+                    },
+                    {
+                        "type": "merge_duplicate_targets",
+                        "module": str(module_b),
+                        "duplicate_original_names": {
+                            "shared": ["cat-b/primary/SKILL.md", "cat-b/duplicate/SKILL.md"]
+                        },
+                    },
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    candidate_files = result.payload["candidate_files"]
+    assert len(candidate_files) == 2
+    workspace_paths = [Path(entry["path"]) for entry in candidate_files]
+    assert len({p for p in workspace_paths}) == 2, f"workspace paths collided: {workspace_paths}"
+    for path in workspace_paths:
+        assert path.exists(), f"workspace file missing: {path}"
+    sources = [load_source(path) for path in workspace_paths]
+    skill_names = {name for source in sources for name in source.skills}
+    assert "cat_a.duplicate" not in skill_names
+    assert "cat_b.duplicate" not in skill_names
+    assert {"cat_a.primary", "cat_b.primary"} <= skill_names
+
+
 def test_dream_mode_dry_run_creates_openclaw_duplicate_proposal(tmp_path: Path) -> None:
     evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence" / "registry"
     evidence_dir.mkdir(parents=True)

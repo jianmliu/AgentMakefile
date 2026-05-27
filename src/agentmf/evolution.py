@@ -340,11 +340,18 @@ def create_compile_evaluate_payload(
 
     workspace = Path(workspace_dir)
     candidate_records = []
+    used_destinations: set[Path] = set()
+
+    def reserve_destination(source_path: Path) -> Path:
+        destination = _workspace_destination(workspace, source_path, used_destinations)
+        used_destinations.add(destination)
+        return destination
+
     if write:
         try:
             workspace.mkdir(parents=True, exist_ok=True)
             for candidate in candidate_files:
-                destination = _workspace_destination(workspace, candidate["source_path"])
+                destination = reserve_destination(candidate["source_path"])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(candidate["candidate_content"], encoding="utf-8")
                 candidate_records.append({"source": str(candidate["source_path"]), "path": str(destination)})
@@ -361,7 +368,7 @@ def create_compile_evaluate_payload(
             candidate_records.append(
                 {
                     "source": str(candidate["source_path"]),
-                    "path": str(_workspace_destination(workspace, candidate["source_path"])),
+                    "path": str(reserve_destination(candidate["source_path"])),
                 }
             )
 
@@ -1014,10 +1021,24 @@ def _render_unified_patch(candidate_files: list[Dict[str, Any]]) -> str:
     return "\n".join(chunks) + ("\n" if chunks else "")
 
 
-def _workspace_destination(workspace: Path, source_path: Path) -> Path:
+def _workspace_destination(workspace: Path, source_path: Path, used: Optional[set] = None) -> Path:
     if source_path.is_absolute():
-        return workspace / source_path.name
-    return workspace / source_path
+        parts = source_path.parts
+        base = Path(*parts[-2:]) if len(parts) >= 2 else Path(parts[-1])
+    else:
+        base = source_path
+    candidate = workspace / base
+    if used is None or candidate not in used:
+        return candidate
+    stem = candidate.stem or candidate.name
+    suffix = candidate.suffix
+    parent = candidate.parent
+    counter = 2
+    while True:
+        candidate = parent / f"{stem}-{counter}{suffix}"
+        if candidate not in used:
+            return candidate
+        counter += 1
 
 
 def _module_refs_from_openclaw_record(record: Dict[str, Any]) -> list[str]:
