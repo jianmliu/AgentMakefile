@@ -41,6 +41,7 @@
     "selected_targets": [
       "review.task"
     ],
+    "alternatives": [],
     "target_closure": [
       "base.task",
       "review.task"

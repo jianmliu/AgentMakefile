@@ -604,6 +604,96 @@ targets:
     ]
 
 
+def test_link_plan_exposes_n_best_alternatives(tmp_path: Path) -> None:
+    """The selector exposes the non-selected ranked candidates as a compact
+    `alternatives` field, so downstream agents/prompts can see what else
+    could have routed without changing the deterministic selected_targets.
+    """
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.alpha:
+    priority: 70
+    match:
+      user_intent:
+        - create a presentation about Q4 results
+    steps:
+      - action: handle_alpha
+  skill.beta:
+    priority: 70
+    match:
+      user_intent:
+        - presentation
+    steps:
+      - action: handle_beta
+  skill.gamma:
+    priority: 70
+    match:
+      user_intent:
+        - Q4
+    steps:
+      - action: handle_gamma
+""",
+    )
+
+    result = create_link_plan(path, request="create a presentation about Q4 results", n_best=3)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.alpha"]
+    alternatives = result.plan["alternatives"]
+    # n_best=3 means top-3 overall; with the selected (alpha) removed,
+    # alternatives must include the next 2 candidates ranked by score
+    # then term-length then name.
+    alt_names = [entry["target"] for entry in alternatives]
+    assert alt_names == ["skill.beta", "skill.gamma"]
+    # Each alternative must carry rank, match_score and the term that hit.
+    assert {"rank", "target", "match_score", "matched_terms", "reason"} <= set(alternatives[0].keys())
+    assert alternatives[0]["rank"] == 2
+    assert alternatives[1]["rank"] == 3
+
+
+def test_link_plan_alternatives_default_to_top_three(tmp_path: Path) -> None:
+    """Default n_best=3 truncates the alternatives list even when more
+    candidates match (we surface the top 2 alternatives beneath the
+    selected one — total 3 visible candidates)."""
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.a1:
+    match: {user_intent: [create]}
+    steps:
+      - inspect
+  skill.a2:
+    match: {user_intent: [create]}
+    steps:
+      - inspect
+  skill.a3:
+    match: {user_intent: [create]}
+    steps:
+      - inspect
+  skill.a4:
+    match: {user_intent: [create]}
+    steps:
+      - inspect
+  skill.a5:
+    match: {user_intent: [create]}
+    steps:
+      - inspect
+""",
+    )
+
+    result = create_link_plan(path, request="create something")
+
+    assert result.ok, result.diagnostics.format()
+    # 5 targets all match identically; default n_best=3 keeps 2 alternatives
+    # below the top-1 selected.
+    assert len(result.plan["alternatives"]) == 2
+
+
 def test_link_plan_breaks_score_ties_by_longer_matched_term(tmp_path: Path) -> None:
     """When two targets match a request at the same max score, the target
     whose matched term is longer wins. Without this rule, a single broad

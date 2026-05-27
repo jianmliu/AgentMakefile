@@ -26,11 +26,15 @@ class LinkPlanResult:
         return not self.diagnostics.has_errors
 
 
+DEFAULT_N_BEST = 3
+
+
 def create_link_plan(
     path: Union[Path, str],
     request: Optional[str] = None,
     target_names: Optional[List[str]] = None,
     backend: str = "agents-fragments",
+    n_best: int = DEFAULT_N_BEST,
 ) -> LinkPlanResult:
     diagnostics = Diagnostics()
     if backend not in FRAGMENT_BACKEND_DIRS:
@@ -72,6 +76,7 @@ def create_link_plan(
     selection_trace = _with_dependency_closure(selection_trace, selected_targets, closure)
     target_pipelines = [target.pipeline for target in closure]
     fragment_dir = FRAGMENT_BACKEND_DIRS[backend]
+    alternatives = _alternatives_from_trace(selection_trace, n_best)
     plan = {
         "version": 1,
         "backend": backend,
@@ -82,6 +87,7 @@ def create_link_plan(
         },
         "selection_trace": selection_trace,
         "selected_targets": [target.name for target in selected_targets],
+        "alternatives": alternatives,
         "target_closure": [target.name for target in closure],
         "target_pipelines": target_pipelines,
         "pipeline_trace": _pipeline_trace(selected_targets, closure),
@@ -95,6 +101,37 @@ def create_link_plan(
         ],
     }
     return LinkPlanResult(diagnostics, plan)
+
+
+def _alternatives_from_trace(selection_trace: Dict[str, Any], n_best: int) -> List[Dict[str, Any]]:
+    """Top-(n_best - 1) candidates ranked below the selected target.
+
+    Auxiliary signal for downstream agents: surfaces the alternatives the
+    selector considered without changing the deterministic selected_targets
+    primary output. Each entry carries a compact subset of the candidate
+    record (rank, target, match_score, matched_terms, reason).
+    """
+    if n_best <= 1:
+        return []
+    candidates = selection_trace.get("candidates") if isinstance(selection_trace, dict) else None
+    if not isinstance(candidates, list):
+        return []
+    alternatives: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("selected"):
+            continue
+        alternatives.append(
+            {
+                "rank": candidate.get("rank"),
+                "target": candidate.get("target"),
+                "match_score": candidate.get("match_score"),
+                "matched_terms": list(candidate.get("matched_terms") or []),
+                "reason": candidate.get("reason"),
+            }
+        )
+        if len(alternatives) >= n_best - 1:
+            break
+    return alternatives
 
 
 def _explicit_targets(
