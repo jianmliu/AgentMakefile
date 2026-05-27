@@ -2271,8 +2271,8 @@ Acceptance:
 
 ### AMF-EVO-004 Compile/Evaluate/Promote Loop
 
-Status: implemented for validate + promote; compile / selector test /
-benchmark gates partially implemented (see Implemented scope).
+Status: implemented (all five spec gates wired into `agentmf evo evaluate`
+plus `agentmf evo promote`).
 
 Goal: compile and evaluate candidate patches before promotion.
 
@@ -2296,11 +2296,20 @@ Implemented scope:
   `AgentMakefile`).
 - Each candidate file is re-parsed via `load_source_with_diagnostics`; failures
   flip `promotion_report.status` to `failed`.
+- The compile gate drives each candidate through `compile_agentmakefile`
+  with the `agents-fragments` backend; compile errors flip the status.
+- The selector-test gate runs `evaluation.selector_tests` (inline
+  request/expected_target pairs) against each candidate; misses flip the
+  status.
+- The benchmark-smoke gate loads
+  `evaluation.benchmark_smoke.tasks_file` (JSONL), routes every task
+  through the candidates, and checks each task's selected target against
+  `evaluation.benchmark_smoke.expected_routes`. Tasks without an entry in
+  expected_routes are reported as skipped; a single failing entry flips
+  the status.
 - `agentmf evo promote` lifts a reviewed proposal's candidate into a target
   tree (preserving the workspace layout) and flips the proposal's
   `promotion.status` to `accepted` once every written file passes re-parse.
-- Compile / selector-test / benchmark gates are not yet wired into
-  `evaluate`; the only inline gate is the loader pass above.
 
 Acceptance:
 
@@ -2479,7 +2488,8 @@ Completed:
 - AMF-EVO-002 Skill Workshop Proposal Format.
 - AMF-EVO-003 AgentMakefile Candidate Patch Generator (all spec classes + `prune_match_terms`).
 - AMF-EVO-003B Additional Patch Classes (folded into AMF-EVO-003 above).
-- AMF-EVO-004 Compile/Evaluate/Promote Loop (validate + `agentmf evo promote` complete; compile/selector/benchmark gates remain in AMF-EVO-004B).
+- AMF-EVO-004 Compile/Evaluate/Promote Loop (all five spec gates wired into `agentmf evo evaluate` + `agentmf evo promote`).
+- AMF-EVO-004B Compile and Benchmark Candidate Gates (folded into AMF-EVO-004 above).
 - AMF-EVO-005 Dream Mode Dry-Run (4/4 detectors: openclaw duplicates, recurring routing gaps, missing match terms, drifted permissions).
 - AMF-EVO-005B Additional Dream Mode Detectors (folded into AMF-EVO-005 above).
 - AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator (duplicate + missing-term path closed end-to-end; routing baseline 13/29 -> 29/29 via the closed-loop demo).
@@ -2487,7 +2497,6 @@ Completed:
 Next:
 
 - AMF-PAD-014 Multi-Source Guidance Ingestion (CLI wiring + four source readers; library facade `guidance_scanner` already shipped).
-- AMF-EVO-004B Compile and Benchmark Candidate Gates (compile candidate to one prompt + one skill backend; run selector tests against affected request examples; benchmark smoke when routing changes).
 - AMF-EVO-006B OpenClaw Trust and Overlap Analysis (detector emitting `add_registry_metadata`; heavy/unsafe-tool warning; category-split suggester; benchmark-case suggester emitting `add_benchmark_case`).
 - AMF-BENCH-002 Suite File Parser.
 - AMF-BENCH-003 Deterministic Suite Runner.

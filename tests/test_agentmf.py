@@ -2274,6 +2274,164 @@ targets:
     assert selector["actual_target"] is None or selector["actual_target"] != "skill.review"
 
 
+def test_compile_evaluate_benchmark_smoke_passes_when_expected_routes_match(tmp_path: Path) -> None:
+    """A proposal can declare evaluation.benchmark_smoke = {tasks_file,
+    expected_routes}; evaluate must load the JSONL tasks, route each
+    against the candidate, and pass when every (task_id -> target) in
+    expected_routes is met.
+    """
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.review:
+    priority: 70
+    match:
+      user_intent:
+        - review the diff
+    steps:
+      - action: inspect
+  skill.plan:
+    priority: 70
+    match:
+      user_intent:
+        - draft an implementation plan
+    steps:
+      - action: plan
+""",
+    )
+    tasks_file = tmp_path / "smoke-tasks.jsonl"
+    tasks_file.write_text(
+        json.dumps({"id": "t-review", "instruction": "review the diff"}) + "\n"
+        + json.dumps({"id": "t-plan", "instruction": "draft an implementation plan"}) + "\n"
+    )
+    proposal_path = tmp_path / "smoke.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "smoke-pass",
+                "title": "Smoke gate ok",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.review"]},
+                "evidence": [{"event_id": "sha256:smoke", "reason": "test"}],
+                "changes": [
+                    {
+                        "type": "update_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.review",
+                        "add_terms": ["look at the patch"],
+                    }
+                ],
+                "evaluation": {
+                    "commands": [],
+                    "status": "not_run",
+                    "benchmark_smoke": {
+                        "tasks_file": str(tasks_file),
+                        "expected_routes": {
+                            "t-review": "skill.review",
+                            "t-plan": "skill.plan",
+                        },
+                    },
+                },
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    report = result.payload["promotion_report"]
+    assert report["status"] == "passed"
+    smoke = report["benchmark_smoke_results"]
+    assert smoke["summary"] == {"total": 2, "passed": 2, "failed": 0, "skipped": 0}
+    statuses = {task["task_id"]: task["status"] for task in smoke["tasks"]}
+    assert statuses == {"t-review": "passed", "t-plan": "passed"}
+
+
+def test_compile_evaluate_benchmark_smoke_fails_on_regression(tmp_path: Path) -> None:
+    """When at least one expected route doesn't match the candidate's
+    selection, the smoke gate fails and promotion_report.status is
+    'failed'.
+    """
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.review:
+    priority: 70
+    match:
+      user_intent:
+        - review the diff
+    steps:
+      - action: inspect
+""",
+    )
+    tasks_file = tmp_path / "smoke-tasks.jsonl"
+    tasks_file.write_text(
+        json.dumps({"id": "t-review", "instruction": "review the diff"}) + "\n"
+        + json.dumps({"id": "t-orphan", "instruction": "totally unrelated orchid request"}) + "\n"
+    )
+    proposal_path = tmp_path / "smoke-fail.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "smoke-fail",
+                "title": "Smoke gate fail",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.review"]},
+                "evidence": [{"event_id": "sha256:smoke-fail", "reason": "test"}],
+                "changes": [
+                    {
+                        "type": "update_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.review",
+                        "add_terms": ["look at the patch"],
+                    }
+                ],
+                "evaluation": {
+                    "commands": [],
+                    "status": "not_run",
+                    "benchmark_smoke": {
+                        "tasks_file": str(tasks_file),
+                        "expected_routes": {
+                            "t-review": "skill.review",
+                            "t-orphan": "skill.orphan_does_not_exist",
+                        },
+                    },
+                },
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    report = result.payload["promotion_report"]
+    assert report["status"] == "failed"
+    smoke = report["benchmark_smoke_results"]
+    assert smoke["summary"]["passed"] == 1
+    assert smoke["summary"]["failed"] == 1
+    failing = [task for task in smoke["tasks"] if task["status"] == "failed"]
+    assert len(failing) == 1
+    assert failing[0]["task_id"] == "t-orphan"
+
+
 def test_compile_evaluate_loop_validates_candidate_in_isolated_workspace(tmp_path: Path) -> None:
     module_path = write_agentmakefile(
         tmp_path,

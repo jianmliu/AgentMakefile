@@ -404,6 +404,9 @@ def create_compile_evaluate_payload(
 
     compile_results = _evaluate_compile_gate(candidate_records, workspace) if write else []
     selector_test_results = _evaluate_selector_test_gate(candidate_records, proposal) if write else []
+    benchmark_smoke_results = (
+        _evaluate_benchmark_smoke_gate(candidate_records, proposal, diagnostics) if write else _empty_smoke_results()
+    )
 
     status = "passed"
     if unsupported and not candidate_records:
@@ -413,6 +416,8 @@ def create_compile_evaluate_payload(
     if any(result["status"] == "failed" for result in compile_results):
         status = "failed"
     if any(result["status"] == "failed" for result in selector_test_results):
+        status = "failed"
+    if benchmark_smoke_results["summary"]["failed"] > 0:
         status = "failed"
     return CompileEvaluateResult(
         diagnostics,
@@ -428,11 +433,115 @@ def create_compile_evaluate_payload(
                 "validations": validation_results,
                 "compile_results": compile_results,
                 "selector_test_results": selector_test_results,
+                "benchmark_smoke_results": benchmark_smoke_results,
                 "commands": proposal.get("evaluation", {}).get("commands", []),
                 "unsupported_changes": unsupported,
             },
         },
     )
+
+
+def _empty_smoke_results() -> Dict[str, Any]:
+    return {
+        "tasks_file": None,
+        "tasks": [],
+        "summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+    }
+
+
+def _evaluate_benchmark_smoke_gate(
+    candidate_records: list[Dict[str, str]],
+    proposal: Dict[str, Any],
+    diagnostics: Diagnostics,
+) -> Dict[str, Any]:
+    """Route every task in `evaluation.benchmark_smoke.tasks_file` against
+    the candidate AgentMakefile(s) and check the resulting target against
+    `evaluation.benchmark_smoke.expected_routes`. A task with no entry in
+    expected_routes is skipped (still reported). A task whose expected
+    target doesn't match its actual route on any candidate fails.
+    """
+    evaluation = proposal.get("evaluation") if isinstance(proposal.get("evaluation"), dict) else {}
+    smoke = evaluation.get("benchmark_smoke") if isinstance(evaluation.get("benchmark_smoke"), dict) else None
+    if smoke is None:
+        return _empty_smoke_results()
+
+    tasks_file_ref = smoke.get("tasks_file")
+    expected = smoke.get("expected_routes") or {}
+    if not isinstance(tasks_file_ref, str) or not isinstance(expected, dict):
+        return _empty_smoke_results()
+
+    tasks_file = Path(tasks_file_ref)
+    try:
+        lines = tasks_file.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        diagnostics.error(
+            "AMF234",
+            f"could not read benchmark_smoke tasks_file: {tasks_file}",
+            "evo.evaluate.benchmark_smoke",
+            str(exc),
+        )
+        return {
+            "tasks_file": str(tasks_file),
+            "tasks": [],
+            "summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+        }
+
+    from agentmf.selector import create_link_plan
+
+    candidate_paths = [Path(record["path"]) for record in candidate_records if Path(record["path"]).exists()]
+    task_records: list[Dict[str, Any]] = []
+    passed = failed = skipped = 0
+    for line_number, raw in enumerate(lines, start=1):
+        if not raw.strip():
+            continue
+        try:
+            task = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            diagnostics.error(
+                "AMF234",
+                f"invalid benchmark_smoke task at {tasks_file}:{line_number}",
+                "evo.evaluate.benchmark_smoke",
+                str(exc),
+            )
+            continue
+        task_id = task.get("id")
+        instruction = task.get("instruction")
+        if not isinstance(task_id, str) or not isinstance(instruction, str):
+            continue
+        actual: Optional[str] = None
+        for path in candidate_paths:
+            plan = create_link_plan(path, request=instruction)
+            if plan.diagnostics.has_errors:
+                continue
+            selected = (plan.plan or {}).get("selected_targets") or []
+            if selected:
+                actual = selected[0]
+                break
+        expected_target = expected.get(task_id)
+        if expected_target is None:
+            status = "skipped"
+            skipped += 1
+        elif actual == expected_target:
+            status = "passed"
+            passed += 1
+        else:
+            status = "failed"
+            failed += 1
+        task_records.append(
+            {
+                "task_id": task_id,
+                "instruction": instruction,
+                "expected_target": expected_target,
+                "actual_target": actual,
+                "status": status,
+            }
+        )
+
+    return {
+        "tasks_file": str(tasks_file),
+        "tasks": task_records,
+        "summary": {"total": len(task_records), "passed": passed, "failed": failed, "skipped": skipped},
+    }
 
 
 def _evaluate_compile_gate(
