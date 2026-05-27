@@ -2196,6 +2196,100 @@ def test_dream_mode_dry_run_creates_openclaw_duplicate_proposal(tmp_path: Path) 
     assert proposal["promotion"] == {"status": "candidate", "requires_review": True}
 
 
+def test_dream_mode_dry_run_detects_recurring_routing_gaps(tmp_path: Path) -> None:
+    """Recurring failed selections (selected_target=null, same fingerprint, N>=2)
+    must surface as investigate_recurring_routing_gap proposals; single failures
+    and successful selections must not."""
+    evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence" / "traces"
+    evidence_root.mkdir(parents=True)
+    evidence_file = evidence_root / "plugin_payload.jsonl"
+    fp_recurring = "sha256:" + "a" * 64
+    fp_single = "sha256:" + "b" * 64
+    fp_recovered = "sha256:" + "c" * 64
+    records = [
+        {
+            "version": 1,
+            "event_id": "sha256:e1",
+            "timestamp": "2026-05-27T00:00:00Z",
+            "source": "plugin_payload",
+            "request_fingerprint": fp_recurring,
+            "selected_target": None,
+            "selected_skills": [],
+            "summary": {"selected_targets": [], "selected_skills": []},
+        },
+        {
+            "version": 1,
+            "event_id": "sha256:e2",
+            "timestamp": "2026-05-27T00:00:01Z",
+            "source": "plugin_payload",
+            "request_fingerprint": fp_recurring,
+            "selected_target": None,
+            "selected_skills": [],
+            "summary": {"selected_targets": [], "selected_skills": []},
+        },
+        {
+            "version": 1,
+            "event_id": "sha256:e3",
+            "timestamp": "2026-05-27T00:00:02Z",
+            "source": "plugin_payload",
+            "request_fingerprint": fp_recurring,
+            "selected_target": None,
+            "selected_skills": [],
+            "summary": {"selected_targets": [], "selected_skills": []},
+        },
+        {
+            "version": 1,
+            "event_id": "sha256:e4",
+            "timestamp": "2026-05-27T00:00:03Z",
+            "source": "plugin_payload",
+            "request_fingerprint": fp_single,
+            "selected_target": None,
+            "selected_skills": [],
+            "summary": {"selected_targets": [], "selected_skills": []},
+        },
+        {
+            "version": 1,
+            "event_id": "sha256:e5",
+            "timestamp": "2026-05-27T00:00:04Z",
+            "source": "plugin_payload",
+            "request_fingerprint": fp_recovered,
+            "selected_target": "skill.coding.review",
+            "selected_skills": ["smoke:coding.review"],
+            "summary": {"selected_targets": ["skill.coding.review"], "selected_skills": ["smoke:coding.review"]},
+        },
+    ]
+    evidence_file.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+    from agentmf.evolution import create_dream_mode_payload
+
+    result = create_dream_mode_payload(
+        evidence_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T01:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    routing_gaps = [
+        p for p in result.payload["proposals"]
+        if p["proposal"]["changes"][0]["type"] == "investigate_recurring_routing_gap"
+    ]
+    assert len(routing_gaps) == 1, [p["proposal"]["changes"][0] for p in result.payload["proposals"]]
+    proposal = routing_gaps[0]["proposal"]
+    change = proposal["changes"][0]
+    assert change["request_fingerprint"] == fp_recurring
+    assert change["failure_count"] == 3
+    assert sorted(change["sample_event_ids"]) == ["sha256:e1", "sha256:e2", "sha256:e3"]
+    assert proposal["promotion"] == {"status": "candidate", "requires_review": True}
+    # Evidence on the proposal must NOT include the successful or the
+    # single-failure records, only the 3 recurring failures.
+    evidence_ids = {ref["event_id"] for ref in proposal["evidence"]}
+    assert evidence_ids == {"sha256:e1", "sha256:e2", "sha256:e3"}
+    # Proposal JSON file landed on disk.
+    proposal_path = Path(routing_gaps[0]["paths"]["proposal_json"])
+    assert proposal_path.exists()
+
+
 def test_openclaw_curator_creates_duplicate_skill_proposal(tmp_path: Path) -> None:
     evidence_file = tmp_path / "openclaw_import.jsonl"
     evidence_file.write_text(

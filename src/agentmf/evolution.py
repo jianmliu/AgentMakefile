@@ -126,7 +126,8 @@ class SkillWorkshopProposalResult:
 def create_skill_workshop_proposal_payload(
     *,
     title: str,
-    evidence_files: list[Union[Path, str]],
+    evidence_files: Optional[list[Union[Path, str]]] = None,
+    evidence_records: Optional[list[Dict[str, Any]]] = None,
     scope: Dict[str, Any],
     changes: list[Dict[str, Any]],
     evaluation_commands: list[str],
@@ -145,9 +146,10 @@ def create_skill_workshop_proposal_payload(
         )
         return SkillWorkshopProposalResult(diagnostics)
 
-    evidence_records = _load_evidence_records(evidence_files, diagnostics)
-    if diagnostics.has_errors:
-        return SkillWorkshopProposalResult(diagnostics)
+    if evidence_records is None:
+        evidence_records = _load_evidence_records(evidence_files or [], diagnostics)
+        if diagnostics.has_errors:
+            return SkillWorkshopProposalResult(diagnostics)
 
     evidence_refs = [_evidence_ref(record) for record in evidence_records]
     created_at = timestamp or _utc_now()
@@ -494,6 +496,9 @@ class DreamModeResult:
         return not self.diagnostics.has_errors
 
 
+DREAM_RECURRING_FAILURE_THRESHOLD = 2
+
+
 def create_dream_mode_payload(
     *,
     evidence_dir: Union[Path, str] = Path(".agentmf/evolution/evidence"),
@@ -503,8 +508,37 @@ def create_dream_mode_payload(
 ) -> DreamModeResult:
     diagnostics = Diagnostics()
     evidence_root = Path(evidence_dir)
+    evidence_files = sorted(evidence_root.glob("**/*.jsonl"))
     proposals = []
-    for evidence_file in sorted(evidence_root.glob("**/*.jsonl")):
+    proposals.extend(
+        _dream_openclaw_duplicates(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
+    proposals.extend(
+        _dream_recurring_routing_gaps(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
+    if diagnostics.has_errors:
+        return DreamModeResult(diagnostics)
+    return DreamModeResult(
+        diagnostics,
+        {
+            "version": 1,
+            "mode": "dream_mode_dry_run",
+            "evidence_dir": str(evidence_root),
+            "proposal_count": len(proposals),
+            "proposals": proposals,
+        },
+    )
+
+
+def _dream_openclaw_duplicates(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    proposals: list[Dict[str, Any]] = []
+    for evidence_file in evidence_files:
         curator = create_openclaw_curator_payload(
             evidence_file=evidence_file,
             out_dir=out_dir,
@@ -519,18 +553,62 @@ def create_dream_mode_payload(
                     "patch_status": "skipped_unsupported_change",
                 }
             )
-    if diagnostics.has_errors:
-        return DreamModeResult(diagnostics)
-    return DreamModeResult(
-        diagnostics,
-        {
-            "version": 1,
-            "mode": "dream_mode_dry_run",
-            "evidence_dir": str(evidence_root),
-            "proposal_count": len(proposals),
-            "proposals": proposals,
-        },
-    )
+    return proposals
+
+
+def _dream_recurring_routing_gaps(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """Surface request fingerprints that have >=N failed plugin selections
+    (selected_target is null) as investigate_recurring_routing_gap proposals.
+    """
+    failure_records: Dict[str, list[Dict[str, Any]]] = {}
+    for evidence_file in evidence_files:
+        for record in _load_evidence_records([evidence_file], diagnostics):
+            if record.get("source") != "plugin_payload":
+                continue
+            if record.get("selected_target"):
+                continue
+            fingerprint = record.get("request_fingerprint")
+            if not isinstance(fingerprint, str) or not fingerprint:
+                continue
+            failure_records.setdefault(fingerprint, []).append(record)
+
+    proposals: list[Dict[str, Any]] = []
+    for fingerprint in sorted(failure_records):
+        records = failure_records[fingerprint]
+        if len(records) < DREAM_RECURRING_FAILURE_THRESHOLD:
+            continue
+        sample_event_ids = sorted(str(record.get("event_id", "")) for record in records)
+        change = {
+            "type": "investigate_recurring_routing_gap",
+            "request_fingerprint": fingerprint,
+            "failure_count": len(records),
+            "sample_event_ids": sample_event_ids[:5],
+        }
+        result = create_skill_workshop_proposal_payload(
+            title=f"Investigate recurring routing gap: {fingerprint[-12:]}",
+            evidence_records=records,
+            scope={"modules": [], "targets": []},
+            changes=[change],
+            evaluation_commands=[],
+            out_dir=out_dir,
+            timestamp=timestamp,
+            write=write,
+        )
+        diagnostics.extend(result.diagnostics.items)
+        if result.payload:
+            proposals.append(
+                {
+                    **result.payload,
+                    "patch_status": "skipped_unsupported_change",
+                }
+            )
+    return proposals
 
 
 def _unwrap_source_payload(source: str, payload: Dict[str, Any]) -> Dict[str, Any]:
