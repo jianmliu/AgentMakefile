@@ -15,7 +15,9 @@ from agentmf.clawbench import (
     create_clawbench_result_summary,
 )
 from agentmf.compiler import compile_agentmakefile
+from agentmf.evolution import EVIDENCE_SOURCES, create_evolution_evidence_payload
 from agentmf.loader import load_source_with_diagnostics
+from agentmf.openclaw import create_openclaw_import_payload
 from agentmf.plugin import create_plugin_payload
 from agentmf.plugin_install import DEFAULT_PLUGIN_AGENTMAKEFILE, create_plugin_install_payload
 from agentmf.prompt import create_prompt_payload
@@ -165,6 +167,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     skills_sync_cmd.add_argument("--write", action="store_true")
     skills_sync_cmd.add_argument("--force", action="store_true")
     skills_sync_cmd.add_argument("--format", choices=["text", "json"], default="json")
+
+    openclaw_cmd = subparsers.add_parser("openclaw", help="OpenClaw skill ecosystem import commands")
+    openclaw_subcommands = openclaw_cmd.add_subparsers(dest="openclaw_command", required=True)
+    openclaw_scan_cmd = openclaw_subcommands.add_parser(
+        "scan",
+        help="scan local OpenClaw SKILL.md trees into modular AgentMakefiles",
+    )
+    openclaw_scan_cmd.add_argument("--skills-dir", action="append", dest="skills_dirs", required=True)
+    openclaw_scan_cmd.add_argument("--namespace", default="openclaw")
+    openclaw_scan_cmd.add_argument("--package-name", default="openclaw-skills")
+    openclaw_scan_cmd.add_argument("--package-description")
+    openclaw_scan_cmd.add_argument("--out", required=True)
+    openclaw_scan_cmd.add_argument("--write", action="store_true")
+    openclaw_scan_cmd.add_argument("--format", choices=["text", "json"], default="json")
+
+    evo_cmd = subparsers.add_parser("evo", help="evidence-driven evolution commands")
+    evo_subcommands = evo_cmd.add_subparsers(dest="evo_command", required=True)
+    evo_evidence_cmd = evo_subcommands.add_parser("evidence", help="evolution evidence store commands")
+    evo_evidence_subcommands = evo_evidence_cmd.add_subparsers(dest="evo_evidence_command", required=True)
+    evo_evidence_add_cmd = evo_evidence_subcommands.add_parser(
+        "add",
+        help="append a redacted evidence record to the evolution store",
+    )
+    evo_evidence_add_cmd.add_argument("--source", choices=sorted(EVIDENCE_SOURCES), required=True)
+    evo_evidence_add_cmd.add_argument("--payload-file", required=True)
+    evo_evidence_add_cmd.add_argument("--out-dir", default=".agentmf/evolution/evidence")
+    evo_evidence_add_cmd.add_argument("--timestamp")
+    evo_evidence_add_cmd.add_argument("--write", action="store_true")
+    evo_evidence_add_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
     benchmark_cmd = subparsers.add_parser("benchmark", help="benchmark AgentMakefile harness behavior")
     benchmark_subcommands = benchmark_cmd.add_subparsers(dest="benchmark_command", required=True)
@@ -344,6 +375,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _plugin(args)
     if args.command == "skills":
         return _skills(args)
+    if args.command == "openclaw":
+        return _openclaw(args)
+    if args.command == "evo":
+        return _evo(args)
     if args.command == "benchmark":
         return _benchmark(args)
     if args.command == "clawbench":
@@ -701,6 +736,18 @@ def _skills(args: argparse.Namespace) -> int:
         return _skills_scan(args)
     if args.skills_command == "sync":
         return _skills_sync(args)
+    return 2
+
+
+def _openclaw(args: argparse.Namespace) -> int:
+    if args.openclaw_command == "scan":
+        return _openclaw_scan(args)
+    return 2
+
+
+def _evo(args: argparse.Namespace) -> int:
+    if args.evo_command == "evidence" and args.evo_evidence_command == "add":
+        return _evo_evidence_add(args)
     return 2
 
 
@@ -1153,6 +1200,82 @@ def _skills_scan(args: argparse.Namespace) -> int:
     else:
         print(content, end="")
     return 0
+
+
+def _openclaw_scan(args: argparse.Namespace) -> int:
+    result = create_openclaw_import_payload(
+        skill_dirs=[Path(path) for path in args.skills_dirs],
+        out_dir=Path(args.out),
+        namespace=args.namespace,
+        package_name=args.package_name,
+        package_description=args.package_description,
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "openclaw_import": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            action = "Wrote" if args.write else "Would write"
+            print(f"{action} OpenClaw AgentMakefile modules:")
+            print(f"  root: {result.payload['root_path']}")
+            print(f"  skills: {result.payload['skill_count']}")
+            print(f"  categories: {result.payload['category_count']}")
+            for category in result.payload["categories"]:
+                print(f"  - {category['name']}: {category['skill_count']} skills")
+    return 1 if not result.ok else 0
+
+
+def _evo_evidence_add(args: argparse.Namespace) -> int:
+    try:
+        payload = json.loads(Path(args.payload_file).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: could not read payload file: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(payload, dict):
+        print("error: payload file must contain a JSON object", file=sys.stderr)
+        return 1
+
+    result = create_evolution_evidence_payload(
+        source=args.source,
+        payload=payload,
+        out_dir=Path(args.out_dir),
+        timestamp=args.timestamp,
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "evolution_evidence": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            action = "Appended" if args.write else "Would append"
+            print(f"{action} evolution evidence:")
+            print(f"  source: {result.payload['record']['source']}")
+            print(f"  path: {result.payload['path']}")
+            print(f"  event: {result.payload['record']['event_id']}")
+    return 1 if not result.ok else 0
 
 
 def _skills_sync(args: argparse.Namespace) -> int:

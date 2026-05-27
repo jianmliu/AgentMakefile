@@ -97,7 +97,7 @@ Evidence record fields:
   "version": 1,
   "event_id": "sha256:...",
   "timestamp": "2026-05-27T00:00:00Z",
-  "source": "plugin_payload|benchmark|user_feedback|registry_scan",
+  "source": "plugin_payload|benchmark|user_feedback|registry_scan|openclaw_import",
   "request_fingerprint": "sha256:...",
   "selected_target": "code.change",
   "selected_skills": ["superpowers:test-driven-development"],
@@ -110,13 +110,30 @@ Evidence record fields:
   "artifact_refs": {
     "payload": ".agentmf/evolution/evidence/traces/...",
     "report": "benchmarks/..."
-  }
+  },
+  "summary": {},
+  "payload_hash": "sha256:..."
 }
 ```
 
 Raw evidence should be redacted or summarized before it enters the store.
 Secrets, access tokens, `.env` contents, private keys, and full proprietary
 prompts must not be persisted by the evolution workflow.
+
+First implemented CLI slice:
+
+```bash
+agentmf evo evidence add \
+  --source openclaw_import \
+  --payload-file /tmp/openclaw-import.json \
+  --out-dir .agentmf/evolution/evidence \
+  --write \
+  --format json
+```
+
+For OpenClaw imports, the evidence record stores the importer curator evidence
+summary and artifact references to the generated root index and category module
+paths. It does not persist the full generated module content.
 
 ## Proposal Format
 

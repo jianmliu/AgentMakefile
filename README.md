@@ -16,6 +16,7 @@ The core value is harness infrastructure:
 
 - **Structured harness graph**: represent reusable skills, rules, policies, permissions, dependencies, output contracts, fallback behavior, and pipeline steps as typed AgentMakefile source instead of hand-maintaining scattered Markdown files.
 - **Harness consolidation**: scan installed skills, project `AGENTS.md`, `CLAUDE.md`, standalone `SKILL.md`, and framework-specific rules into a common routing module.
+- **Large skill ecosystem import**: turn local OpenClaw-style `**/SKILL.md` trees into category-split AgentMakefile modules, a root index, and curator evidence instead of one flat prompt index.
 - **Cross-platform skill compilation**: compile the same module into Codex skills, Claude Code skills, `skills/index.md`, `AGENTS.md`, `CLAUDE.md`, Cursor rules, OpenCode config, and Claude Code settings/hooks where supported.
 - **System skill sync**: sync generated Codex or Claude Code skill packages into a host skill root with a dry-run-first `agentmf skills sync` workflow.
 - **Request-time routing optimization**: use `agentmf plugin payload` to choose only the relevant targets, skills, prompt fragments, guards, permissions, and output contracts for the current request.
@@ -39,6 +40,7 @@ Design details live in [docs/agentsfile_design_spec.md](docs/agentsfile_design_s
 The agent harness architecture lives in [docs/agentmf_agent_harness_architecture.md](docs/agentmf_agent_harness_architecture.md).
 The proposed runtime CLI design lives in [docs/agentmf_runtime_cli_spec.md](docs/agentmf_runtime_cli_spec.md).
 The guidance ingestion design lives in [docs/agentmf_guidance_ingestion_spec.md](docs/agentmf_guidance_ingestion_spec.md).
+The OpenClaw importer design lives in [docs/agentmf_openclaw_importer_spec.md](docs/agentmf_openclaw_importer_spec.md).
 The benchmark CLI design lives in [docs/agentmf_benchmark_cli_spec.md](docs/agentmf_benchmark_cli_spec.md).
 The harness benchmark suite design lives in [docs/agentmf_harness_benchmark_suite_spec.md](docs/agentmf_harness_benchmark_suite_spec.md).
 The plugin-first adapter design lives in [docs/agentmf_plugin_adapter_spec.md](docs/agentmf_plugin_adapter_spec.md).
@@ -80,6 +82,8 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `agentmf plugin install` scans existing skills, writes a plugin-local AgentMakefile when requested, and emits model instructions telling hosts to call `agentmf plugin payload` before loading skills. The planned generalized importer will let the same install path read `AGENTS.md`, `CLAUDE.md`, standalone `SKILL.md`, and related guidance sources.
 - `agentmf plugin payload` exposes `selected_skills`, `selected_pipeline`, flat operation groups (`stable_prompt_ops`, `volatile_context_ops`, `guard_ops`, `permission_ops`, `fallback_ops`), generated Codex/Claude skill artifact paths, and `selection_trace` rationale so host adapters can use AgentMakefile as an explainable harness-routing layer. Request routing can match either explicit target `match` terms or the `match` terms of skills referenced by a target.
 - `agentmf skills scan` imports existing `SKILL.md` directories into a generated AgentMakefile skill-index module, with an optional bootstrap skill represented as an explicit target dependency. Scanned skill targets now emit pipeline steps that `use_skill` and `link_prompt` to the source `SKILL.md`.
+- `agentmf openclaw scan` imports local OpenClaw-style recursive skill trees into category-split AgentMakefile modules, writes a root index when requested, and returns curator evidence for duplicate original names, category counts, and generated module paths.
+- `agentmf evo evidence add` appends redacted, hash-addressed evidence records under `.agentmf/evolution/evidence/`; the first concrete source is `openclaw_import`, which turns importer curator evidence into input for later Skill Workshop proposals.
 - `agentmf skills sync` compiles an AgentMakefile module into host-native Codex or Claude Code skill packages and syncs them to a host skill root only when `--write` is set.
 - `agentmf benchmark harness` reports selected targets, selected skills, selected pipeline size, stable prefix hashes, guard/permission coverage, selection-trace quality, and baseline comparisons against `agents-md`, `claude-md`, `skills-index`, explicit files, or all scanned `SKILL.md` files without calling a model.
 - `agentmf clawbench export` emits a ClawBench-compatible harness trace bundle for one task instruction: selected AgentMakefile targets, skills, pipeline operations, stable prefix content/hash, volatile context, guard/permission/fallback ops, output contracts, and downstream execution metadata with execution disabled.
@@ -117,6 +121,8 @@ agentmf plugin install --skills-dir ~/.codex/skills --namespace superpowers --bo
 agentmf plugin payload --host codex --request "review code" --format json
 agentmf plugin payload --host codex --target project.default --plan docs/superpowers/plans/2026-05-25-agentmf-plugin-adapter.md --include-git-status --format json
 agentmf skills scan --skills-dir ~/.codex/skills --namespace superpowers --bootstrap-skill using-superpowers --out /tmp/superpowers.AgentMakefile --write
+agentmf openclaw scan --skills-dir /path/to/openclaw/skills --namespace openclaw --out modules/openclaw --write --format json
+agentmf evo evidence add --source openclaw_import --payload-file /tmp/openclaw-import.json --out-dir .agentmf/evolution/evidence --write --format json
 agentmf skills sync --file modules/oh-my-openagent/AgentMakefile --host codex --write --format json
 agentmf benchmark harness --file modules/superpowers/AgentMakefile --case "implement this feature" --baseline agents-md --format json
 agentmf benchmark harness --file modules/superpowers/AgentMakefile --case "implement this feature" --baseline all-skills --baseline-skills-dir ~/.codex/skills --format json

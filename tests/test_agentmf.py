@@ -1132,12 +1132,325 @@ def test_skill_scan_keeps_feature_implementation_from_routing_to_review_skill(tm
     assert result.plan["selected_targets"] == ["skill.test-driven-development"]
 
 
+def test_openclaw_import_writes_category_modules_and_root_index(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "openclaw-skills"
+    _write_openclaw_skill(
+        skills_dir,
+        "coding/code-review",
+        "code-review",
+        "Use when reviewing code and patches.",
+        "coding",
+        ["review", "code"],
+        "## When to Use\n\n- Review code\n- Inspect patches\n",
+    )
+    _write_openclaw_skill(
+        skills_dir,
+        "research/web-research",
+        "web-research",
+        "Use when researching external context.",
+        "research",
+        ["research"],
+        "## When to Use\n\n- Research topic\n- External context\n",
+    )
+    out_dir = tmp_path / "modules" / "openclaw"
+
+    from agentmf.openclaw import create_openclaw_import_payload
+
+    result = create_openclaw_import_payload(
+        skill_dirs=[skills_dir],
+        out_dir=out_dir,
+        namespace="openclaw",
+        package_name="openclaw-skills",
+        write=True,
+    )
+
+    root_path = out_dir / "AgentMakefile"
+    coding_path = out_dir / "coding" / "AgentMakefile"
+    research_path = out_dir / "research" / "AgentMakefile"
+    root_data = yaml.safe_load(root_path.read_text())
+    coding_source = load_source(coding_path)
+    link_result = create_link_plan(root_path, request="review code")
+
+    assert result.ok, result.diagnostics.format()
+    assert root_path.exists()
+    assert coding_path.exists()
+    assert research_path.exists()
+    assert root_data["metadata"]["module_type"] == "openclaw-skill-root"
+    assert root_data["include"] == ["coding/AgentMakefile", "research/AgentMakefile"]
+    assert coding_source.metadata["module_type"] == "openclaw-skill-category"
+    assert coding_source.metadata["category"] == "coding"
+    assert "coding.code-review" in coding_source.skills
+    assert link_result.ok, link_result.diagnostics.format()
+    assert link_result.plan["selected_targets"] == ["skill.coding.code-review"]
+
+
+def test_openclaw_import_exports_curator_evidence_for_duplicates(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "openclaw-skills"
+    _write_openclaw_skill(
+        skills_dir,
+        "coding/review",
+        "review",
+        "Use when reviewing code.",
+        "coding",
+        ["review"],
+        "## When to Use\n\n- Review code\n",
+    )
+    _write_openclaw_skill(
+        skills_dir,
+        "docs/review",
+        "review",
+        "Use when reviewing docs.",
+        "docs",
+        ["review", "docs"],
+        "## When to Use\n\n- Review docs\n",
+    )
+    _write_openclaw_skill(
+        skills_dir,
+        "coding/review-alt",
+        "review",
+        "Use when reviewing alternate code paths.",
+        "coding",
+        ["review", "code"],
+        "## When to Use\n\n- Review code paths\n",
+    )
+
+    from agentmf.openclaw import create_openclaw_import_payload
+
+    result = create_openclaw_import_payload(
+        skill_dirs=[skills_dir],
+        out_dir=tmp_path / "modules" / "openclaw",
+        namespace="openclaw",
+        package_name="openclaw-skills",
+        write=False,
+    )
+
+    evidence = result.payload["curator_evidence"]
+
+    assert result.ok, result.diagnostics.format()
+    coding_data = yaml.safe_load(result.payload["modules"]["coding/AgentMakefile"])
+
+    assert evidence["skill_count"] == 3
+    assert evidence["category_count"] == 2
+    assert evidence["categories"] == {"coding": 2, "docs": 1}
+    assert evidence["duplicate_original_names"]["review"] == [
+        "coding/review/SKILL.md",
+        "coding/review-alt/SKILL.md",
+        "docs/review/SKILL.md",
+    ]
+    assert set(coding_data["skills"]) == {"coding.review", "coding.review-2"}
+    assert "coding/AgentMakefile" in evidence["module_paths"]
+    assert "docs/AgentMakefile" in evidence["module_paths"]
+
+
+def test_cli_openclaw_scan_writes_modular_agentmakefiles_and_json_payload(
+    tmp_path: Path, capsys
+) -> None:
+    skills_dir = tmp_path / "openclaw-skills"
+    _write_openclaw_skill(
+        skills_dir,
+        "coding/test-first",
+        "test-first",
+        "Use when implementing with tests first.",
+        "coding",
+        ["tdd", "implementation"],
+        "## When to Use\n\n- Implement feature\n- Bug fixes\n",
+    )
+    out_dir = tmp_path / "modules" / "openclaw"
+
+    exit_code = main(
+        [
+            "openclaw",
+            "scan",
+            "--skills-dir",
+            str(skills_dir),
+            "--namespace",
+            "openclaw",
+            "--package-name",
+            "openclaw-skills",
+            "--out",
+            str(out_dir),
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    link_result = create_link_plan(out_dir / "AgentMakefile", request="implement feature")
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["openclaw_import"]["wrote"] is True
+    assert payload["openclaw_import"]["root_path"] == str(out_dir / "AgentMakefile")
+    assert (out_dir / "coding" / "AgentMakefile").exists()
+    assert link_result.ok, link_result.diagnostics.format()
+    assert link_result.plan["selected_targets"] == ["skill.coding.test-first"]
+
+
+def test_evolution_evidence_store_appends_openclaw_import_summary(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "openclaw-skills"
+    _write_openclaw_skill(
+        skills_dir,
+        "coding/review",
+        "review",
+        "Use when reviewing code.",
+        "coding",
+        ["review"],
+        "## When to Use\n\n- Review code\n",
+    )
+
+    from agentmf.evolution import create_evolution_evidence_payload
+    from agentmf.openclaw import create_openclaw_import_payload
+
+    openclaw = create_openclaw_import_payload(
+        skill_dirs=[skills_dir],
+        out_dir=tmp_path / "modules" / "openclaw",
+        namespace="openclaw",
+        package_name="openclaw-skills",
+        write=False,
+    )
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    first = create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload=openclaw.payload,
+        out_dir=evidence_dir,
+        timestamp="2026-05-27T00:00:00Z",
+        write=True,
+    )
+    second = create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload=openclaw.payload,
+        out_dir=evidence_dir,
+        timestamp="2026-05-27T00:00:01Z",
+        write=True,
+    )
+
+    path = evidence_dir / "registry" / "openclaw_import.jsonl"
+    lines = path.read_text().splitlines()
+    record = json.loads(lines[0])
+
+    assert first.ok, first.diagnostics.format()
+    assert second.ok, second.diagnostics.format()
+    assert first.payload["wrote"] is True
+    assert first.payload["path"] == str(path)
+    assert len(lines) == 2
+    assert record["source"] == "openclaw_import"
+    assert record["event_id"].startswith("sha256:")
+    assert record["timestamp"] == "2026-05-27T00:00:00Z"
+    assert record["summary"]["skill_count"] == 1
+    assert record["summary"]["categories"] == {"coding": 1}
+    assert record["artifact_refs"]["root_agentmakefile"].endswith("modules/openclaw/AgentMakefile")
+
+
+def test_evolution_evidence_store_redacts_secret_like_payload_values(tmp_path: Path) -> None:
+    from agentmf.evolution import create_evolution_evidence_payload
+
+    result = create_evolution_evidence_payload(
+        source="user_feedback",
+        payload={
+            "message": "improve route",
+            "OPENAI_API_KEY": "sk-test-secret-value",
+            "nested": {"token": "secret-token-value"},
+        },
+        out_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
+        timestamp="2026-05-27T00:00:00Z",
+        write=False,
+    )
+
+    serialized = json.dumps(result.payload["record"], sort_keys=True)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["wrote"] is False
+    assert result.payload["record"]["summary"]["payload"]["OPENAI_API_KEY"] == "[REDACTED]"
+    assert result.payload["record"]["summary"]["payload"]["nested"]["token"] == "[REDACTED]"
+    assert "sk-test-secret-value" not in serialized
+    assert "secret-token-value" not in serialized
+
+
+def test_cli_evo_evidence_add_writes_openclaw_import_record(tmp_path: Path, capsys) -> None:
+    payload_file = tmp_path / "openclaw-import.json"
+    payload_file.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "openclaw_import": {
+                    "root_path": "modules/openclaw/AgentMakefile",
+                    "curator_evidence": {
+                        "skill_count": 2,
+                        "category_count": 1,
+                        "categories": {"coding": 2},
+                        "duplicate_original_names": {},
+                        "module_paths": ["coding/AgentMakefile"],
+                    },
+                },
+            }
+        )
+    )
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    exit_code = main(
+        [
+            "evo",
+            "evidence",
+            "add",
+            "--source",
+            "openclaw_import",
+            "--payload-file",
+            str(payload_file),
+            "--out-dir",
+            str(evidence_dir),
+            "--timestamp",
+            "2026-05-27T00:00:00Z",
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    path = evidence_dir / "registry" / "openclaw_import.jsonl"
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["evolution_evidence"]["path"] == str(path)
+    assert path.exists()
+    assert json.loads(path.read_text())["summary"]["skill_count"] == 2
+
+
 def _write_skill(skills_dir: Path, name: str, description: str, body: str) -> Path:
     skill_dir = skills_dir / name
     skill_dir.mkdir(parents=True)
     path = skill_dir / "SKILL.md"
     path.write_text(
         f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\n{body}\n"
+    )
+    return path
+
+
+def _write_openclaw_skill(
+    skills_dir: Path,
+    relative_dir: str,
+    name: str,
+    description: str,
+    category: str,
+    tags: list[str],
+    body: str,
+) -> Path:
+    skill_dir = skills_dir / relative_dir
+    skill_dir.mkdir(parents=True)
+    path = skill_dir / "SKILL.md"
+    path.write_text(
+        "---\n"
+        f"name: {name}\n"
+        f"description: {description}\n"
+        f"category: {category}\n"
+        f"tags: {tags}\n"
+        "---\n\n"
+        f"# {name}\n\n"
+        f"{body}\n"
     )
     return path
 

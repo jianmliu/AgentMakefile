@@ -76,6 +76,7 @@ Implemented:
 - Backend capability warnings cover permission hard-to-soft downgrades and unsupported native hooks.
 - Soft permission guidance is rendered as Markdown tables, and soft backends emit `AMF121` downgrade warnings.
 - The Karpathy module exposes a `karpathy-guidelines` skill, so the Karpathy demo default compile emits Markdown, Cursor, Claude skill, and Codex skill outputs.
+- `agentmf openclaw scan` imports local OpenClaw-style `**/SKILL.md` trees into category-split AgentMakefile modules with a root index and curator evidence.
 
 Known gaps:
 
@@ -1539,6 +1540,113 @@ Acceptance:
 
 Plan: `docs/superpowers/plans/2026-05-26-agentmf-guidance-ingestion.md`.
 
+## OpenClaw Importer Tasks
+
+The OpenClaw importer line is specified in
+[agentmf_openclaw_importer_spec.md](agentmf_openclaw_importer_spec.md). It
+turns a local large skill ecosystem into modular AgentMakefile sources before
+curation and evolution. This keeps the first path local-only and reviewable:
+scan, render, select-smoke, and export evidence.
+
+### AMF-OPENCLAW-001 Local Skill Scanner
+
+Status: implemented.
+
+Goal: recursively scan local OpenClaw-style `SKILL.md` trees into normalized
+records without contacting a remote registry.
+
+Implementation:
+
+- Add `agentmf.openclaw.create_openclaw_import_payload`.
+- Recursively scan `**/SKILL.md` under each input skills directory.
+- Parse frontmatter `name`, `description`, `category`, and `tags`.
+- Infer category from the first path segment when frontmatter does not provide
+  one.
+- Prefix generated skill names with the category so duplicate original names can
+  coexist.
+- Add stable numeric suffixes for duplicate generated names inside one category.
+
+Acceptance:
+
+- Nested local skill paths are detected.
+- Duplicate original names do not fail the scan.
+- Duplicate generated names inside one category do not overwrite each other.
+- Generated records keep original source paths and relative paths.
+
+### AMF-OPENCLAW-002 Modular AgentMakefile Renderer
+
+Status: implemented.
+
+Goal: render one category-level AgentMakefile per imported category.
+
+Implementation:
+
+- Group scanned skills by category.
+- Render each group through the existing skill-index data model.
+- Mark category modules with `metadata.module_type:
+  openclaw-skill-category`.
+- Preserve category, tags, original name, and relative source path in each skill
+  implementation block.
+
+Acceptance:
+
+- Category modules validate through the existing loader.
+- Category-prefixed generated skills are routeable by existing selectors.
+
+### AMF-OPENCLAW-003 Category Split + Root Index
+
+Status: implemented.
+
+Goal: avoid a flat thousands-skill index by generating a root index that
+includes category modules.
+
+Implementation:
+
+- Write `<out>/AgentMakefile` as the root index.
+- Write `<out>/<category>/AgentMakefile` for each category.
+- Store summary metadata for skill count, category count, source, and category
+  names.
+
+Acceptance:
+
+- The root index loads all category modules.
+- Selection can run against the root index.
+
+### AMF-OPENCLAW-004 Selection Smoke Test
+
+Status: implemented.
+
+Goal: prove imported OpenClaw modules participate in normal AgentMakefile
+target selection.
+
+Implementation:
+
+- Add a fixture test with a local coding skill and research skill.
+- Run `create_link_plan` against the generated root AgentMakefile.
+- Assert a category-prefixed `skill.*` target is selected.
+
+Acceptance:
+
+- A request such as `review code` selects the generated coding review target.
+
+### AMF-OPENCLAW-005 Curator Evidence Export
+
+Status: implemented.
+
+Goal: emit small deterministic evidence for later curation and evolution work.
+
+Implementation:
+
+- Include `curator_evidence` in the scan payload.
+- Report skill count, category count, per-category counts, duplicate original
+  names, and generated module paths.
+- Keep evidence independent of write mode.
+
+Acceptance:
+
+- Evidence exposes duplicate original skill names without failing the import.
+- Evolution tasks can consume the evidence without rescanning source files.
+
 ### AMF-HARNESS-001 Target Pipeline IR
 
 Status: implemented.
@@ -2074,7 +2182,7 @@ remain evidence-driven, reproducible, reviewable, and reversible.
 
 ### AMF-EVO-001 Evolution Evidence Store
 
-Status: planned.
+Status: implemented.
 
 Goal: add an append-only evidence store for selection traces, benchmark
 outcomes, user corrections, registry scans, and plugin payload summaries.
@@ -2087,15 +2195,17 @@ Implementation:
 - Add redaction rules so secrets, tokens, private keys, `.env` contents, and
   raw proprietary prompts are not persisted.
 - Add a write path under `.agentmf/evolution/evidence/`.
-- Add diagnostics for invalid source type, missing outcome, and unsafe artifact
-  paths.
+- Add `agentmf evo evidence add`.
+- Support `openclaw_import` as the first concrete source, turning importer
+  curator evidence into registry evidence records.
+- Add diagnostics for invalid source type and write failures.
 
 Acceptance:
 
-- Evidence can be recorded from a plugin payload or benchmark result without
-  modifying canonical AgentMakefile sources.
+- Evidence can be recorded from an OpenClaw importer payload without modifying
+  canonical AgentMakefile sources.
 - Evidence records are deterministic after redaction.
-- Secret-looking fields are rejected or redacted before write.
+- Secret-looking fields are redacted before write.
 
 ### AMF-EVO-002 Skill Workshop Proposal Format
 
@@ -2297,11 +2407,16 @@ Completed:
 - AMF-BENCH-021 Official SWE-bench Report Importer.
 - AMF-BENCH-022 Lite/Verified Benchmark Profiles.
 - AMF-BENCH-023 Official SWE-bench Dry-Run Adapter Plan.
+- AMF-OPENCLAW-001 Local Skill Scanner.
+- AMF-OPENCLAW-002 Modular AgentMakefile Renderer.
+- AMF-OPENCLAW-003 Category Split + Root Index.
+- AMF-OPENCLAW-004 Selection Smoke Test.
+- AMF-OPENCLAW-005 Curator Evidence Export.
+- AMF-EVO-001 Evolution Evidence Store.
 
 Next:
 
 - AMF-PAD-014 Multi-Source Guidance Ingestion.
-- AMF-EVO-001 Evolution Evidence Store.
 - AMF-EVO-002 Skill Workshop Proposal Format.
 - AMF-EVO-003 AgentMakefile Candidate Patch Generator.
 - AMF-EVO-004 Compile/Evaluate/Promote Loop.

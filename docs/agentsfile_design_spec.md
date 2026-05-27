@@ -26,6 +26,13 @@ existing skill and instruction ecosystems keep their current package layout
 while gaining a structured dependency graph, deterministic prompt fragments,
 explainable selection, and cross-platform outputs.
 
+For large skill ecosystems such as OpenClaw, reverse import should be modular
+from the start. A local importer can scan `**/SKILL.md`, preserve category and
+source metadata, generate one AgentMakefile per category, generate a root
+AgentMakefile index, and export curator evidence such as duplicate original
+skill names. This keeps thousands of skills reviewable and selectable without
+forcing a flat all-in-one index.
+
 AgentMakefile also supports a future evidence-driven evolution loop for large
 skill ecosystems. Selection traces, benchmark reports, registry metadata, and
 user corrections can be collected as evidence, turned into reviewable
@@ -3804,6 +3811,30 @@ Behavior:
   dependency of all other generated skill targets
 * keep generated AgentMakefile output as an import/bridge path; curated modules
   can still replace it as the long-term source of truth
+
+#### openclaw scan
+
+Input:
+
+```text
+<openclaw-skills-dir>/**/SKILL.md
+```
+
+Behavior:
+
+* recursively scan a local large skill ecosystem
+* parse `name`, `description`, `category`, and `tags` frontmatter
+* infer category from the first source path segment when frontmatter omits it
+* generate category-prefixed skill names such as `coding.code-review` so
+  duplicate original skill names can coexist
+* append stable numeric suffixes when duplicate original names collide inside
+  one category
+* render one AgentMakefile per category and a root AgentMakefile index that
+  includes those category modules
+* emit deterministic curator evidence with skill counts, category counts,
+  duplicate original names, and generated module paths
+* keep remote registry fetching, semantic deduplication, promotion, and host
+  skill installation outside the first importer slice
 
 #### guidance scan
 
