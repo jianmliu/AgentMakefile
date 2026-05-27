@@ -604,6 +604,90 @@ targets:
     ]
 
 
+def test_link_plan_prepends_declared_fallback_targets_to_alternatives(tmp_path: Path) -> None:
+    """Targets declared via `target.fallback` are author-curated alternatives
+    and should appear in `plan.alternatives` BEFORE matcher-scored ones,
+    because they encode intent (Makefile-style dep info) rather than
+    surface-text scoring. Existing matcher-scored candidates that name the
+    same target are deduped — declared entry wins."""
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.alpha:
+    match:
+      user_intent:
+        - foo handler request
+    fallback:
+      runtime:
+        - skill.beta
+    steps:
+      - inspect
+  skill.beta:
+    match:
+      user_intent:
+        - foo
+    steps:
+      - inspect
+  skill.gamma:
+    match:
+      user_intent:
+        - request
+    steps:
+      - inspect
+""",
+    )
+
+    result = create_link_plan(path, request="foo handler request", n_best=3)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.alpha"]
+    alternatives = result.plan["alternatives"]
+    alt_targets = [entry["target"] for entry in alternatives]
+    # Declared fallback (beta) takes slot 0 even though gamma scores higher
+    # on the matcher; matcher-scored candidate fills slot 1.
+    assert alt_targets[:2] == ["skill.beta", "skill.gamma"]
+    assert alternatives[0]["source"] == "declared_fallback"
+    assert alternatives[0]["condition"] == "runtime"
+    assert alternatives[1]["source"] == "matcher_score"
+
+
+def test_link_plan_dedupes_when_fallback_target_also_scored(tmp_path: Path) -> None:
+    """A target that's both declared as fallback AND ranked by the matcher
+    appears once in alternatives, sourced as `declared_fallback`."""
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.alpha:
+    match:
+      user_intent:
+        - foo handler request
+    fallback:
+      runtime:
+        - skill.beta
+    steps:
+      - inspect
+  skill.beta:
+    match:
+      user_intent:
+        - foo
+    steps:
+      - inspect
+""",
+    )
+
+    result = create_link_plan(path, request="foo handler request", n_best=3)
+
+    assert result.ok, result.diagnostics.format()
+    alt_targets = [entry["target"] for entry in result.plan["alternatives"]]
+    # beta is the only alternative; appears once, attributed to fallback.
+    assert alt_targets == ["skill.beta"]
+    assert result.plan["alternatives"][0]["source"] == "declared_fallback"
+
+
 def test_link_plan_exposes_n_best_alternatives(tmp_path: Path) -> None:
     """The selector exposes the non-selected ranked candidates as a compact
     `alternatives` field, so downstream agents/prompts can see what else
@@ -648,10 +732,13 @@ targets:
     # then term-length then name.
     alt_names = [entry["target"] for entry in alternatives]
     assert alt_names == ["skill.beta", "skill.gamma"]
-    # Each alternative must carry rank, match_score and the term that hit.
-    assert {"rank", "target", "match_score", "matched_terms", "reason"} <= set(alternatives[0].keys())
-    assert alternatives[0]["rank"] == 2
-    assert alternatives[1]["rank"] == 3
+    # Each alternative must carry rank, target, source, score and the term
+    # that hit. rank is the position within the alternatives list (1-based);
+    # the selected target is not in this list and does not consume a rank.
+    assert {"rank", "target", "source", "match_score", "matched_terms", "reason"} <= set(alternatives[0].keys())
+    assert alternatives[0]["rank"] == 1
+    assert alternatives[1]["rank"] == 2
+    assert alternatives[0]["source"] == "matcher_score"
 
 
 def test_link_plan_alternatives_default_to_top_three(tmp_path: Path) -> None:

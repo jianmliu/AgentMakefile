@@ -76,7 +76,12 @@ def create_link_plan(
     selection_trace = _with_dependency_closure(selection_trace, selected_targets, closure)
     target_pipelines = [target.pipeline for target in closure]
     fragment_dir = FRAGMENT_BACKEND_DIRS[backend]
-    alternatives = _alternatives_from_trace(selection_trace, n_best)
+    alternatives = _alternatives_from_trace(
+        selection_trace,
+        n_best,
+        primary_target=selected_targets[0] if selected_targets else None,
+        targets_by_name=targets_by_name,
+    )
     plan = {
         "version": 1,
         "backend": backend,
@@ -103,35 +108,89 @@ def create_link_plan(
     return LinkPlanResult(diagnostics, plan)
 
 
-def _alternatives_from_trace(selection_trace: Dict[str, Any], n_best: int) -> List[Dict[str, Any]]:
+def _alternatives_from_trace(
+    selection_trace: Dict[str, Any],
+    n_best: int,
+    *,
+    primary_target: Optional[IRTarget] = None,
+    targets_by_name: Optional[Dict[str, IRTarget]] = None,
+) -> List[Dict[str, Any]]:
     """Top-(n_best - 1) candidates ranked below the selected target.
 
-    Auxiliary signal for downstream agents: surfaces the alternatives the
-    selector considered without changing the deterministic selected_targets
-    primary output. Each entry carries a compact subset of the candidate
-    record (rank, target, match_score, matched_terms, reason).
+    Auxiliary signal for downstream agents. Two sources, in order:
+
+    1. Author-declared fallbacks on the selected target (Makefile-style
+       intent encoded in `target.fallback`). These take priority slots
+       because the user explicitly wrote them.
+    2. Matcher-scored neighbours from selection_trace.candidates.
+
+    A target that appears in both sources is emitted once with
+    source="declared_fallback" (intent wins over score). Each entry
+    carries a compact dict so consumers can render uniformly.
     """
     if n_best <= 1:
         return []
-    candidates = selection_trace.get("candidates") if isinstance(selection_trace, dict) else None
-    if not isinstance(candidates, list):
-        return []
     alternatives: List[Dict[str, Any]] = []
-    for candidate in candidates:
-        if not isinstance(candidate, dict) or candidate.get("selected"):
-            continue
-        alternatives.append(
-            {
-                "rank": candidate.get("rank"),
-                "target": candidate.get("target"),
-                "match_score": candidate.get("match_score"),
-                "matched_terms": list(candidate.get("matched_terms") or []),
-                "reason": candidate.get("reason"),
-            }
-        )
-        if len(alternatives) >= n_best - 1:
-            break
+    seen_targets: set[str] = set()
+
+    if primary_target is not None and primary_target.fallback:
+        for condition in sorted(primary_target.fallback):
+            for entry in primary_target.fallback[condition]:
+                target_name = _fallback_entry_target(entry)
+                if not target_name or target_name in seen_targets:
+                    continue
+                if primary_target.name == target_name:
+                    continue
+                if targets_by_name is not None and target_name not in targets_by_name:
+                    continue
+                alternatives.append(
+                    {
+                        "rank": len(alternatives) + 1,
+                        "target": target_name,
+                        "source": "declared_fallback",
+                        "condition": condition,
+                        "match_score": None,
+                        "matched_terms": [],
+                        "reason": f"declared fallback for {primary_target.name} under condition '{condition}'",
+                    }
+                )
+                seen_targets.add(target_name)
+                if len(alternatives) >= n_best - 1:
+                    return alternatives
+
+    candidates = selection_trace.get("candidates") if isinstance(selection_trace, dict) else None
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict) or candidate.get("selected"):
+                continue
+            target_name = candidate.get("target")
+            if target_name in seen_targets:
+                continue
+            alternatives.append(
+                {
+                    "rank": len(alternatives) + 1,
+                    "target": target_name,
+                    "source": "matcher_score",
+                    "match_score": candidate.get("match_score"),
+                    "matched_terms": list(candidate.get("matched_terms") or []),
+                    "reason": candidate.get("reason"),
+                }
+            )
+            seen_targets.add(target_name)
+            if len(alternatives) >= n_best - 1:
+                break
     return alternatives
+
+
+def _fallback_entry_target(entry: Any) -> Optional[str]:
+    """Extract a target name from one fallback list entry (string or dict)."""
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict):
+        candidate = entry.get("fallback") or entry.get("target") or entry.get("name")
+        if isinstance(candidate, str):
+            return candidate
+    return None
 
 
 def _explicit_targets(
