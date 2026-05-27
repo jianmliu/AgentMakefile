@@ -643,6 +643,9 @@ def create_dream_mode_payload(
     proposals.extend(
         _dream_recurring_routing_gaps(evidence_files, out_dir, timestamp, write, diagnostics)
     )
+    proposals.extend(
+        _dream_missing_match_terms(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
     if diagnostics.has_errors:
         return DreamModeResult(diagnostics)
     return DreamModeResult(
@@ -739,6 +742,75 @@ def _dream_recurring_routing_gaps(
     return proposals
 
 
+def _dream_missing_match_terms(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """Read user_feedback evidence (requests that should have routed elsewhere)
+    and emit `update_match_terms` proposals grouped by (intended_module,
+    intended_target). Each proposal adds the request texts (or the user-
+    supplied corrective_terms) to the intended target's match.user_intent.
+    """
+    by_target: Dict[tuple[str, str], list[Dict[str, Any]]] = {}
+    terms_by_target: Dict[tuple[str, str], list[str]] = {}
+    for evidence_file in evidence_files:
+        for record in _load_evidence_records([evidence_file], diagnostics):
+            if record.get("source") != "user_feedback":
+                continue
+            summary = record.get("summary")
+            if not isinstance(summary, dict):
+                continue
+            intended_module = summary.get("intended_module")
+            intended_target = summary.get("intended_target")
+            request_text = summary.get("request")
+            if not intended_module or not intended_target or not request_text:
+                continue
+            key = (str(intended_module), str(intended_target))
+            corrective = summary.get("corrective_terms") or []
+            candidate_terms = [str(term) for term in corrective if isinstance(term, str)]
+            if not candidate_terms:
+                candidate_terms = [str(request_text)]
+            by_target.setdefault(key, []).append(record)
+            bucket = terms_by_target.setdefault(key, [])
+            for term in candidate_terms:
+                if term and term not in bucket:
+                    bucket.append(term)
+
+    proposals: list[Dict[str, Any]] = []
+    for key in sorted(by_target):
+        module_path, target_name = key
+        records = by_target[key]
+        terms = terms_by_target[key]
+        change = {
+            "type": "update_match_terms",
+            "module": module_path,
+            "target": target_name,
+            "add_terms": terms,
+        }
+        result = create_skill_workshop_proposal_payload(
+            title=f"Add match terms to {target_name}",
+            evidence_records=records,
+            scope={"modules": [module_path], "targets": [target_name]},
+            changes=[change],
+            evaluation_commands=[],
+            out_dir=out_dir,
+            timestamp=timestamp,
+            write=write,
+        )
+        diagnostics.extend(result.diagnostics.items)
+        if result.payload:
+            proposals.append(
+                {
+                    **result.payload,
+                    "patch_status": _dream_patch_status(result.payload),
+                }
+            )
+    return proposals
+
+
 def _dream_patch_status(wrapper: Dict[str, Any]) -> str:
     """Classify whether a dream-emitted proposal would generate a patch.
 
@@ -789,6 +861,16 @@ def _summary_for_source(source: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             "cases": payload.get("cases", []),
             "summary": payload.get("summary", payload.get("report", {})),
         }
+    if source == "user_feedback":
+        return {
+            "request": payload.get("request"),
+            "intended_module": payload.get("intended_module"),
+            "intended_target": payload.get("intended_target"),
+            "intended_skill": payload.get("intended_skill"),
+            "actual_target": payload.get("actual_target"),
+            "corrective_terms": list(payload.get("corrective_terms") or []),
+            "comment": payload.get("comment"),
+        }
     return {"payload": payload}
 
 
@@ -801,6 +883,13 @@ def _artifact_refs_for_source(source: str, payload: Dict[str, Any]) -> Dict[str,
         evidence = payload.get("curator_evidence")
         if isinstance(evidence, dict) and evidence.get("module_paths"):
             refs["module_paths"] = evidence["module_paths"]
+        return refs
+    if source == "user_feedback":
+        refs = {}
+        if payload.get("intended_module"):
+            refs["intended_module"] = str(payload["intended_module"])
+        if payload.get("intended_target"):
+            refs["intended_target"] = str(payload["intended_target"])
         return refs
     return {}
 

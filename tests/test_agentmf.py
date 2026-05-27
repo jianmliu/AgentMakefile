@@ -1416,8 +1416,11 @@ def test_evolution_evidence_store_appends_openclaw_import_summary(tmp_path: Path
 def test_evolution_evidence_store_redacts_secret_like_payload_values(tmp_path: Path) -> None:
     from agentmf.evolution import create_evolution_evidence_payload
 
+    # registry_scan has no source-specific summary handler so the full
+    # payload is preserved (after redaction) in summary.payload; this is
+    # the path that exercises the generic secret-redaction code.
     result = create_evolution_evidence_payload(
-        source="user_feedback",
+        source="registry_scan",
         payload={
             "message": "improve route",
             "OPENAI_API_KEY": "sk-test-secret-value",
@@ -1434,6 +1437,41 @@ def test_evolution_evidence_store_redacts_secret_like_payload_values(tmp_path: P
     assert result.payload["wrote"] is False
     assert result.payload["record"]["summary"]["payload"]["OPENAI_API_KEY"] == "[REDACTED]"
     assert result.payload["record"]["summary"]["payload"]["nested"]["token"] == "[REDACTED]"
+    assert "sk-test-secret-value" not in serialized
+    assert "secret-token-value" not in serialized
+
+
+def test_user_feedback_evidence_drops_unrelated_payload_fields(tmp_path: Path) -> None:
+    """user_feedback has a structured summary — fields outside the schema
+    (e.g. stray API keys the caller accidentally included) are dropped
+    entirely, which is stronger than redaction.
+    """
+    from agentmf.evolution import create_evolution_evidence_payload
+
+    result = create_evolution_evidence_payload(
+        source="user_feedback",
+        payload={
+            "request": "create a presentation",
+            "intended_module": "modules/openclaw-curated/plugins/AgentMakefile",
+            "intended_target": "skill.plugins.presentations",
+            "OPENAI_API_KEY": "sk-test-secret-value",
+            "nested": {"token": "secret-token-value"},
+        },
+        out_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
+        timestamp="2026-05-27T00:00:00Z",
+        write=False,
+    )
+
+    record = result.payload["record"]
+    summary = record["summary"]
+    serialized = json.dumps(record, sort_keys=True)
+
+    assert result.ok, result.diagnostics.format()
+    assert summary["request"] == "create a presentation"
+    assert summary["intended_target"] == "skill.plugins.presentations"
+    assert summary["intended_module"].endswith("plugins/AgentMakefile")
+    assert "OPENAI_API_KEY" not in summary
+    assert "nested" not in summary
     assert "sk-test-secret-value" not in serialized
     assert "secret-token-value" not in serialized
 
@@ -2486,6 +2524,105 @@ def test_dream_mode_dry_run_detects_recurring_routing_gaps(tmp_path: Path) -> No
     # Proposal JSON file landed on disk.
     proposal_path = Path(routing_gaps[0]["paths"]["proposal_json"])
     assert proposal_path.exists()
+
+
+def test_dream_mode_missing_match_terms_proposes_update_for_user_feedback(tmp_path: Path) -> None:
+    """user_feedback evidence saying "request X should have routed to target Y"
+    must surface as an update_match_terms proposal that adds the request to
+    Y's match.user_intent. The proposal must be patch-generatable end-to-end.
+    """
+    module_path = tmp_path / "plugins" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  plugins.presentations:
+    namespace: smoke
+    description: Build slide decks.
+    implementation:
+      source: skills/presentations/SKILL.md
+      relative_source: plugins/presentations/SKILL.md
+    match:
+      user_intent:
+        - build slides
+targets:
+  skill.plugins.presentations:
+    match:
+      user_intent:
+        - build slides
+    skills:
+      - smoke:plugins.presentations
+    steps:
+      - use_skill: smoke:plugins.presentations
+"""
+    )
+    evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    from agentmf.evolution import (
+        create_candidate_patch_payload,
+        create_dream_mode_payload,
+        create_evolution_evidence_payload,
+    )
+
+    create_evolution_evidence_payload(
+        source="user_feedback",
+        payload={
+            "request": "create a presentation about Q4 results",
+            "intended_module": str(module_path),
+            "intended_target": "skill.plugins.presentations",
+            "actual_target": "skill.plugins.documents",
+        },
+        out_dir=evidence_root,
+        write=True,
+    )
+    create_evolution_evidence_payload(
+        source="user_feedback",
+        payload={
+            "request": "draft Q4 board slides",
+            "intended_module": str(module_path),
+            "intended_target": "skill.plugins.presentations",
+            "actual_target": None,
+        },
+        out_dir=evidence_root,
+        write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_root,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    match_proposals = [
+        p
+        for p in result.payload["proposals"]
+        if p["proposal"]["changes"][0]["type"] == "update_match_terms"
+    ]
+    assert len(match_proposals) == 1, [p["proposal"]["changes"][0] for p in result.payload["proposals"]]
+    proposal_wrapper = match_proposals[0]
+    proposal = proposal_wrapper["proposal"]
+    change = proposal["changes"][0]
+    assert change["module"] == str(module_path)
+    assert change["target"] == "skill.plugins.presentations"
+    assert "create a presentation about Q4 results" in change["add_terms"]
+    assert "draft Q4 board slides" in change["add_terms"]
+    assert proposal_wrapper["patch_status"] == "would_generate_patch"
+    # Both feedback records are attached as evidence.
+    evidence_ids = {ref["event_id"] for ref in proposal["evidence"]}
+    assert len(evidence_ids) == 2
+
+    # End-to-end: the dream-emitted proposal really is patch-generatable.
+    proposal_path = Path(proposal_wrapper["paths"]["proposal_json"])
+    patch_result = create_candidate_patch_payload(
+        proposal_file=proposal_path,
+        out_dir=tmp_path / "patch",
+        write=True,
+    )
+    assert patch_result.ok, patch_result.diagnostics.format()
+    assert patch_result.payload["patch_status"] == "generated"
 
 
 def test_openclaw_curator_creates_duplicate_skill_proposal(tmp_path: Path) -> None:
