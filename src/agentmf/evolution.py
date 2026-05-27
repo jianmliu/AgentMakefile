@@ -33,6 +33,8 @@ _SOURCE_DIRS = {
 
 PROMOTION_STATUSES = {"candidate", "rejected", "accepted", "superseded"}
 
+SUPPORTED_PATCH_TYPES = {"update_match_terms", "merge_duplicate_targets"}
+
 
 @dataclass
 class EvolutionEvidenceResult:
@@ -547,10 +549,11 @@ def _dream_openclaw_duplicates(
         )
         diagnostics.extend(curator.diagnostics.items)
         if curator.payload.get("proposal"):
+            wrapper = curator.payload["proposal"]
             proposals.append(
                 {
-                    **curator.payload["proposal"],
-                    "patch_status": "skipped_unsupported_change",
+                    **wrapper,
+                    "patch_status": _dream_patch_status(wrapper),
                 }
             )
     return proposals
@@ -605,10 +608,30 @@ def _dream_recurring_routing_gaps(
             proposals.append(
                 {
                     **result.payload,
-                    "patch_status": "skipped_unsupported_change",
+                    "patch_status": _dream_patch_status(result.payload),
                 }
             )
     return proposals
+
+
+def _dream_patch_status(wrapper: Dict[str, Any]) -> str:
+    """Classify whether a dream-emitted proposal would generate a patch.
+
+    `wrapper` is the SkillWorkshopProposalResult.payload dict, which holds
+    the actual proposal core under "proposal". Returns "would_generate_patch"
+    if any change type is in SUPPORTED_PATCH_TYPES, otherwise
+    "skipped_unsupported_change".
+    """
+    proposal = wrapper.get("proposal")
+    if not isinstance(proposal, dict):
+        return "skipped_unsupported_change"
+    changes = proposal.get("changes")
+    if not isinstance(changes, list):
+        return "skipped_unsupported_change"
+    for change in changes:
+        if isinstance(change, dict) and change.get("type") in SUPPORTED_PATCH_TYPES:
+            return "would_generate_patch"
+    return "skipped_unsupported_change"
 
 
 def _unwrap_source_payload(source: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -845,13 +868,13 @@ def _candidate_source_files_for_proposal(
             unsupported.append({"type": "unknown", "reason": "change is not an object"})
             continue
         change_type = change.get("type")
+        if change_type not in SUPPORTED_PATCH_TYPES:
+            unsupported.append({"type": change_type or "unknown", "reason": "patch class is not implemented yet"})
+            continue
         if change_type == "update_match_terms":
             _apply_update_match_terms_change(change, proposal, source_map, diagnostics)
         elif change_type == "merge_duplicate_targets":
             _apply_merge_duplicate_targets_change(change, proposal, source_map, diagnostics)
-        else:
-            unsupported.append({"type": change_type or "unknown", "reason": "patch class is not implemented yet"})
-            continue
 
     candidate_files = []
     for source_path, record in source_map.items():

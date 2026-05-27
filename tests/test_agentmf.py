@@ -2191,7 +2191,7 @@ def test_dream_mode_dry_run_creates_openclaw_duplicate_proposal(tmp_path: Path) 
     assert result.ok, result.diagnostics.format()
     assert result.payload["mode"] == "dream_mode_dry_run"
     assert result.payload["proposal_count"] == 1
-    assert result.payload["proposals"][0]["patch_status"] == "skipped_unsupported_change"
+    assert result.payload["proposals"][0]["patch_status"] == "would_generate_patch"
     assert proposal["changes"][0]["type"] == "merge_duplicate_targets"
     assert proposal["promotion"] == {"status": "candidate", "requires_review": True}
 
@@ -2275,6 +2275,7 @@ def test_dream_mode_dry_run_detects_recurring_routing_gaps(tmp_path: Path) -> No
         if p["proposal"]["changes"][0]["type"] == "investigate_recurring_routing_gap"
     ]
     assert len(routing_gaps) == 1, [p["proposal"]["changes"][0] for p in result.payload["proposals"]]
+    assert routing_gaps[0]["patch_status"] == "skipped_unsupported_change"
     proposal = routing_gaps[0]["proposal"]
     change = proposal["changes"][0]
     assert change["request_fingerprint"] == fp_recurring
