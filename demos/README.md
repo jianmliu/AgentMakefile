@@ -66,3 +66,19 @@ agentmf exec --file demos/runtime-walkthrough/AgentMakefile --target demo.runtim
 See `docs/agentmf_step_by_step_demo.md` for the full step-by-step walkthrough,
 including the generated `skills/index.md` catalog and Claude/Codex
 skill-package outputs.
+
+## evo OpenClaw Tier Runner
+
+`demos/evo-openclaw-tier/run.py` reproduces the 10-stage `agentmf evo`
+pipeline against a real OpenClaw-style SKILL.md corpus (defaults to
+`~/.codex` and `~/.claude`). Tiers: `smoke` (100), `200`, `full` (entire
+local corpus).
+
+```bash
+python3 demos/evo-openclaw-tier/run.py --tier smoke --out-dir "$(mktemp -d /tmp/agentmf-evo-smoke.XXXXXX)"
+python3 demos/evo-openclaw-tier/run.py --tier 200   --out-dir "$(mktemp -d /tmp/agentmf-evo-200.XXXXXX)"
+python3 demos/evo-openclaw-tier/run.py --tier full  --out-dir "$(mktemp -d /tmp/agentmf-evo-full.XXXXXX)"
+```
+
+See `demos/evo-openclaw-tier/README.md` for the stage table and tier
+selection rules.

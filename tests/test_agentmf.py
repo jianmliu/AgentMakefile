@@ -1283,6 +1283,34 @@ def test_openclaw_import_exports_curator_evidence_for_duplicates(tmp_path: Path)
     assert "docs/AgentMakefile" in evidence["module_paths"]
 
 
+def test_openclaw_import_tolerates_invalid_yaml_frontmatter(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "openclaw-skills"
+    bad_dir = skills_dir / "discord"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: discord\n"
+        "description: Use when controlling Discord: send messages, react, post or pin.\n"
+        "---\n\n"
+        "# Discord\n\nbody\n"
+    )
+
+    from agentmf.openclaw import create_openclaw_import_payload
+
+    result = create_openclaw_import_payload(
+        skill_dirs=[skills_dir],
+        out_dir=tmp_path / "modules" / "openclaw",
+        namespace="openclaw",
+        package_name="openclaw-skills",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["skill_count"] == 1
+    category = result.payload["categories"][0]["name"]
+    assert category == "uncategorized"
+
+
 def test_cli_openclaw_scan_writes_modular_agentmakefiles_and_json_payload(
     tmp_path: Path, capsys
 ) -> None:

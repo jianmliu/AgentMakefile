@@ -147,11 +147,37 @@ def _split_frontmatter(text: str) -> tuple[Dict[str, Any], str]:
     for index in range(1, len(lines)):
         if lines[index].strip() == "---":
             raw_metadata = "\n".join(lines[1:index])
-            metadata = yaml.safe_load(raw_metadata) or {}
+            try:
+                metadata = yaml.safe_load(raw_metadata) or {}
+            except yaml.YAMLError:
+                metadata = _recover_frontmatter(raw_metadata)
             if not isinstance(metadata, dict):
                 metadata = {}
             return metadata, "\n".join(lines[index + 1 :])
     return {}, text
+
+
+def _recover_frontmatter(raw_metadata: str) -> Dict[str, Any]:
+    """Best-effort regex extraction when YAML parsing fails.
+
+    OpenClaw bundled SKILL.md files sometimes embed colons in unquoted
+    description values, which `yaml.safe_load` rejects. Pull the leading
+    `key: value` pairs we actually use (`name`, `description`, `category`,
+    `tags`) so the importer can still index those skills.
+    """
+    recovered: Dict[str, Any] = {}
+    for line in raw_metadata.splitlines():
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$", line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2).strip()
+        if key not in {"name", "description", "category", "tags"}:
+            continue
+        if key == "tags" and value.startswith("[") and value.endswith("]"):
+            recovered[key] = [item.strip().strip("'\"") for item in value[1:-1].split(",") if item.strip()]
+        else:
+            recovered[key] = value
+    return recovered
 
 
 def _split_skill_name(raw_name: str, namespace: Optional[str]) -> tuple[Optional[str], str]:
