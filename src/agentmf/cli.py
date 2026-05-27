@@ -23,6 +23,7 @@ from agentmf.evolution import (
     create_dream_mode_payload,
     create_evolution_evidence_payload,
     create_openclaw_curator_payload,
+    create_promotion_payload,
     create_skill_workshop_proposal_payload,
 )
 from agentmf.loader import load_source_with_diagnostics
@@ -237,6 +238,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     evo_evaluate_cmd.add_argument("--workspace-dir", default=".agentmf/evolution/worktrees")
     evo_evaluate_cmd.add_argument("--write", action="store_true")
     evo_evaluate_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    evo_promote_cmd = evo_subcommands.add_parser(
+        "promote",
+        help="copy a reviewed proposal's candidate AgentMakefiles into target_dir and mark the proposal accepted",
+    )
+    evo_promote_cmd.add_argument("--proposal-file", required=True)
+    evo_promote_cmd.add_argument("--target-dir", required=True)
+    evo_promote_cmd.add_argument("--write", action="store_true")
+    evo_promote_cmd.add_argument("--format", choices=["text", "json"], default="json")
     evo_dream_cmd = evo_subcommands.add_parser("dream", help="Dream Mode dry-run commands")
     evo_dream_subcommands = evo_dream_cmd.add_subparsers(dest="evo_dream_command", required=True)
     evo_dream_run_cmd = evo_dream_subcommands.add_parser(
@@ -817,6 +826,8 @@ def _evo(args: argparse.Namespace) -> int:
         return _evo_patch_generate(args)
     if args.evo_command == "evaluate":
         return _evo_evaluate(args)
+    if args.evo_command == "promote":
+        return _evo_promote(args)
     if args.evo_command == "dream" and args.evo_dream_command == "run":
         return _evo_dream_run(args)
     if args.evo_command == "openclaw" and args.evo_openclaw_command == "curate":
@@ -1458,6 +1469,36 @@ def _evo_evaluate(args: argparse.Namespace) -> int:
             print("Compile/evaluate result:")
             print(f"  status: {result.payload['promotion_report']['status']}")
             print(f"  workspace: {result.payload['workspace_dir']}")
+    return 1 if not result.ok else 0
+
+
+def _evo_promote(args: argparse.Namespace) -> int:
+    result = create_promotion_payload(
+        proposal_file=Path(args.proposal_file),
+        target_dir=Path(args.target_dir),
+        write=args.write,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "evo_promote": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print("Promotion result:")
+            print(f"  status: {result.payload['status']}")
+            print(f"  target_dir: {result.payload['target_dir']}")
+            for file_record in result.payload.get("promoted_files", []):
+                print(f"  - {file_record['target']} ({file_record['status']})")
     return 1 if not result.ok else 0
 
 

@@ -2043,6 +2043,203 @@ targets:
     assert "cat-b.shared" in load_source(module_b).skills
 
 
+def test_evo_promote_copies_candidates_and_accepts_proposal(tmp_path: Path) -> None:
+    """Promote a cross-module merge proposal: candidate modules land under
+    target_dir mirroring their parent dirs, the proposal flips to
+    `accepted`, and original sources stay untouched.
+    """
+    module_a = tmp_path / "cat-a" / "AgentMakefile"
+    module_b = tmp_path / "cat-b" / "AgentMakefile"
+    module_a.parent.mkdir(parents=True)
+    module_b.parent.mkdir(parents=True)
+    module_a.write_text(
+        """\
+version: "0.1"
+metadata:
+  skill_count: 1
+skills:
+  cat-a.shared:
+    namespace: smoke
+    description: primary copy.
+    implementation:
+      source: skills/shared-a/SKILL.md
+      relative_source: cat-a/shared/SKILL.md
+      original_name: shared
+    match:
+      user_intent:
+        - alpha
+targets:
+  skill.cat-a.shared:
+    match:
+      user_intent:
+        - alpha
+    skills:
+      - smoke:cat-a.shared
+    steps:
+      - use_skill: smoke:cat-a.shared
+"""
+    )
+    module_b.write_text(
+        """\
+version: "0.1"
+metadata:
+  skill_count: 1
+skills:
+  cat-b.shared:
+    namespace: smoke
+    description: duplicate copy.
+    implementation:
+      source: skills/shared-b/SKILL.md
+      relative_source: cat-b/shared/SKILL.md
+      original_name: shared
+    match:
+      user_intent:
+        - beta
+targets:
+  skill.cat-b.shared:
+    match:
+      user_intent:
+        - beta
+    skills:
+      - smoke:cat-b.shared
+    steps:
+      - use_skill: smoke:cat-b.shared
+"""
+    )
+    proposal_path = tmp_path / "promote.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-promote",
+                "title": "Promote cross-module merge",
+                "scope": {"modules": [str(module_a), str(module_b)], "targets": []},
+                "evidence": [{"event_id": "sha256:promote", "reason": "cross-module duplicate"}],
+                "changes": [
+                    {
+                        "type": "merge_duplicate_targets",
+                        "duplicate_original_names": {
+                            "shared": [
+                                "cat-a/shared/SKILL.md",
+                                "cat-b/shared/SKILL.md",
+                            ]
+                        },
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_promotion_payload
+
+    target_root = tmp_path / "promoted"
+    result = create_promotion_payload(
+        proposal_file=proposal_path,
+        target_dir=target_root,
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["status"] == "promoted"
+    promoted_files = result.payload["promoted_files"]
+    assert len(promoted_files) == 2
+    assert all(entry["status"] == "passed" for entry in promoted_files)
+
+    promoted_a = target_root / "cat-a" / "AgentMakefile"
+    promoted_b = target_root / "cat-b" / "AgentMakefile"
+    assert promoted_a.exists()
+    assert promoted_b.exists()
+
+    promoted_source_a = load_source(promoted_a)
+    promoted_source_b = load_source(promoted_b)
+    assert "cat-a.shared" in promoted_source_a.skills
+    assert promoted_source_a.skills["cat-a.shared"].implementation["merged_duplicates"] == [
+        {
+            "skill": "cat-b.shared",
+            "source": "skills/shared-b/SKILL.md",
+            "relative_source": "cat-b/shared/SKILL.md",
+            "original_name": "shared",
+        }
+    ]
+    assert "cat-b.shared" not in promoted_source_b.skills
+
+    # Canonical source modules untouched.
+    assert "cat-b.shared" in load_source(module_b).skills
+    assert load_source(module_a).skills["cat-a.shared"].implementation.get("merged_duplicates") is None
+
+    # Proposal file flipped to accepted.
+    updated_proposal = json.loads(proposal_path.read_text())
+    assert updated_proposal["promotion"] == {"status": "accepted", "requires_review": False}
+
+
+def test_evo_promote_dry_run_plans_without_writing(tmp_path: Path) -> None:
+    """write=False emits a target plan but does not copy files or mutate the proposal."""
+    module_a = tmp_path / "cat-a" / "AgentMakefile"
+    module_a.parent.mkdir(parents=True)
+    module_a.write_text(
+        """\
+version: "0.1"
+skills:
+  coding.review:
+    description: keep me.
+    implementation:
+      source: skills/review/SKILL.md
+      relative_source: cat-a/review/SKILL.md
+    match:
+      user_intent:
+        - review
+targets:
+  skill.coding.review:
+    match:
+      user_intent:
+        - review
+    skills:
+      - coding.review
+    steps:
+      - use_skill: coding.review
+"""
+    )
+    proposal_path = tmp_path / "dry.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-promote-dry",
+                "title": "Dry-run promote",
+                "scope": {"modules": [str(module_a)], "targets": ["skill.coding.review"]},
+                "evidence": [{"event_id": "sha256:dry", "reason": "extend routing"}],
+                "changes": [
+                    {
+                        "type": "update_match_terms",
+                        "module": str(module_a),
+                        "target": "skill.coding.review",
+                        "add_terms": ["review code"],
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_promotion_payload
+
+    target_root = tmp_path / "promoted"
+    result = create_promotion_payload(
+        proposal_file=proposal_path,
+        target_dir=target_root,
+        write=False,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["status"] == "planned"
+    assert not target_root.exists()
+    proposal_after = json.loads(proposal_path.read_text())
+    assert proposal_after["promotion"] == {"status": "candidate", "requires_review": True}
+
+
 def test_compile_evaluate_workspace_disambiguates_modules_sharing_basename(tmp_path: Path) -> None:
     cat_a = tmp_path / "cat-a"
     cat_b = tmp_path / "cat-b"

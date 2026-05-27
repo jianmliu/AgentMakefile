@@ -416,6 +416,131 @@ def create_compile_evaluate_payload(
 
 
 @dataclass
+class PromotionResult:
+    diagnostics: Diagnostics
+    payload: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return not self.diagnostics.has_errors
+
+
+def create_promotion_payload(
+    *,
+    proposal_file: Union[Path, str],
+    target_dir: Union[Path, str],
+    write: bool = False,
+) -> PromotionResult:
+    """Promote a reviewed proposal: copy candidate AgentMakefile contents to
+    target_dir (preserving the workspace's category subdir layout) and flip
+    the proposal's promotion.status from "candidate" to "accepted".
+
+    Canonical source files are never mutated. If any candidate fails to
+    re-parse under load_source the promotion is refused.
+    """
+    diagnostics = Diagnostics()
+    proposal_path = Path(proposal_file)
+    proposal = _load_proposal(proposal_path, diagnostics)
+    if proposal is None or diagnostics.has_errors:
+        return PromotionResult(diagnostics)
+
+    candidate_files, unsupported = _candidate_source_files_for_proposal(proposal, diagnostics)
+    if diagnostics.has_errors:
+        return PromotionResult(diagnostics)
+
+    target_root = Path(target_dir)
+    used_destinations: set[Path] = set()
+    plan: list[Dict[str, str]] = []
+    for candidate in candidate_files:
+        destination = _workspace_destination(target_root, candidate["source_path"], used_destinations)
+        used_destinations.add(destination)
+        plan.append(
+            {
+                "source": str(candidate["source_path"]),
+                "target": str(destination),
+                "candidate_content": candidate["candidate_content"],
+            }
+        )
+
+    promoted_records: list[Dict[str, Any]] = []
+    if write:
+        try:
+            target_root.mkdir(parents=True, exist_ok=True)
+            for entry in plan:
+                destination = Path(entry["target"])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(entry["candidate_content"], encoding="utf-8")
+        except OSError as exc:
+            diagnostics.error(
+                "AMF230",
+                f"could not write promoted candidate under {target_root}",
+                "evo.promote.target_dir",
+                str(exc),
+            )
+            return PromotionResult(diagnostics)
+
+        for entry in plan:
+            destination = Path(entry["target"])
+            source_obj, load_diag = load_source_with_diagnostics(destination)
+            status = "passed" if source_obj is not None and not load_diag.has_errors else "failed"
+            promoted_records.append(
+                {
+                    "source": entry["source"],
+                    "target": entry["target"],
+                    "status": status,
+                    "diagnostics": load_diag.to_list(),
+                }
+            )
+
+        if any(record["status"] == "failed" for record in promoted_records):
+            diagnostics.error(
+                "AMF231",
+                "promoted candidate failed to re-parse; refusing to mark proposal accepted",
+                "evo.promote.target_dir",
+            )
+            return PromotionResult(diagnostics)
+
+        promotion = proposal.setdefault("promotion", {})
+        if isinstance(promotion, dict):
+            promotion["status"] = "accepted"
+            promotion["requires_review"] = False
+        try:
+            proposal_path.write_text(json.dumps(proposal, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except OSError as exc:
+            diagnostics.error(
+                "AMF232",
+                f"could not update proposal promotion status: {proposal_path}",
+                "evo.promote.proposal_file",
+                str(exc),
+            )
+            return PromotionResult(diagnostics)
+    else:
+        for entry in plan:
+            promoted_records.append(
+                {
+                    "source": entry["source"],
+                    "target": entry["target"],
+                    "status": "not_run",
+                    "diagnostics": [],
+                }
+            )
+
+    status = "promoted" if write and plan else ("planned" if plan else "skipped_unsupported_change")
+    return PromotionResult(
+        diagnostics,
+        {
+            "version": 1,
+            "mode": "evo_promote",
+            "proposal_id": proposal.get("proposal_id"),
+            "target_dir": str(target_root),
+            "status": status,
+            "promoted_files": promoted_records,
+            "unsupported_changes": unsupported,
+        },
+    )
+
+
+@dataclass
 class OpenClawCuratorResult:
     diagnostics: Diagnostics
     payload: Dict[str, Any] = field(default_factory=dict)
