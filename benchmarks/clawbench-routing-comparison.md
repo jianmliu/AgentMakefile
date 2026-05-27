@@ -34,16 +34,16 @@ wrong but the correct skill ranks #2 or #3.
 
 | Task | root | curated/.tmp | curated/plugins | curated/skills | curated/uncategorized | curated/vendor_imports |
 | --- | --- | --- | --- | --- | --- | --- |
-| `methodology-review` | `review.task`, `methodology.request_review` | `skill..tmp.finishing-a-development-branch`, `skill..tmp.gh-address-comments` | _none_ | _none_ | _none_ | _none_ |
+| `methodology-review` | `methodology.request_review`, `review.task` | `skill..tmp.finishing-a-development-branch`, `skill..tmp.gh-address-comments` | _none_ | _none_ | _none_ | _none_ |
 | `methodology-plan` | `methodology.plan`, `code.change` | `skill..tmp.subagent-driven-development`, `skill..tmp.using-git-worktrees` | _none_ | _none_ | `skill.uncategorized.apple-reminders` | _none_ |
 | `methodology-debug` | `code.change` | `skill..tmp.browser`, `skill..tmp.chunk` | _none_ | _none_ | _none_ | _none_ |
-| `methodology-finish` | `methodology.default`, `methodology.bootstrap` | `skill..tmp.finding-discovery`, `skill..tmp.fix-finding` | _none_ | _none_ | _none_ | _none_ |
+| `methodology-finish` | `code.change`, `methodology.bootstrap` | `skill..tmp.finding-discovery`, `skill..tmp.fix-finding` | _none_ | _none_ | _none_ | _none_ |
 | `bundled-1password` | _none_ | `skill..tmp.circleci-cli` | _none_ | _none_ | _none_ | _none_ |
 | `bundled-apple-notes` | _none_ | `skill..tmp.twilio-content-template-builder`, `skill..tmp.twilio-whatsapp-manage-senders` | `skill.plugins.cardputer-buddy` | _none_ | `skill.uncategorized.skill-creator`, `skill.uncategorized.apple-notes` | `skill.vendor_imports.winui-app` |
 | `plugins-presentations` | _none_ | `skill..tmp.twilio-content-template-builder`, `skill..tmp.twilio-whatsapp-manage-senders` | `skill.plugins.documents` | _none_ | _none_ | _none_ |
 | `plugins-spreadsheet` | _none_ | `skill..tmp.twilio-customer-support-architect`, `skill..tmp.twilio-sendgrid-webhooks` | _none_ | _none_ | _none_ | _none_ |
 | `vendor-aspnet` | _none_ | `skill..tmp.finishing-a-development-branch`, `skill..tmp.build-chatgpt-app` | _none_ | _none_ | _none_ | `skill.vendor_imports.chatgpt-apps`, `skill.vendor_imports.aspnet-core` |
-| `vendor-stripe` | `spec.breakdown`, `methodology.plan` | `skill..tmp.twilio-marketing-promotions-advisor`, `skill..tmp.expo-tailwind-setup` | `skill.plugins.claude-automation-recommender`, `skill.plugins.configure` | _none_ | _none_ | `skill.vendor_imports.cloudflare-deploy` |
+| `vendor-stripe` | `methodology.default`, `methodology.plan` | `skill..tmp.twilio-marketing-promotions-advisor`, `skill..tmp.expo-tailwind-setup` | `skill.plugins.claude-automation-recommender`, `skill.plugins.configure` | _none_ | _none_ | `skill.vendor_imports.cloudflare-deploy` |
 
 ## Aggregate
 
@@ -80,24 +80,40 @@ correctly via the root AgentMakefile).
 | Initial promote (curator only) | 0 / 6 | n/a |
 | + tie-break by matched-term length (`3064c96`) | 1 / 6 | n/a |
 | + N-best alternatives surfaced (`7b642a4`) | 1 / 6 | 2 / 6 |
+| + dep-proximity & prompt visibility & full dream + patch class set (`7fc7b41..2fa9b03`) | 1 / 6 | 2 / 6 |
 
-Concrete movers under each commit:
+Concrete movers per commit:
 
 - `3064c96` flipped `plugins-presentations` from `plugins.documents`
   to `plugins.presentations` by breaking score ties on matched-term
-  length — the new `update_match_terms` proposal's long phrase
-  finally beats the neighbour's stray single word `Create`.
+  length.
 - `7b642a4` surfaces `vendor_imports.aspnet-core` as an alternative
-  on `vendor-aspnet` even though top-1 still points elsewhere; a
-  downstream LLM agent can recover from the wrong top-1 because the
-  right skill is visible at rank #2/#3.
+  on `vendor-aspnet` so a downstream LLM agent can recover from a
+  wrong top-1.
+- `7fc7b41` re-ranks alternatives so dep-adjacent targets bubble up
+  ahead of unrelated score-ties (no movement on this task set, but
+  active on any AgentMakefile that uses `target.deps`).
+- `7a20cec` injects a `## Routing Decision` section into the prompt
+  prefix so the LLM literally sees primary + dep closure + N-best
+  alternatives. Doesn't move routing numbers; expands the LLM's
+  recovery surface at inference time.
+- `22b57b1` / `0c32c59` / `93e0d9f` / `32c3edc` ship the full dream
+  detector set (openclaw duplicates, recurring routing gaps, missing
+  match terms, drifted permissions). They produce candidate patches
+  but don't fire until matching evidence is fed in.
+- `8a1c583` / `2fa9b03` complete the patch-class surface (10/10
+  classes including add_target, deprecate_skill, update_permission_
+  guard, split_module, …). Mechanism only — actual routing changes
+  arrive when the curator/dream emit proposals using them.
 
-Outstanding gap (still 4/6 OpenClaw tasks routing wrong):
+Outstanding gap (still 4/6 OpenClaw tasks routing wrong on top-1):
 
 - `bundled-1password`, `bundled-apple-notes`, `plugins-spreadsheet`,
-  `vendor-stripe` — these all have very generic neighbour skills with
-  overly-broad `match.user_intent` terms (`Create`, single-word
-  triggers). Curing them needs either user-feedback evidence that
-  drives the `missing_match_terms` dream detector to attach
-  distinguishing terms to the correct skill, or a follow-up patch
-  class that prunes overly-broad terms from the neighbour skills.
+  `vendor-stripe`. The detector + patch infrastructure to close
+  these is in place; what's still missing is the user_feedback /
+  benchmark evidence that drives the detectors. The next concrete
+  step is to run real tasks against the corpus, capture
+  selected_target outcomes as plugin_payload evidence, and feed
+  corrections back as user_feedback. The closed loop will then
+  prune the broad neighbour terms and attach distinguishing phrases
+  on the right skills automatically.
