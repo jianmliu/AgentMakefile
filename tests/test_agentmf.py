@@ -21,6 +21,7 @@ from agentmf.selector import create_link_plan
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 README = Path(__file__).parents[1] / "README.md"
+ROOT_AGENTMAKEFILE = Path(__file__).parents[1] / "AgentMakefile"
 MODULE_DIR = Path(__file__).parents[1] / "modules"
 DEMO_DIR = Path(__file__).parents[1] / "demos"
 CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "test.yml"
@@ -627,6 +628,38 @@ def test_superpowers_plugin_payload_selects_bootstrap_and_workflow_skills() -> N
     assert selected["dependency_closure"] == ["methodology.bootstrap", "methodology.code_change"]
 
 
+def test_root_agentmakefile_absorbs_superpowers_and_omo_routing() -> None:
+    from agentmf.plugin import create_plugin_payload
+
+    superpowers_result = create_plugin_payload(
+        path=ROOT_AGENTMAKEFILE,
+        host="codex",
+        request="implement this feature",
+    )
+    omo_result = create_plugin_payload(
+        path=ROOT_AGENTMAKEFILE,
+        host="codex",
+        request="autonomous implementation",
+    )
+    spec_breakdown_result = create_plugin_payload(
+        path=ROOT_AGENTMAKEFILE,
+        host="codex",
+        request="break down the spec into tasks",
+    )
+
+    assert superpowers_result.ok, superpowers_result.diagnostics.format()
+    assert omo_result.ok, omo_result.diagnostics.format()
+    assert spec_breakdown_result.ok, spec_breakdown_result.diagnostics.format()
+    assert superpowers_result.payload["selected_targets"] == ["methodology.code_change"]
+    assert "superpowers:test-driven-development" in superpowers_result.payload["selected_skills"]
+    assert omo_result.payload["selected_targets"] == ["omo.ultrawork"]
+    assert omo_result.payload["selected_skills"] == [
+        "omo:ultrawork",
+        "omo:category-routing",
+    ]
+    assert spec_breakdown_result.payload["selected_targets"] == ["spec.breakdown"]
+
+
 def test_link_plan_derives_target_match_from_referenced_skill_match() -> None:
     result = create_link_plan(
         OH_MY_OPENAGENT_MODULE,
@@ -666,6 +699,19 @@ def test_plugin_payload_uses_skill_match_derived_target_routing() -> None:
     assert result.payload["selection_trace"]["selected"]["match_details"][0]["source"] == (
         "skill:omo:ultrawork"
     )
+
+
+def test_omo_module_routes_consultation_and_category_requests_to_specific_targets() -> None:
+    cases = [
+        ("architecture review", "omo.research"),
+        ("choose category model matching", "omo.category_routing"),
+    ]
+
+    for request, expected_target in cases:
+        result = create_link_plan(OH_MY_OPENAGENT_MODULE, request=request)
+
+        assert result.ok, result.diagnostics.format()
+        assert result.plan["selected_targets"] == [expected_target]
 
 
 def test_scan_skills_directory_generates_agentmakefile_with_bootstrap_dependency(tmp_path: Path) -> None:
@@ -5805,6 +5851,1269 @@ targets:
     )
 
 
+def test_clawbench_harness_export_wraps_agentmf_payload(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  browser.task:
+    match:
+      user_intent:
+        - buy a book
+    steps:
+      - select_context:
+          include:
+            - user_request
+      - link_prompt:
+          fragment: browser.instructions
+      - check_permission:
+          tool: browser
+          input: "click*"
+      - validate_output: task_result
+""",
+    )
+
+    from agentmf.clawbench import create_clawbench_harness_export
+
+    result = create_clawbench_harness_export(
+        path=path,
+        task_id="clawbench-v2-001",
+        instruction="buy a book",
+        host="codex",
+        model="claude-opus-4-7",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["version"] == 1
+    assert payload["mode"] == "clawbench_harness_export"
+    assert payload["benchmark"] == "clawbench"
+    assert payload["task"] == {
+        "id": "clawbench-v2-001",
+        "instruction": "buy a book",
+    }
+    assert payload["run"] == {
+        "host": "codex",
+        "model": "claude-opus-4-7",
+        "execution": False,
+        "harness": "agentmf-plugin-payload",
+    }
+    assert payload["agentmf"]["selected_targets"] == ["browser.task"]
+    assert payload["agentmf"]["selected_pipeline"]["target"] == "browser.task"
+    assert payload["prompt"]["stable_prefix"]["hash"].startswith("sha256:")
+    assert payload["trace_bundle"]["permission_ops"][0]["payload"] == {
+        "tool": "browser",
+        "input": "click*",
+    }
+    assert payload["downstream_execution"] == {
+        "status": "not_executed",
+        "reason": "export_only_harness_layer",
+    }
+
+
+def test_cli_clawbench_export_outputs_json(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  browser.task:
+    match:
+      user_intent:
+        - buy a book
+    steps:
+      - link_prompt:
+          fragment: browser.instructions
+""",
+    )
+
+    exit_code = main(
+        [
+            "clawbench",
+            "export",
+            "--file",
+            str(path),
+            "--task-id",
+            "task-1",
+            "--instruction",
+            "buy a book",
+            "--host",
+            "codex",
+            "--model",
+            "claude-opus-4-7",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["clawbench_harness"]["task"]["id"] == "task-1"
+    assert payload["clawbench_harness"]["agentmf"]["selected_targets"] == ["browser.task"]
+
+
+def test_clawbench_jsonl_export_converts_task_file(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.task:
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - link_prompt:
+          fragment: code.instructions
+  review.task:
+    match:
+      user_intent:
+        - review change
+    steps:
+      - link_prompt:
+          fragment: review.instructions
+""",
+    )
+    tasks_file = tmp_path / "clawbench-tasks.jsonl"
+    tasks_file.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "task-1", "instruction": "implement feature"}),
+                json.dumps({"task_id": "task-2", "prompt": "review change"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from agentmf.clawbench import create_clawbench_jsonl_export
+
+    result = create_clawbench_jsonl_export(
+        path=path,
+        tasks_file=tasks_file,
+        host="codex",
+        model="claude-opus-4-7",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "clawbench_harness_export_jsonl"
+    assert result.payload["task_count"] == 2
+    lines = result.payload["jsonl"].splitlines()
+    assert len(lines) == 2
+    records = [json.loads(line) for line in lines]
+    assert [record["task"]["id"] for record in records] == ["task-1", "task-2"]
+    assert records[0]["agentmf"]["selected_targets"] == ["code.task"]
+    assert records[1]["agentmf"]["selected_targets"] == ["review.task"]
+    assert records[0]["downstream_execution"]["status"] == "not_executed"
+
+
+def test_cli_clawbench_export_jsonl_outputs_json_lines(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.task:
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - link_prompt:
+          fragment: code.instructions
+  review.task:
+    match:
+      user_intent:
+        - review change
+    steps:
+      - link_prompt:
+          fragment: review.instructions
+""",
+    )
+    tasks_file = tmp_path / "clawbench-tasks.jsonl"
+    tasks_file.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "task-1", "instruction": "implement feature"}),
+                json.dumps({"id": "task-2", "instruction": "review change"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "clawbench",
+            "export-jsonl",
+            "--file",
+            str(path),
+            "--tasks-file",
+            str(tasks_file),
+            "--host",
+            "codex",
+            "--model",
+            "claude-opus-4-7",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert exit_code == 0
+    assert len(lines) == 2
+    records = [json.loads(line) for line in lines]
+    assert records[0]["task"]["id"] == "task-1"
+    assert records[1]["task"]["id"] == "task-2"
+    assert records[0]["agentmf"]["selected_targets"] == ["code.task"]
+    assert records[1]["agentmf"]["selected_targets"] == ["review.task"]
+
+
+def test_cli_clawbench_export_jsonl_keeps_stdout_parseable_with_warnings(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.task:
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - link_prompt:
+          fragment: code.instructions
+permissions:
+  bash:
+    "git status*": allow
+""",
+    )
+    tasks_file = tmp_path / "clawbench-tasks.jsonl"
+    tasks_file.write_text(
+        json.dumps({"id": "task-1", "instruction": "implement feature"}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "clawbench",
+            "export-jsonl",
+            "--file",
+            str(path),
+            "--tasks-file",
+            str(tasks_file),
+            "--host",
+            "codex",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    records = [json.loads(line) for line in captured.out.splitlines()]
+    assert exit_code == 0
+    assert len(records) == 1
+    assert records[0]["task"]["id"] == "task-1"
+    assert "warning[AMF121]" in captured.err
+
+
+def test_clawbench_host_adapter_contract_defines_external_runner_io() -> None:
+    from agentmf.clawbench import create_clawbench_host_adapter_contract
+
+    result = create_clawbench_host_adapter_contract(host="codex")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "clawbench_host_adapter_contract"
+    assert result.payload["adapter"]["host"] == "codex"
+    assert result.payload["input_contract"]["format"] == "jsonl"
+    assert result.payload["input_contract"]["record_mode"] == "clawbench_harness_export"
+    assert "task.id" in result.payload["input_contract"]["required_fields"]
+    assert "agentmf.selected_pipeline" in result.payload["input_contract"]["required_fields"]
+    assert result.payload["output_contract"]["format"] == "jsonl"
+    assert "task_id" in result.payload["output_contract"]["required_fields"]
+    assert "pass" in result.payload["output_contract"]["required_fields"]
+    assert "cost_usd" in result.payload["output_contract"]["optional_fields"]
+
+
+def test_clawbench_result_import_summarizes_external_runner_jsonl(tmp_path: Path) -> None:
+    results_file = tmp_path / "clawbench-results.jsonl"
+    results_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "task_id": "task-1",
+                        "pass": True,
+                        "reward_lenient": 1.0,
+                        "reward_strict": 0.5,
+                        "cost_usd": 0.20,
+                        "wall_time_ms": 1000,
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "tool_calls": 4,
+                        "denied_tool_calls": 0,
+                        "agentmf": {"stable_prefix_hash": "sha256:aaa"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "task": {"id": "task-2"},
+                        "execution": {
+                            "pass": False,
+                            "cost_usd": 0.40,
+                            "wall_time_ms": 3000,
+                            "prompt_tokens": 200,
+                            "completion_tokens": 80,
+                            "tool_calls": 6,
+                            "denied_tool_calls": 1,
+                        },
+                        "agentmf": {"stable_prefix_hash": "sha256:bbb"},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from agentmf.clawbench import create_clawbench_result_summary
+
+    result = create_clawbench_result_summary(results_file=results_file)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "clawbench_external_runner_results"
+    assert result.payload["summary"] == {
+        "result_count": 2,
+        "pass_count": 1,
+        "pass_rate": 0.5,
+        "average_cost_usd": 0.3,
+        "average_wall_time_ms": 2000.0,
+        "average_total_tokens": 200.0,
+        "tool_calls": 10,
+        "denied_tool_calls": 1,
+        "stable_prefix_hashes": ["sha256:aaa", "sha256:bbb"],
+    }
+    assert result.payload["results"][0]["task_id"] == "task-1"
+    assert result.payload["results"][0]["pass"] is True
+    assert result.payload["results"][1]["task_id"] == "task-2"
+    assert result.payload["results"][1]["pass"] is False
+
+
+def test_clawbench_result_import_accepts_flat_result_with_execution_metadata(tmp_path: Path) -> None:
+    results_file = tmp_path / "clawbench-results.jsonl"
+    results_file.write_text(
+        json.dumps(
+            {
+                "task_id": "task-1",
+                "pass": False,
+                "cost_usd": 0,
+                "wall_time_ms": 2489000,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "tool_calls": 174,
+                "denied_tool_calls": 0,
+                "execution": {
+                    "stop_reason": "agent_idle",
+                    "intercepted": False,
+                    "result_category": "model_not_intercepted",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from agentmf.clawbench import create_clawbench_result_summary
+
+    result = create_clawbench_result_summary(results_file=results_file)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["summary"]["result_count"] == 1
+    assert result.payload["summary"]["pass_rate"] == 0.0
+    assert result.payload["summary"]["tool_calls"] == 174
+
+
+def test_cli_clawbench_import_results_outputs_json(tmp_path: Path, capsys) -> None:
+    results_file = tmp_path / "clawbench-results.jsonl"
+    results_file.write_text(
+        json.dumps(
+            {
+                "task_id": "task-1",
+                "pass": True,
+                "cost_usd": 0.2,
+                "wall_time_ms": 1000,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "clawbench",
+            "import-results",
+            "--results-file",
+            str(results_file),
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["clawbench_results"]["summary"]["result_count"] == 1
+    assert payload["clawbench_results"]["summary"]["pass_rate"] == 1.0
+
+
+def test_swebench_jsonl_export_converts_lite_subset(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    match:
+      user_intent:
+        - failing regression in Django
+        - implement code fix
+    steps:
+      - select_context:
+          include:
+            - repo.checkout
+            - problem_statement
+      - link_prompt:
+          fragment: code.instructions
+      - check_permission:
+          tool: bash
+          input: "pytest*"
+      - validate_output: patch
+""",
+    )
+    tasks_file = tmp_path / "swebench-lite-subset.jsonl"
+    tasks_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "instance_id": "django__django-11099",
+                        "repo": "django/django",
+                        "base_commit": "abc123",
+                        "problem_statement": "Fix failing regression in Django.",
+                        "test_patch": "diff --git a/tests.py b/tests.py",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "instance_id": "sympy__sympy-20590",
+                        "repo": "sympy/sympy",
+                        "base_commit": "def456",
+                        "problem_statement": "Please support header rows in text table output.",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from agentmf.swebench import create_swebench_jsonl_export
+
+    result = create_swebench_jsonl_export(
+        path=path,
+        tasks_file=tasks_file,
+        host="codex",
+        model="gpt-5.4",
+        limit=2,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "swebench_harness_export_jsonl"
+    assert result.payload["benchmark"] == "swebench-lite"
+    assert result.payload["task_count"] == 2
+    lines = result.payload["jsonl"].splitlines()
+    assert len(lines) == 2
+    records = [json.loads(line) for line in lines]
+    record = records[0]
+    assert record["mode"] == "swebench_harness_export"
+    assert record["benchmark"] == "swebench-lite"
+    assert record["task"] == {
+        "instance_id": "django__django-11099",
+        "repo": "django/django",
+        "base_commit": "abc123",
+        "problem_statement": "Fix failing regression in Django.",
+        "test_patch": "diff --git a/tests.py b/tests.py",
+    }
+    assert record["run"] == {
+        "host": "codex",
+        "model": "gpt-5.4",
+        "execution": False,
+        "harness": "agentmf-plugin-payload",
+    }
+    assert record["agentmf"]["selected_targets"] == ["code.change"]
+    assert records[1]["task"]["instance_id"] == "sympy__sympy-20590"
+    assert records[1]["agentmf"]["selected_targets"] == ["code.change"]
+    assert record["trace_bundle"]["permission_ops"][0]["payload"] == {
+        "tool": "bash",
+        "input": "pytest*",
+    }
+    assert record["downstream_execution"] == {
+        "status": "not_executed",
+        "reason": "export_only_harness_layer",
+    }
+
+
+def test_cli_swebench_export_jsonl_outputs_json_lines(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    match:
+      user_intent:
+        - regression
+    steps:
+      - link_prompt:
+          fragment: code.instructions
+""",
+    )
+    tasks_file = tmp_path / "swebench-lite-subset.jsonl"
+    tasks_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "instance_id": "django__django-11099",
+                        "repo": "django/django",
+                        "base_commit": "abc123",
+                        "problem_statement": "Fix regression.",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "instance_id": "sympy__sympy-20590",
+                        "repo": "sympy/sympy",
+                        "base_commit": "def456",
+                        "problem_statement": "Fix another regression.",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "swebench",
+            "export-jsonl",
+            "--file",
+            str(path),
+            "--tasks-file",
+            str(tasks_file),
+            "--host",
+            "codex",
+            "--model",
+            "gpt-5.4",
+            "--limit",
+            "1",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert exit_code == 0
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["task"]["instance_id"] == "django__django-11099"
+    assert record["agentmf"]["selected_targets"] == ["code.change"]
+
+
+def test_swebench_comparison_report_summarizes_baselines_and_cache_reuse(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    match:
+      user_intent:
+        - implement code fix
+    steps:
+      - select_context:
+          include:
+            - repo.checkout
+            - problem_statement
+      - link_prompt:
+          fragment: code.instructions
+      - check_permission:
+          tool: bash
+          input: "pytest*"
+      - validate_output: patch
+""",
+    )
+    tasks_file = tmp_path / "swebench-lite-subset.jsonl"
+    tasks_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "instance_id": "django__django-11099",
+                        "repo": "django/django",
+                        "base_commit": "abc123",
+                        "problem_statement": "Please support header rows in text table output.",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "instance_id": "sympy__sympy-20590",
+                        "repo": "sympy/sympy",
+                        "base_commit": "def456",
+                        "problem_statement": "Please improve equation rendering output.",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    baseline_file = tmp_path / "AGENTS_BASELINE.md"
+    baseline_file.write_text("large all-in-one guidance\n" * 200, encoding="utf-8")
+
+    from agentmf.swebench import create_swebench_comparison_report
+
+    result = create_swebench_comparison_report(
+        path=path,
+        tasks_file=tasks_file,
+        host="codex",
+        model="gpt-5.4",
+        limit=2,
+        baselines=["baseline-file", "none"],
+        baseline_file=baseline_file,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["mode"] == "swebench_deterministic_comparison"
+    assert payload["summary"]["task_count"] == 2
+    assert payload["summary"]["selected_targets"] == ["code.change"]
+    assert payload["summary"]["stable_prefix_hash_reuse"] == {
+        payload["summary"]["stable_prefix_hashes"][0]: 2,
+    }
+    assert payload["baseline_comparison"][0]["kind"] == "baseline-file"
+    assert payload["baseline_comparison"][0]["average_savings_approx_tokens"] > 0
+    assert payload["baseline_comparison"][1]["kind"] == "none"
+    assert payload["cases"][0]["instance_id"] == "django__django-11099"
+    assert payload["cases"][0]["selected_targets"] == ["code.change"]
+    assert payload["cases"][0]["stable_prefix_approx_tokens"] > 0
+
+
+def test_cli_swebench_compare_outputs_markdown(tmp_path: Path, capsys) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    match:
+      user_intent:
+        - implement code fix
+    steps:
+      - link_prompt:
+          fragment: code.instructions
+""",
+    )
+    tasks_file = tmp_path / "swebench-lite-subset.jsonl"
+    tasks_file.write_text(
+        json.dumps(
+            {
+                "instance_id": "django__django-11099",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Please support header rows in text table output.",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "swebench",
+            "compare",
+            "--file",
+            str(path),
+            "--tasks-file",
+            str(tasks_file),
+            "--baseline",
+            "none",
+            "--format",
+            "markdown",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "# AgentMakefile SWE-bench Deterministic Comparison" in captured.out
+    assert "| django__django-11099 | code.change |" in captured.out
+
+
+def test_swebench_execution_adapter_contract_defines_runner_io() -> None:
+    from agentmf.swebench import create_swebench_execution_adapter_contract
+
+    result = create_swebench_execution_adapter_contract(host="codex")
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["mode"] == "swebench_execution_adapter_contract"
+    assert payload["benchmark"] == "swebench-lite"
+    assert payload["adapter"]["host"] == "codex"
+    assert payload["adapter"]["execution"] == "external"
+    assert payload["input_contract"]["record_mode"] == "swebench_harness_export"
+    assert "task.instance_id" in payload["input_contract"]["required_fields"]
+    assert "prompt.stable_prefix.content" in payload["input_contract"]["required_fields"]
+    assert payload["output_contract"]["record_mode"] == "swebench_execution_result"
+    assert "instance_id" in payload["output_contract"]["required_fields"]
+    assert "resolved" in payload["output_contract"]["required_fields"]
+    assert "agentmf.stable_prefix_hash" in payload["output_contract"]["optional_fields"]
+
+
+def test_swebench_result_import_summarizes_external_runner_jsonl(tmp_path: Path) -> None:
+    results_file = tmp_path / "swebench-results.jsonl"
+    results_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "instance_id": "astropy__astropy-12907",
+                        "resolved": True,
+                        "patch_applied": True,
+                        "tests_passed": True,
+                        "cost_usd": 1.5,
+                        "wall_time_ms": 300000,
+                        "prompt_tokens": 18000,
+                        "completion_tokens": 2000,
+                        "tool_calls": 22,
+                        "denied_tool_calls": 0,
+                        "agentmf": {"stable_prefix_hash": "sha256:aaa"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "task": {"instance_id": "astropy__astropy-14182"},
+                        "execution": {
+                            "resolved": False,
+                            "patch_applied": True,
+                            "tests_passed": False,
+                            "cost_usd": 2.5,
+                            "wall_time_ms": 500000,
+                            "prompt_tokens": 20000,
+                            "completion_tokens": 4000,
+                            "tool_calls": 30,
+                            "denied_tool_calls": 1,
+                        },
+                        "agentmf": {"stable_prefix_hash": "sha256:aaa"},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from agentmf.swebench import create_swebench_result_summary
+
+    result = create_swebench_result_summary(results_file=results_file)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "swebench_execution_results"
+    assert result.payload["summary"] == {
+        "result_count": 2,
+        "resolved_count": 1,
+        "resolved_rate": 0.5,
+        "patch_applied_count": 2,
+        "patch_applied_rate": 1.0,
+        "tests_passed_count": 1,
+        "tests_passed_rate": 0.5,
+        "average_cost_usd": 2.0,
+        "average_wall_time_ms": 400000.0,
+        "average_total_tokens": 22000.0,
+        "cost_per_resolved": 4.0,
+        "tool_calls": 52,
+        "denied_tool_calls": 1,
+        "stable_prefix_hashes": ["sha256:aaa"],
+    }
+    assert result.payload["results"][0]["instance_id"] == "astropy__astropy-12907"
+    assert result.payload["results"][0]["resolved"] is True
+    assert result.payload["results"][1]["instance_id"] == "astropy__astropy-14182"
+    assert result.payload["results"][1]["resolved"] is False
+
+
+def test_cli_swebench_import_results_outputs_json(tmp_path: Path, capsys) -> None:
+    results_file = tmp_path / "swebench-results.jsonl"
+    results_file.write_text(
+        json.dumps(
+            {
+                "instance_id": "astropy__astropy-12907",
+                "resolved": True,
+                "patch_applied": True,
+                "tests_passed": True,
+                "cost_usd": 1.5,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "swebench",
+            "import-results",
+            "--results-file",
+            str(results_file),
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["swebench_results"]["summary"]["result_count"] == 1
+    assert payload["swebench_results"]["summary"]["resolved_rate"] == 1.0
+
+
+def test_cli_swebench_pass_report_outputs_markdown(tmp_path: Path, capsys) -> None:
+    results_file = tmp_path / "swebench-results.jsonl"
+    baseline_report = tmp_path / "swebench-lite-comparison.md"
+    baseline_report.write_text("# baseline report\n", encoding="utf-8")
+    results_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "instance_id": "astropy__astropy-12907",
+                        "resolved": True,
+                        "patch_applied": True,
+                        "tests_passed": True,
+                        "cost_usd": 1.5,
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "agentmf": {"stable_prefix_hash": "sha256:aaa"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "instance_id": "astropy__astropy-14182",
+                        "resolved": False,
+                        "patch_applied": True,
+                        "tests_passed": False,
+                        "cost_usd": 2.5,
+                        "prompt_tokens": 200,
+                        "completion_tokens": 40,
+                        "agentmf": {"stable_prefix_hash": "sha256:aaa"},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "swebench",
+            "pass-report",
+            "--results-file",
+            str(results_file),
+            "--baseline-report",
+            str(baseline_report),
+            "--format",
+            "markdown",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "# AgentMakefile SWE-bench Pass-Rate Report" in captured.out
+    assert "- Resolved rate: 0.5" in captured.out
+    assert "| astropy__astropy-12907 | yes | yes | yes |" in captured.out
+
+
+def test_swebench_predictions_export_emits_official_jsonl(tmp_path: Path) -> None:
+    patch_file = tmp_path / "astropy-14182.patch"
+    patch_file.write_text("diff --git a/file.py b/file.py\n+fixed\n", encoding="utf-8")
+    results_file = tmp_path / "swebench-results.jsonl"
+    results_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "instance_id": "astropy__astropy-12907",
+                        "model_patch": "diff --git a/a.py b/a.py\n+change\n",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "task": {"instance_id": "astropy__astropy-14182"},
+                        "execution": {"patch_path": str(patch_file)},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from agentmf.swebench import create_swebench_predictions_export
+
+    result = create_swebench_predictions_export(
+        results_file=results_file,
+        model_name_or_path="agentmf-gpt-5.4",
+        dataset_profile="lite",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "swebench_official_predictions_export"
+    assert result.payload["profile"]["id"] == "lite"
+    assert result.payload["profile"]["dataset_name"] == "princeton-nlp/SWE-bench_Lite"
+    assert result.payload["prediction_count"] == 2
+    lines = result.payload["jsonl"].splitlines()
+    assert [json.loads(line) for line in lines] == [
+        {
+            "instance_id": "astropy__astropy-12907",
+            "model_name_or_path": "agentmf-gpt-5.4",
+            "model_patch": "diff --git a/a.py b/a.py\n+change\n",
+        },
+        {
+            "instance_id": "astropy__astropy-14182",
+            "model_name_or_path": "agentmf-gpt-5.4",
+            "model_patch": "diff --git a/file.py b/file.py\n+fixed\n",
+        },
+    ]
+
+
+def test_cli_swebench_predictions_outputs_official_jsonl(tmp_path: Path, capsys) -> None:
+    results_file = tmp_path / "swebench-results.jsonl"
+    results_file.write_text(
+        json.dumps(
+            {
+                "instance_id": "astropy__astropy-12907",
+                "patch": "diff --git a/a.py b/a.py\n+change\n",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "swebench",
+            "predictions",
+            "--results-file",
+            str(results_file),
+            "--model-name",
+            "agentmf-gpt-5.4",
+            "--dataset",
+            "lite",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert [json.loads(line) for line in captured.out.splitlines()] == [
+        {
+            "instance_id": "astropy__astropy-12907",
+            "model_name_or_path": "agentmf-gpt-5.4",
+            "model_patch": "diff --git a/a.py b/a.py\n+change\n",
+        }
+    ]
+
+
+def test_swebench_official_run_command_uses_verified_profile() -> None:
+    from agentmf.swebench import create_swebench_official_run_command
+
+    result = create_swebench_official_run_command(
+        dataset_profile="verified",
+        predictions_path=Path("predictions.jsonl"),
+        run_id="agentmf-verified",
+        max_workers=2,
+        instance_ids=["astropy__astropy-12907"],
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["mode"] == "swebench_official_run_command"
+    assert payload["profile"]["id"] == "verified"
+    assert payload["profile"]["dataset_name"] == "princeton-nlp/SWE-bench_Verified"
+    assert payload["command"] == [
+        "python",
+        "-m",
+        "swebench.harness.run_evaluation",
+        "--dataset_name",
+        "princeton-nlp/SWE-bench_Verified",
+        "--split",
+        "test",
+        "--predictions_path",
+        "predictions.jsonl",
+        "--max_workers",
+        "2",
+        "--run_id",
+        "agentmf-verified",
+        "--instance_ids",
+        "astropy__astropy-12907",
+    ]
+    assert "princeton-nlp/SWE-bench_Verified" in payload["command_text"]
+
+
+def test_cli_swebench_official_command_outputs_text(capsys) -> None:
+    exit_code = main(
+        [
+            "swebench",
+            "official-command",
+            "--dataset",
+            "lite",
+            "--predictions-path",
+            "/tmp/predictions.jsonl",
+            "--run-id",
+            "agentmf-lite",
+            "--max-workers",
+            "1",
+            "--format",
+            "text",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "python -m swebench.harness.run_evaluation" in captured.out
+    assert "--dataset_name princeton-nlp/SWE-bench_Lite" in captured.out
+
+
+def test_swebench_official_dry_run_adapter_plan_limits_to_smoke_subset(tmp_path: Path) -> None:
+    predictions_file = tmp_path / "predictions.jsonl"
+    predictions_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "instance_id": "astropy__astropy-12907",
+                        "model_name_or_path": "agentmf-gpt-5.4",
+                        "model_patch": "diff --git a/a.py b/a.py\n+one\n",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "instance_id": "astropy__astropy-14182",
+                        "model_name_or_path": "agentmf-gpt-5.4",
+                        "model_patch": "diff --git a/b.py b/b.py\n+two\n",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "instance_id": "sympy__sympy-20590",
+                        "model_name_or_path": "agentmf-gpt-5.4",
+                        "model_patch": "diff --git a/c.py b/c.py\n+three\n",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from agentmf.swebench import create_swebench_official_adapter_plan
+
+    result = create_swebench_official_adapter_plan(
+        dataset_profile="lite",
+        predictions_path=predictions_file,
+        run_id="agentmf-lite",
+        max_workers=4,
+        smoke_limit=2,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["mode"] == "swebench_official_adapter_dry_run"
+    assert payload["execution"] is False
+    assert payload["profile"]["id"] == "lite"
+    assert payload["profile"]["official_instance_count"] == 300
+    assert payload["prediction_summary"] == {
+        "prediction_count": 3,
+        "model_names": ["agentmf-gpt-5.4"],
+        "first_instance_ids": [
+            "astropy__astropy-12907",
+            "astropy__astropy-14182",
+            "sympy__sympy-20590",
+        ],
+    }
+    assert payload["smoke_subset"] == {
+        "limit": 2,
+        "instance_ids": ["astropy__astropy-12907", "astropy__astropy-14182"],
+    }
+    assert payload["commands"]["smoke"]["execution"] is False
+    assert payload["commands"]["smoke"]["command"][-3:] == [
+        "--instance_ids",
+        "astropy__astropy-12907",
+        "astropy__astropy-14182",
+    ]
+    assert "--instance_ids" not in payload["commands"]["full"]["command"]
+    assert payload["safety"]["full_profile_execution_requires_external_confirmation"] is True
+
+
+def test_cli_swebench_official_dry_run_outputs_adapter_plan_json(tmp_path: Path, capsys) -> None:
+    predictions_file = tmp_path / "predictions.jsonl"
+    predictions_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "instance_id": "astropy__astropy-12907",
+                        "model_name_or_path": "agentmf-gpt-5.4",
+                        "model_patch": "diff --git a/a.py b/a.py\n+one\n",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "instance_id": "astropy__astropy-14182",
+                        "model_name_or_path": "agentmf-gpt-5.4",
+                        "model_patch": "diff --git a/b.py b/b.py\n+two\n",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "swebench",
+            "official-dry-run",
+            "--dataset",
+            "verified",
+            "--predictions-path",
+            str(predictions_file),
+            "--run-id",
+            "agentmf-verified",
+            "--smoke-limit",
+            "1",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    dry_run = payload["swebench_official_dry_run"]
+    assert dry_run["profile"]["dataset_name"] == "princeton-nlp/SWE-bench_Verified"
+    assert dry_run["profile"]["official_instance_count"] == 500
+    assert dry_run["smoke_subset"]["instance_ids"] == ["astropy__astropy-12907"]
+    assert dry_run["execution"] is False
+
+
+def test_swebench_official_report_import_summarizes_schema_v2_report(tmp_path: Path) -> None:
+    report_file = tmp_path / "agentmf-gpt-5.4.agentmf-lite.json"
+    report_file.write_text(
+        json.dumps(
+            {
+                "total_instances": 3,
+                "submitted_instances": 2,
+                "completed_instances": 2,
+                "resolved_instances": 1,
+                "unresolved_instances": 1,
+                "empty_patch_instances": 0,
+                "error_instances": 0,
+                "completed_ids": ["astropy__astropy-12907", "astropy__astropy-14182"],
+                "submitted_ids": ["astropy__astropy-12907", "astropy__astropy-14182"],
+                "resolved_ids": ["astropy__astropy-12907"],
+                "unresolved_ids": ["astropy__astropy-14182"],
+                "error_ids": [],
+                "empty_patch_ids": [],
+                "schema_version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from agentmf.swebench import create_swebench_official_report_summary
+
+    result = create_swebench_official_report_summary(report_file=report_file)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["mode"] == "swebench_official_report"
+    assert result.payload["summary"] == {
+        "schema_version": 2,
+        "total_instances": 3,
+        "submitted_instances": 2,
+        "completed_instances": 2,
+        "resolved_instances": 1,
+        "unresolved_instances": 1,
+        "empty_patch_instances": 0,
+        "error_instances": 0,
+        "resolved_rate": 0.5,
+        "completion_rate": 1.0,
+        "error_rate": 0.0,
+    }
+    assert result.payload["resolved_ids"] == ["astropy__astropy-12907"]
+
+
+def test_cli_swebench_import_official_report_outputs_json(tmp_path: Path, capsys) -> None:
+    report_file = tmp_path / "agentmf-gpt-5.4.agentmf-lite.json"
+    report_file.write_text(
+        json.dumps(
+            {
+                "total_instances": 1,
+                "submitted_instances": 1,
+                "completed_instances": 1,
+                "resolved_instances": 1,
+                "unresolved_instances": 0,
+                "empty_patch_instances": 0,
+                "error_instances": 0,
+                "completed_ids": ["astropy__astropy-12907"],
+                "submitted_ids": ["astropy__astropy-12907"],
+                "resolved_ids": ["astropy__astropy-12907"],
+                "unresolved_ids": [],
+                "error_ids": [],
+                "empty_patch_ids": [],
+                "schema_version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "swebench",
+            "import-official-report",
+            "--report-file",
+            str(report_file),
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["swebench_official_report"]["summary"]["resolved_rate"] == 1.0
+
+
+def test_swebench_profiles_include_lite_and_verified_dataset_names() -> None:
+    from agentmf.swebench import SWE_BENCH_PROFILES
+
+    assert SWE_BENCH_PROFILES["lite"]["dataset_name"] == "princeton-nlp/SWE-bench_Lite"
+    assert SWE_BENCH_PROFILES["verified"]["dataset_name"] == "princeton-nlp/SWE-bench_Verified"
+
+
 def test_harness_benchmark_payload_reports_pipeline_metrics(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
@@ -5841,6 +7150,8 @@ targets:
     assert result.ok, result.diagnostics.format()
     case = result.payload["cases"][0]
     assert case["selected_targets"] == ["review.task"]
+    assert case["baseline"]["kind"] == "agents-md"
+    assert case["baseline"]["path"] == "AGENTS.md"
     assert case["pipeline_metrics"] == {
         "selected_pipeline_size": 5,
         "prompt_ops": 1,
@@ -5850,12 +7161,119 @@ targets:
         "fallback_ops": 0,
     }
     assert case["stable_prefix_hash"].startswith("sha256:")
+    assert case["baseline"]["hash"].startswith("sha256:")
+    assert isinstance(case["baseline_savings"]["approx_tokens"], int)
     assert isinstance(case["all_in_one_baseline_savings"]["approx_tokens"], int)
     assert case["guard_permission_coverage"] == {
         "guard_ops": 1,
         "permission_ops": 1,
     }
     assert case["selection_trace_quality"]["has_selected_target"] is True
+
+
+def test_harness_benchmark_payload_supports_compiled_baselines(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  review-skill:
+    namespace: demo
+    description: Review code.
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    skills:
+      - demo:review-skill
+    steps:
+      - action: review_code
+""",
+    )
+
+    from agentmf.benchmark import create_harness_benchmark_payload
+
+    claude_result = create_harness_benchmark_payload(
+        path=path,
+        cases=["please review code"],
+        baseline="claude-md",
+    )
+    skills_index_result = create_harness_benchmark_payload(
+        path=path,
+        cases=["please review code"],
+        baseline="skills-index",
+    )
+
+    assert claude_result.ok, claude_result.diagnostics.format()
+    assert claude_result.payload["baseline"] == "claude-md"
+    assert claude_result.payload["cases"][0]["baseline"]["kind"] == "claude-md"
+    assert claude_result.payload["cases"][0]["baseline"]["path"] == "CLAUDE.md"
+    assert claude_result.payload["cases"][0]["baseline"]["chars"] > 0
+
+    assert skills_index_result.ok, skills_index_result.diagnostics.format()
+    assert skills_index_result.payload["baseline"] == "skills-index"
+    assert skills_index_result.payload["cases"][0]["baseline"]["kind"] == "skills-index"
+    assert skills_index_result.payload["cases"][0]["baseline"]["path"] == "skills/index.md"
+    assert skills_index_result.payload["cases"][0]["baseline"]["chars"] > 0
+
+
+def test_harness_benchmark_payload_supports_file_and_all_skills_baselines(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  review.task:
+    match:
+      user_intent:
+        - review code
+    steps:
+      - action: review_code
+""",
+    )
+    baseline_file = tmp_path / "BASELINE.md"
+    baseline_content = "large hand-written guidance\n"
+    baseline_file.write_text(baseline_content)
+    skills_dir = tmp_path / "skills"
+    _write_skill(skills_dir, "alpha", "Alpha skill.", "Alpha body.")
+    _write_skill(skills_dir, "beta", "Beta skill.", "Beta body.")
+
+    from agentmf.benchmark import create_harness_benchmark_payload
+
+    file_result = create_harness_benchmark_payload(
+        path=path,
+        cases=["please review code"],
+        baseline="baseline-file",
+        baseline_file=baseline_file,
+    )
+    all_skills_result = create_harness_benchmark_payload(
+        path=path,
+        cases=["please review code"],
+        baseline="all-skills",
+        baseline_skills_dirs=[skills_dir],
+    )
+
+    assert file_result.ok, file_result.diagnostics.format()
+    assert file_result.payload["cases"][0]["baseline"] == {
+        "kind": "baseline-file",
+        "path": str(baseline_file),
+        "sources": [str(baseline_file)],
+        "chars": len(baseline_content),
+        "approx_tokens": (len(baseline_content) + 3) // 4,
+        "hash": f"sha256:{hashlib.sha256(baseline_content.encode()).hexdigest()}",
+    }
+
+    assert all_skills_result.ok, all_skills_result.diagnostics.format()
+    baseline = all_skills_result.payload["cases"][0]["baseline"]
+    assert baseline["kind"] == "all-skills"
+    assert baseline["path"] == "<all-skills>"
+    assert baseline["sources"] == [
+        str(skills_dir / "alpha" / "SKILL.md"),
+        str(skills_dir / "beta" / "SKILL.md"),
+    ]
+    assert baseline["chars"] > 0
+    assert baseline["hash"].startswith("sha256:")
 
 
 def test_cli_benchmark_harness_outputs_json(tmp_path: Path, capsys) -> None:
@@ -5872,6 +7290,8 @@ targets:
       - action: review_code
 """,
     )
+    baseline_file = tmp_path / "baseline.md"
+    baseline_file.write_text("baseline guidance\n")
 
     exit_code = main(
         [
@@ -5883,6 +7303,10 @@ targets:
             "codex",
             "--case",
             "please review code",
+            "--baseline",
+            "baseline-file",
+            "--baseline-file",
+            str(baseline_file),
             "--format",
             "json",
         ]
@@ -5894,6 +7318,7 @@ targets:
     assert payload["ok"] is True
     assert payload["harness_benchmark"]["summary"]["case_count"] == 1
     assert payload["harness_benchmark"]["cases"][0]["selected_targets"] == ["review.task"]
+    assert payload["harness_benchmark"]["cases"][0]["baseline"]["kind"] == "baseline-file"
 
 
 def test_plugin_payload_keeps_plan_out_of_stable_prefix_hash(tmp_path: Path) -> None:

@@ -2,11 +2,12 @@ version: "0.1"
 
 include:
   - path: modules/superpowers/AgentMakefile
+  - path: modules/oh-my-openagent/AgentMakefile
 
 metadata:
   name: agentmakefile-self-hosting
-  description: AgentMakefile rules for developing AgentMakefile with its own compiler and Superpowers-style workflows.
-  methodology: superpowers-inspired
+  description: AgentMakefile rules for developing AgentMakefile with its own compiler, Superpowers workflows, and Oh My OpenAgent orchestration.
+  methodology: superpowers-and-omo-inspired
   self_hosting: true
 
 compile:
@@ -203,11 +204,12 @@ targets:
 
   spec.breakdown:
     phony: true
-    priority: 80
+    priority: 88
     description: Break the design spec into implementation tasks.
     match:
       user_intent:
         - break down spec
+        - break down the spec
         - plan roadmap
         - decompose design
     policies:

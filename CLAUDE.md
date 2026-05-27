@@ -5,7 +5,7 @@ Generated from AgentMakefile. Keep project-specific edits outside this managed b
 
 ## Package
 
-AgentMakefile rules for developing AgentMakefile with its own compiler and Superpowers-style workflows.
+AgentMakefile rules for developing AgentMakefile with its own compiler, Superpowers workflows, and Oh My OpenAgent orchestration.
 
 ## Policies
 
@@ -155,6 +155,77 @@ Treat skill authoring as TDD for process documentation using pressure scenarios 
 - write_minimal_skill_guidance
 - verify_agent_compliance
 - refactor_skill_to_close_loopholes
+
+### route_by_intent
+
+Classify the user's real intent before choosing an agent, category, or execution mode.
+
+#### Steps
+
+- identify_user_goal
+- classify_task_category
+- choose_orchestrator_or_specialist
+- state_routing_decision
+
+#### Output format
+
+- intent
+- selected_agent_or_category
+- routing_reason
+
+### orchestrate_before_parallel_work
+
+Use a lead orchestrator for complex work and delegate scoped tasks to specialists.
+
+#### Guards
+
+- do_not_bundle_multiple_independent_goals_into_one_deep_task
+- keep_delegated_tasks_single_goal_single_deliverable
+- collect_results_before_final_claims
+
+### plan_then_execute
+
+Use interview-style planning for complex or ambiguous work, then execute through a todo-oriented orchestrator.
+
+#### Steps
+
+- clarify_scope
+- produce_plan
+- review_plan_for_gaps
+- execute_tasks_systematically
+- verify_completion_independently
+
+### match_model_to_work
+
+Choose model families by work style rather than raw capability alone.
+
+#### Guards
+
+- use_claude_like_models_for_nested_instruction_following
+- use_gpt_like_models_for_deep_autonomous_reasoning
+- use_gemini_like_models_for_visual_and_frontend_work
+- use_fast_models_for_quick_or_retrieval_tasks
+
+### use_read_only_consultants
+
+Keep architecture review, documentation lookup, and code exploration agents read-only unless explicitly escalated.
+
+#### Guards
+
+- oracle_is_read_only
+- librarian_is_read_only
+- explore_is_read_only
+- do_not_delegate_from_read_only_consultants
+
+### verify_orchestrated_results
+
+Every orchestrated or background result must be independently checked before being treated as complete.
+
+#### Guards
+
+- retrieve_background_outputs_before_using_them
+- verify_claims_against_files_or_tests
+- report_incomplete_or_conflicting_results
 
 ### use_relevant_skills
 
@@ -425,6 +496,124 @@ Dispatch isolated workers for scoped implementation tasks when a plan is ready.
 - review_spec_compliance
 - review_code_quality
 - integrate_verified_changes
+
+### omo:ultrawork
+
+Full automatic mode for exploring, planning, implementing, and verifying a development task.
+
+#### Match
+
+- `user_intent`: ultrawork, just do it, autonomous implementation
+
+#### Steps
+
+- inspect_codebase
+- research_patterns
+- plan_work
+- delegate_or_execute
+- verify_with_diagnostics
+
+### omo:prometheus-planning
+
+Interview-style strategic planning for complex work.
+
+#### Match
+
+- `user_intent`: plan, prometheus, clarify scope
+
+#### Steps
+
+- ask_clarifying_questions
+- identify_ambiguities
+- build_detailed_plan
+- handoff_to_execution
+
+### omo:atlas-execution
+
+Todo-oriented execution and coordination of planned tasks.
+
+#### Match
+
+- `user_intent`: start work, execute plan, coordinate tasks
+
+#### Steps
+
+- load_plan
+- split_todos
+- assign_specialists
+- accumulate_learnings
+- verify_completion
+
+### omo:oracle-consultation
+
+Read-only architecture, debugging, and review consultation.
+
+#### Match
+
+- `user_intent`: architecture review, design decision, debug consultation
+
+#### Guards
+
+- read_only
+- do_not_write
+- do_not_delegate
+
+### omo:librarian-research
+
+Multi-repo and documentation research with evidence-based answers.
+
+#### Match
+
+- `user_intent`: documentation lookup, OSS example, multi repo analysis
+
+#### Guards
+
+- read_only
+- cite_evidence
+- do_not_write
+
+### omo:explore-codebase
+
+Fast codebase exploration, contextual grep, and pattern discovery.
+
+#### Match
+
+- `user_intent`: explore codebase, find pattern, grep
+
+#### Guards
+
+- read_only
+- do_not_edit
+
+### omo:category-routing
+
+Route delegated work to category presets such as visual-engineering, ultrabrain, deep, quick, or writing.
+
+#### Match
+
+- `user_intent`: choose category, delegate specialist, model matching
+
+#### Steps
+
+- classify_work_type
+- choose_category
+- choose_model_family
+- assign_single_goal
+
+### omo:team-mode
+
+Coordinate a bounded multi-agent team with lead/member roles, shared tasks, and optional worktrees.
+
+#### Match
+
+- `user_intent`: team mode, multi-agent team, parallel workers
+
+#### Guards
+
+- cap_team_size
+- use_shared_task_list
+- avoid_file_conflicts
+- verify_each_member_result
 
 ## Targets
 
@@ -851,6 +1040,192 @@ Prepare an isolated workspace for feature work when appropriate.
 - workspace_state
 - setup_result
 
+### omo.category_routing
+
+Choose the appropriate OMO category or model family for delegated work.
+
+- Priority: 96
+- Phony: true
+
+#### Match
+
+- `user_intent`: choose category, model matching, delegate specialist, route work
+
+#### Policies
+
+- route_by_intent
+- match_model_to_work
+- verify_orchestrated_results
+
+#### Skills
+
+- omo:category-routing
+
+#### Steps
+
+- use_skill=omo:category-routing
+- select_context=include=user_request, constraints
+- link_prompt=fragment=omo.category-routing
+- validate_output=routing_decision
+
+#### Output format
+
+- intent
+- selected_agent_or_category
+- routing_reason
+
+### omo.default
+
+Default Oh My OpenAgent-style orchestration workflow.
+
+- Priority: 70
+- Phony: true
+
+#### Policies
+
+- route_by_intent
+- match_model_to_work
+- verify_orchestrated_results
+
+#### Skills
+
+- omo:category-routing
+- omo:explore-codebase
+- omo:oracle-consultation
+
+#### Output format
+
+- routing_decision
+- selected_specialist
+- verification_result
+
+### omo.plan
+
+Prometheus-style planning followed by Atlas-style execution readiness.
+
+- Priority: 90
+- Phony: true
+
+#### Policies
+
+- plan_then_execute
+- use_read_only_consultants
+
+#### Skills
+
+- omo:prometheus-planning
+- omo:oracle-consultation
+- omo:atlas-execution
+
+#### Steps
+
+- use_skill=omo:prometheus-planning
+- use_skill=omo:atlas-execution
+- select_context=include=user_request, constraints
+- link_prompt=fragment=omo.planning
+- validate_output=plan
+
+#### Output format
+
+- clarified_scope
+- plan
+- execution_handoff
+
+### omo.research
+
+Read-only research, codebase exploration, and architecture consultation.
+
+- Priority: 91
+- Phony: true
+
+#### Match
+
+- `user_intent`: architecture review, design decision, debug consultation, documentation lookup, multi repo analysis
+
+#### Policies
+
+- use_read_only_consultants
+- verify_orchestrated_results
+
+#### Skills
+
+- omo:librarian-research
+- omo:explore-codebase
+- omo:oracle-consultation
+
+#### Steps
+
+- use_skill=omo:librarian-research
+- use_skill=omo:explore-codebase
+- use_skill=omo:oracle-consultation
+- select_context=include=user_request, project_state
+- link_prompt=fragment=omo.research
+- check_guard=use_read_only_consultants
+- validate_output=findings
+
+#### Output format
+
+- evidence
+- findings
+- recommendations
+
+### omo.team_mode
+
+Bounded team-mode parallel execution with a lead and specialist members.
+
+- Priority: 85
+- Phony: true
+
+#### Policies
+
+- orchestrate_before_parallel_work
+- verify_orchestrated_results
+
+#### Skills
+
+- omo:team-mode
+- omo:atlas-execution
+
+#### Output format
+
+- team_spec
+- task_assignments
+- verification_result
+
+### omo.ultrawork
+
+Autonomous end-to-end execution for a development task.
+
+- Priority: 95
+- Phony: true
+
+#### Policies
+
+- route_by_intent
+- orchestrate_before_parallel_work
+- verify_orchestrated_results
+
+#### Skills
+
+- omo:ultrawork
+- omo:category-routing
+
+#### Steps
+
+- use_skill=omo:ultrawork
+- use_skill=omo:category-routing
+- select_context=include=user_request, project_state, git.diff
+- link_prompt=fragment=omo.ultrawork
+- check_guard=verify_orchestrated_results
+- validate_output=verification_result
+
+#### Output format
+
+- plan
+- delegated_work
+- implementation_summary
+- verification_result
+
 ### project.default
 
 Default workflow for developing AgentMakefile itself.
@@ -928,12 +1303,12 @@ Review code, docs, generated output, or spec consistency.
 
 Break the design spec into implementation tasks.
 
-- Priority: 80
+- Priority: 88
 - Phony: true
 
 #### Match
 
-- `user_intent`: break down spec, plan roadmap, decompose design
+- `user_intent`: break down spec, break down the spec, plan roadmap, decompose design
 
 #### Policies
 
@@ -970,11 +1345,16 @@ These permissions are soft instructions unless the selected backend supports nat
 | bash | PYTHONPATH=src python3 -m pytest* | allow |
 | bash | agentmf compile* | ask |
 | bash | agentmf validate* | allow |
+| bash | bunx oh-my-opencode doctor* | ask |
+| bash | bunx oh-my-opencode* | ask |
 | bash | gh pr* | ask |
 | bash | gh repo* | ask |
 | bash | git diff* | allow |
 | bash | git log* | allow |
 | bash | git status* | allow |
+| bash | opencode auth list* | allow |
+| bash | opencode auth login* | ask |
+| bash | opencode models* | allow |
 | bash | python3 -m compileall* | allow |
 | bash | python3 -m pip install* | ask |
 | bash | python3 -m pytest* | allow |
@@ -988,6 +1368,10 @@ These permissions are soft instructions unless the selected backend supports nat
 | file_write | README.md | allow |
 | file_write | demos/** | allow |
 | file_write | docs/** | allow |
+| file_write | oh-my-openagent.json | ask |
+| file_write | oh-my-openagent.jsonc | ask |
+| file_write | oh-my-opencode.json | ask |
+| file_write | oh-my-opencode.jsonc | ask |
 | file_write | src/** | allow |
 | file_write | tests/** | allow |
 <!-- END GENERATED BY agentmf -->

@@ -12,6 +12,22 @@ from agentmf.prompt import PromptPayloadResult, create_prompt_payload
 from agentmf.runtime import RunPlanResult, create_run_plan
 from agentmf.selector import LinkPlanResult, create_link_plan
 from agentmf.skill_sync import SkillSyncPayloadResult, create_skill_sync_payload
+from agentmf.swebench import (
+    SWE_BENCH_PROFILES,
+    SWEBenchHarnessExportResult,
+    create_swebench_comparison_report,
+    create_swebench_execution_adapter_contract,
+    create_swebench_harness_export,
+    create_swebench_jsonl_export,
+    create_swebench_official_adapter_plan,
+    create_swebench_official_report_summary,
+    create_swebench_official_run_command,
+    create_swebench_pass_rate_report,
+    create_swebench_predictions_export,
+    create_swebench_result_summary,
+    render_swebench_comparison_markdown,
+    render_swebench_pass_rate_markdown,
+)
 from agentmf.tool_loop import ExecPayloadResult, create_exec_payload
 
 __all__ = [
@@ -26,6 +42,8 @@ __all__ = [
     "PromptPayloadResult",
     "RunPlanResult",
     "SkillSyncPayloadResult",
+    "SWEBenchHarnessExportResult",
+    "SWE_BENCH_PROFILES",
     "compile_agentmakefile",
     "create_ask_payload",
     "create_harness_benchmark_payload",
@@ -36,8 +54,20 @@ __all__ = [
     "create_prompt_payload",
     "create_run_plan",
     "create_skill_sync_payload",
+    "create_swebench_comparison_report",
+    "create_swebench_execution_adapter_contract",
+    "create_swebench_harness_export",
+    "create_swebench_jsonl_export",
+    "create_swebench_official_adapter_plan",
+    "create_swebench_official_report_summary",
+    "create_swebench_official_run_command",
+    "create_swebench_pass_rate_report",
+    "create_swebench_predictions_export",
+    "create_swebench_result_summary",
     "load_source",
     "render_harness_benchmark_markdown",
     "render_agentmakefile_from_guidance_files",
+    "render_swebench_comparison_markdown",
+    "render_swebench_pass_rate_markdown",
     "scan_guidance_files",
 ]

@@ -1648,6 +1648,8 @@ Implementation:
 - Reuse plugin payload selected pipelines, selection traces, selected skills,
   stable prefix hashes, prompt-size comparison data, and guard/permission
   coverage.
+- Support multiple baseline types: `agents-md`, `claude-md`, `skills-index`,
+  `baseline-file`, `all-skills`, and `none`.
 - Keep `agentmf benchmark skills` as a future compatibility-focused extension.
 - Support inline cases, JSON output, Markdown output, report writing, and
   fail-on-mismatch diagnostics for expected labels in later slices.
@@ -1655,12 +1657,555 @@ Implementation:
 Acceptance:
 
 - A benchmark case can report selected targets, selected skills, selected
--  pipeline size, stable prefix hash, baseline size, and savings.
+  pipeline size, stable prefix hash, baseline size, baseline hash, baseline
+  sources, and savings.
 - A benchmark case can report prompt/context/guard/permission operation counts.
 - Markdown output is suitable for demos and README examples.
 - JSON output is suitable for CI and future benchmark suites.
 
 Plan: `docs/superpowers/plans/2026-05-26-agentmf-benchmark-cli.md`.
+
+### AMF-BENCH-001 Harness Benchmark Suite Spec
+
+Status: implemented.
+
+Goal: define the competition-style benchmark path for AgentMakefile as an
+agent harness management system, not just a prompt-size CLI.
+
+Implementation:
+
+- Add `docs/agentmf_harness_benchmark_suite_spec.md`.
+- Define deterministic harness-management benchmark layers and later
+  execution benchmark layers.
+- Define suite file schema, adapter model, result schema, scoring dimensions,
+  fairness rules, safety rules, and self-hosting demo cases.
+- Link the suite spec from README and the benchmark CLI spec.
+
+Acceptance:
+
+- The benchmark roadmap distinguishes deterministic harness selection metrics
+  from opt-in execution/pass-rate metrics.
+- The suite spec can guide implementation of `agentmf benchmark suite` without
+  changing the existing `agentmf benchmark harness` first slice.
+
+### AMF-BENCH-008 ClawBench Harness Export
+
+Status: implemented.
+
+Goal: make AgentMakefile usable as a ClawBench-compatible harness selection
+layer before any model execution adapter exists.
+
+Implementation:
+
+- Add `agentmf clawbench export`.
+- Add `agentmf.clawbench.create_clawbench_harness_export`.
+- Reuse `agentmf plugin payload` to select targets, skills, pipeline
+  operations, stable prefix content/hash, volatile context, and host injection
+  metadata for a benchmark task instruction.
+- Emit a ClawBench-oriented trace bundle with target closure, linked fragments,
+  selected pipeline operations, guard ops, permission ops, fallback ops, output
+  contracts, diagnostics, and explicit `not_executed` downstream metadata.
+
+Acceptance:
+
+- A ClawBench task id and instruction can be exported as a stable AgentMakefile
+  harness bundle.
+- The export does not execute a model or tools.
+- The JSON shape can be consumed by an external ClawBench runner or host
+  execution adapter.
+
+### AMF-BENCH-009 ClawBench Task/Corpus Reader
+
+Status: implemented.
+
+Goal: read real ClawBench-style task corpora as newline-delimited JSON so the
+AgentMakefile harness layer can operate on a task set instead of only a single
+instruction.
+
+Implementation:
+
+- Read newline-delimited JSON task files where each task has `id`/`task_id`
+  and `instruction`/`prompt`.
+- Report structured diagnostics for unreadable files, invalid JSON lines,
+  non-object lines, missing task ids, missing instructions, and empty corpora.
+
+Acceptance:
+
+- A task JSONL file can be parsed into normalized task ids and instructions.
+- Invalid task corpora fail before any harness export is emitted.
+
+### AMF-BENCH-010 ClawBench JSONL Harness Export
+
+Status: implemented.
+
+Goal: let external ClawBench-style runners consume AgentMakefile-selected
+harness bundles one task at a time.
+
+Implementation:
+
+- Add `agentmf clawbench export-jsonl`.
+- Add `agentmf.clawbench.create_clawbench_jsonl_export`.
+- Reuse the ClawBench task/corpus reader from AMF-BENCH-009.
+- Emit one compact `clawbench_harness_export` object per output line.
+- Support stdout by default and `--out --write` for file output.
+
+Acceptance:
+
+- A task JSONL file can be converted into a JSONL stream of AgentMakefile
+  harness bundles.
+- Each output line is independently parseable by an external runner.
+- Export remains model/tool execution free.
+
+### AMF-BENCH-011 Host Execution Adapter Contract
+
+Status: implemented.
+
+Goal: define the JSONL boundary between AgentMakefile's harness-selection layer
+and a host runner that executes ClawBench tasks.
+
+Implementation:
+
+- Add `agentmf clawbench adapter-contract`.
+- Add `agentmf.clawbench.create_clawbench_host_adapter_contract`.
+- Define required input fields for `clawbench_harness_export` records.
+- Define required and optional output fields for
+  `clawbench_external_runner_result` records.
+- Keep the contract execution-free; it describes external runner IO only.
+
+Acceptance:
+
+- A host adapter can discover required ClawBench input and result fields from
+  the CLI.
+- The contract explicitly separates AgentMakefile harness selection from model
+  execution, tool execution, browser/runtime instrumentation, and scoring.
+
+### AMF-BENCH-012 External Runner Integration
+
+Status: implemented.
+
+Goal: import real external runner result JSONL so AgentMakefile can summarize
+score-facing ClawBench metrics after a host adapter executes tasks.
+
+Implementation:
+
+- Add `agentmf clawbench import-results`.
+- Add `agentmf.clawbench.create_clawbench_result_summary`.
+- Accept both flat result records (`task_id`, `pass`, metrics) and nested
+  result records (`task.id`, `execution.pass`, metrics).
+- Summarize result count, pass count, pass rate, average cost, average wall
+  time, average total tokens, tool calls, denied tool calls, and stable prefix
+  hashes.
+
+Acceptance:
+
+- External runner JSONL can be imported without re-running tasks.
+- Score summaries are machine-readable JSON for benchmark comparison scripts.
+- Invalid result files fail with structured diagnostics.
+
+### AMF-BENCH-013 SWE-bench Task/Corpus Reader
+
+Status: implemented.
+
+Goal: read local SWE-bench Lite-style task subsets as newline-delimited JSON so
+AgentMakefile can benchmark coding-harness selection against repository issue
+tasks without requiring a full dataset download in the first slice.
+
+Implementation:
+
+- Read newline-delimited JSON task files where each task has `instance_id`,
+  `repo`, `base_commit`, and `problem_statement`.
+- Preserve optional SWE-bench fields such as `patch`, `test_patch`,
+  `hints_text`, `version`, `FAIL_TO_PASS`, and `PASS_TO_PASS` when present.
+- Report structured diagnostics for unreadable files, invalid JSON lines,
+  non-object lines, missing required task fields, empty corpora, and invalid
+  subset limits.
+
+Acceptance:
+
+- A SWE-bench Lite subset JSONL file can be parsed into normalized coding task
+  records.
+- Invalid task corpora fail before any harness export is emitted.
+
+### AMF-BENCH-014 SWE-bench Lite Subset JSONL Harness Export
+
+Status: implemented.
+
+Goal: let external SWE-bench-style runners consume AgentMakefile-selected
+coding harness bundles one instance at a time.
+
+Implementation:
+
+- Add `agentmf swebench export-jsonl`.
+- Add `agentmf.swebench.create_swebench_jsonl_export`.
+- Reuse `agentmf plugin payload` with each instance `problem_statement` as the
+  routing request.
+- Emit one compact `swebench_harness_export` object per output line.
+- Support stdout by default, `--out --write` for file output, and `--limit` for
+  small SWE-bench Lite smoke subsets.
+
+Acceptance:
+
+- A local SWE-bench Lite-style task JSONL file can be converted into a JSONL
+  stream of AgentMakefile harness bundles.
+- Each output line includes SWE-bench instance metadata, selected targets,
+  selected skills, selected pipeline operations, stable prefix hash, guards,
+  permissions, fallbacks, and output contracts.
+- Export remains model/tool execution free.
+
+### AMF-BENCH-015 SWE-bench Deterministic Comparison Report
+
+Status: implemented.
+
+Goal: make AgentMakefile's harness-management advantage visible before running
+an expensive SWE-bench execution adapter.
+
+Implementation:
+
+- Add `agentmf swebench compare`.
+- Add `agentmf.swebench.create_swebench_comparison_report`.
+- Compare selected SWE-bench task harness bundles against deterministic
+  baselines: `agents-md`, `claude-md`, `skills-index`, `baseline-file`, and
+  `none`.
+- Report selected targets, stable prefix hashes, stable prefix hash reuse,
+  average selected stable-prefix tokens, baseline token sizes, and average
+  savings against each baseline.
+- Render JSON or Markdown reports.
+
+Acceptance:
+
+- A local SWE-bench Lite subset can produce an execution-free comparison report.
+- The report shows whether selected AgentMakefile stable prefixes are smaller
+  than all-in-one or index-style baselines.
+- The report records cache-friendly stable prefix reuse across tasks.
+
+### AMF-BENCH-016 SWE-bench Execution Adapter Contract
+
+Status: implemented.
+
+Goal: define the JSONL boundary between AgentMakefile's harness-selection layer
+and an external SWE-bench runner that performs model execution, repository
+checkout, patch application, and verification.
+
+Implementation:
+
+- Add `agentmf swebench adapter-contract`.
+- Add `agentmf.swebench.create_swebench_execution_adapter_contract`.
+- Define required input fields for `swebench_harness_export` records.
+- Define required and optional output fields for `swebench_execution_result`
+  records.
+- Keep the command execution-free; it describes external runner IO only.
+
+Acceptance:
+
+- A SWE-bench adapter can discover required harness input and result fields
+  from the CLI.
+- The contract explicitly separates AgentMakefile harness selection from model
+  calls, tool execution, repository mutation, test execution, and scoring.
+
+### AMF-BENCH-017 SWE-bench Result Importer
+
+Status: implemented.
+
+Goal: import external SWE-bench execution result JSONL so AgentMakefile can
+summarize pass-rate-facing metrics after a runner executes tasks.
+
+Implementation:
+
+- Add `agentmf swebench import-results`.
+- Add `agentmf.swebench.create_swebench_result_summary`.
+- Accept both flat result records (`instance_id`, `resolved`, metrics) and
+  nested result records (`task.instance_id`, `execution.resolved`, metrics).
+- Summarize result count, resolved count/rate, patch applied count/rate, tests
+  passed count/rate, average cost, average wall time, average total tokens,
+  cost per resolved task, tool calls, denied tool calls, and stable prefix
+  hashes.
+
+Acceptance:
+
+- External runner JSONL can be imported without re-running tasks.
+- Invalid result files fail with structured diagnostics.
+- The summary exposes pass-rate and cost metrics for later benchmark reports.
+
+### AMF-BENCH-018 SWE-bench Pass-Rate Report
+
+Status: implemented.
+
+Goal: render an execution-layer report that pairs external SWE-bench results
+with AgentMakefile's deterministic harness comparison artifacts.
+
+Implementation:
+
+- Add `agentmf swebench pass-report`.
+- Add `agentmf.swebench.create_swebench_pass_rate_report`.
+- Render JSON or Markdown pass-rate reports.
+- Include optional baseline comparison report path for provenance.
+
+Acceptance:
+
+- Imported SWE-bench execution results can produce a human-readable pass-rate
+  report.
+- The report includes resolved rate, tests-passed rate, patch-applied rate,
+  cost per resolved task, per-instance result rows, and stable-prefix evidence.
+
+### AMF-BENCH-019 Official SWE-bench Predictions JSONL Exporter
+
+Status: implemented.
+
+Goal: convert external AgentMakefile-host execution results into the official
+SWE-bench predictions JSONL format consumed by upstream `run_evaluation`.
+
+Implementation:
+
+- Add `agentmf swebench predictions`.
+- Add `agentmf.swebench.create_swebench_predictions_export`.
+- Emit one JSONL record per result with `instance_id`,
+  `model_name_or_path`, and `model_patch`.
+- Accept patches from inline `model_patch`, inline `patch`, or `patch_path`.
+- Keep output execution-free; this command only prepares official evaluator
+  input.
+
+Acceptance:
+
+- External result streams can be converted into upstream-compatible
+  predictions JSONL.
+- Missing instance ids, model names, and patches fail with structured
+  diagnostics.
+
+### AMF-BENCH-020 Official SWE-bench Run Command Generator
+
+Status: implemented.
+
+Goal: produce a reproducible command line for the official SWE-bench evaluator
+without running Docker, spending tokens, or mutating repositories.
+
+Implementation:
+
+- Add `agentmf swebench official-command`.
+- Add `agentmf.swebench.create_swebench_official_run_command`.
+- Emit the command array and shell-quoted command text for
+  `python -m swebench.harness.run_evaluation`.
+- Support dataset profile, predictions path, run id, split, max workers, and
+  optional instance ids.
+
+Acceptance:
+
+- Users can copy or script the official evaluator command for AgentMakefile
+  predictions.
+- Command generation remains side-effect free.
+
+### AMF-BENCH-021 Official SWE-bench Report Importer
+
+Status: implemented.
+
+Goal: import the official SWE-bench schema-v2 run report so AgentMakefile can
+compare pass-rate evidence with deterministic harness-management metrics.
+
+Implementation:
+
+- Add `agentmf swebench import-official-report`.
+- Add `agentmf.swebench.create_swebench_official_report_summary`.
+- Parse report fields such as `submitted_instances`, `completed_instances`,
+  `resolved_instances`, `empty_patch_instances`, and `error_instances`.
+- Report resolved, completion, and error rates over submitted instances.
+- Preserve submitted, completed, resolved, unresolved, empty-patch, and error
+  id lists.
+
+Acceptance:
+
+- Official SWE-bench report JSON can be imported after an external evaluator
+  run.
+- Invalid or incomplete report files fail with structured diagnostics.
+
+### AMF-BENCH-022 Lite/Verified Benchmark Profiles
+
+Status: implemented.
+
+Goal: make official Lite and Verified dataset selection explicit and reusable
+across predictions export and command generation.
+
+Implementation:
+
+- Add `SWE_BENCH_PROFILES` with `lite` and `verified` entries.
+- Map `lite` to `princeton-nlp/SWE-bench_Lite`.
+- Map `verified` to `princeton-nlp/SWE-bench_Verified`.
+- Use the selected profile in predictions metadata and official command
+  generation.
+
+Acceptance:
+
+- CLI commands expose `--dataset lite|verified`.
+- JSON payloads include the selected profile and official dataset name.
+
+### AMF-BENCH-023 Official SWE-bench Dry-Run Adapter Plan
+
+Status: implemented.
+
+Goal: make official Lite/Verified evaluation a deliberate external step by
+adding a dry-run adapter plan before any full 300/500-task run.
+
+Implementation:
+
+- Add `agentmf swebench official-dry-run`.
+- Add `agentmf.swebench.create_swebench_official_adapter_plan`.
+- Read and validate official predictions JSONL records with `instance_id`,
+  `model_name_or_path`, and `model_patch`.
+- Report submitted prediction count, model names, first instance ids, selected
+  profile, and official profile size.
+- Emit a smoke command limited to the first `--smoke-limit` prediction ids.
+- Emit a full command preview without executing it.
+- Mark the payload and both commands as execution-disabled.
+
+Acceptance:
+
+- Users can inspect exactly what would run before invoking the official
+  evaluator.
+- The first recommended path is a smoke subset, not a full Lite or Verified
+  run.
+- No Docker, repository checkout, model call, or test execution happens inside
+  AgentMakefile.
+
+## Evolution and Skill Workshop Tasks
+
+The evolution line is specified in
+[agentmf_evolution_skill_workshop_spec.md](agentmf_evolution_skill_workshop_spec.md).
+It turns selection traces, benchmark reports, registry metadata, and user
+corrections into reviewable AgentMakefile candidate patches. The workflow must
+remain evidence-driven, reproducible, reviewable, and reversible.
+
+### AMF-EVO-001 Evolution Evidence Store
+
+Status: planned.
+
+Goal: add an append-only evidence store for selection traces, benchmark
+outcomes, user corrections, registry scans, and plugin payload summaries.
+
+Implementation:
+
+- Add a JSONL evidence record schema with event id, timestamp, source, request
+  fingerprint, selected target, selected skills, outcome summary, and artifact
+  references.
+- Add redaction rules so secrets, tokens, private keys, `.env` contents, and
+  raw proprietary prompts are not persisted.
+- Add a write path under `.agentmf/evolution/evidence/`.
+- Add diagnostics for invalid source type, missing outcome, and unsafe artifact
+  paths.
+
+Acceptance:
+
+- Evidence can be recorded from a plugin payload or benchmark result without
+  modifying canonical AgentMakefile sources.
+- Evidence records are deterministic after redaction.
+- Secret-looking fields are rejected or redacted before write.
+
+### AMF-EVO-002 Skill Workshop Proposal Format
+
+Status: planned.
+
+Goal: define a machine-readable proposal format for human-reviewable
+AgentMakefile improvements.
+
+Implementation:
+
+- Add a proposal JSON schema with proposal id, title, scope, evidence refs,
+  change list, evaluation commands, and promotion state.
+- Add a markdown report renderer for workshop proposals.
+- Support proposal status values such as `candidate`, `rejected`, `accepted`,
+  and `superseded`.
+
+Acceptance:
+
+- A candidate proposal can explain what would change, why it was proposed, and
+  which evidence supports it.
+- Proposal files can be reviewed without reading raw traces.
+
+### AMF-EVO-003 AgentMakefile Candidate Patch Generator
+
+Status: planned.
+
+Goal: generate minimal unified diffs against AgentMakefile module sources from
+validated proposals.
+
+Implementation:
+
+- Support patch classes: `add_target`, `update_match_terms`, `add_dependency`,
+  `split_module`, `merge_duplicate_targets`, `deprecate_skill`,
+  `add_registry_metadata`, `add_benchmark_case`, and `update_permission_guard`.
+- Emit candidate patches under `.agentmf/evolution/candidates/`.
+- Preserve local module formatting as much as possible.
+- Refuse to rewrite all generated modules unless the proposal explicitly
+  declares a module split or normalization operation.
+
+Acceptance:
+
+- Candidate patches are small, reviewable, and tied to a proposal id.
+- Patch generation is deterministic for a fixed evidence bundle and compiler
+  version.
+
+### AMF-EVO-004 Compile/Evaluate/Promote Loop
+
+Status: planned.
+
+Goal: compile and evaluate candidate patches before promotion.
+
+Implementation:
+
+- Apply candidate patches in an isolated evolution worktree or temporary source
+  directory.
+- Run `agentmf validate` on touched AgentMakefile sources.
+- Compile at least one prompt backend and one skill backend when affected.
+- Run deterministic selector tests for changed request examples.
+- Run configured benchmark smoke tests when routing behavior changes.
+- Emit a promotion report with commands, results, artifact hashes, and residual
+  risks.
+
+Acceptance:
+
+- A candidate can be evaluated without mutating canonical sources.
+- Promotion requires explicit user or maintainer approval.
+
+### AMF-EVO-005 Dream Mode Dry-Run
+
+Status: planned.
+
+Goal: add an offline mode that proposes improvements from evidence without
+editing canonical AgentMakefile files.
+
+Implementation:
+
+- Add a dry-run command that reads `.agentmf/evolution/evidence/`.
+- Detect recurring failed selections, duplicate skills, missing match terms,
+  stale targets, and benchmark regressions.
+- Emit proposal JSON, markdown report, and optional patch candidate.
+- Mark all output as `candidate` and `requires_review`.
+
+Acceptance:
+
+- Dream mode can run unattended but only writes under `.agentmf/evolution/`.
+- No installed skills, generated guidance files, or canonical AgentMakefile
+  modules are modified.
+
+### AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator
+
+Status: planned.
+
+Goal: use the evolution loop to curate large imported skill ecosystems such as
+OpenClaw instead of loading thousands of skills as a flat index.
+
+Implementation:
+
+- Analyze imported skill modules by category, source, trust metadata, tool
+  requirements, match terms, and content hash.
+- Detect duplicate or overlapping skills.
+- Propose category splits, target merges, match-rule improvements, trust
+  annotations, and benchmark cases.
+- Preserve source registry metadata where available.
+
+Acceptance:
+
+- A large skill import can be turned into modular AgentMakefile maintenance
+  proposals.
+- The curator improves routing structure without requiring immediate changes to
+  original skill packages.
 
 ## Post-MVP Runtime Work
 
@@ -1735,10 +2280,36 @@ Completed:
 - AMF-PAD-013 system skill sync and host integration instructions.
 - AMF-HARNESS-001 target pipeline IR.
 - AMF-HARNESS-002 selected pipeline in plugin payload.
+- AMF-BENCH-001 Harness Benchmark Suite Spec.
+- AMF-BENCH-008 ClawBench Harness Export.
+- AMF-BENCH-009 ClawBench Task/Corpus Reader.
+- AMF-BENCH-010 ClawBench JSONL Harness Export.
+- AMF-BENCH-011 Host Execution Adapter Contract.
+- AMF-BENCH-012 External Runner Integration.
+- AMF-BENCH-013 SWE-bench Task/Corpus Reader.
+- AMF-BENCH-014 SWE-bench Lite Subset JSONL Harness Export.
+- AMF-BENCH-015 SWE-bench Deterministic Comparison Report.
+- AMF-BENCH-016 SWE-bench Execution Adapter Contract.
+- AMF-BENCH-017 SWE-bench Result Importer.
+- AMF-BENCH-018 SWE-bench Pass-Rate Report.
+- AMF-BENCH-019 Official SWE-bench Predictions JSONL Exporter.
+- AMF-BENCH-020 Official SWE-bench Run Command Generator.
+- AMF-BENCH-021 Official SWE-bench Report Importer.
+- AMF-BENCH-022 Lite/Verified Benchmark Profiles.
+- AMF-BENCH-023 Official SWE-bench Dry-Run Adapter Plan.
 
 Next:
 
 - AMF-PAD-014 Multi-Source Guidance Ingestion.
-- AMF-PAD-015 Benchmark CLI First Slice.
+- AMF-EVO-001 Evolution Evidence Store.
+- AMF-EVO-002 Skill Workshop Proposal Format.
+- AMF-EVO-003 AgentMakefile Candidate Patch Generator.
+- AMF-EVO-004 Compile/Evaluate/Promote Loop.
+- AMF-EVO-005 Dream Mode Dry-Run.
+- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator.
+- AMF-BENCH-002 Suite File Parser.
+- AMF-BENCH-003 Deterministic Suite Runner.
+- AMF-BENCH-004 Report Writer.
+- AMF-BENCH-005 Demo Suite.
 
 This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks through the current `agentmf exec` contract. The next step should be a new milestone decision: either deepen provider-backed execution, package host adapters, or prepare the project for release.

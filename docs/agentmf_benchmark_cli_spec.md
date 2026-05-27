@@ -6,10 +6,16 @@ Date: 2026-05-26.
 
 ## Summary
 
-`agentmf benchmark harness` should make AgentMakefile's value measurable. It
-compares request-specific AgentMakefile pipeline selection against scattered or
-all-in-one guidance loading patterns, then reports token savings, cache
-stability, operation coverage, selection quality, and explainability.
+`agentmf benchmark harness` should make AgentMakefile's harness-management
+value measurable. AgentMakefile's main claim is that scattered agent harnesses
+can be imported, normalized into structured pipelines, compiled back to native
+host artifacts, and selected per request more efficiently than loading broad
+Markdown or skill indexes.
+
+The benchmark compares request-specific AgentMakefile pipeline selection
+against scattered or all-in-one guidance loading patterns, then reports token
+savings, cache stability, operation coverage, selection quality, source
+coverage, and explainability.
 
 The benchmark is deterministic. It should not call a model, execute tools, or
 use an LLM judge in the first version. It measures the artifacts AgentMakefile
@@ -21,31 +27,46 @@ already owns:
 - selected pipeline size
 - prompt/context/guard/permission/fallback operation counts
 - stable prefix size and hash
-- all-in-one baseline size
+- baseline kind, sources, size, and hash
 - selected native skill artifact paths
 - selection trace and match evidence
 - expected-vs-actual skill selection when benchmark cases provide labels
 
 ## Product Claim
 
-AgentMakefile is better than scattered `SKILL.md`, `AGENTS.md`, `CLAUDE.md`,
-and hand-maintained skill indexes when it can prove these outcomes:
+AgentMakefile is useful as a structured agent-harness entry point when it can
+prove these outcomes:
 
-- It loads fewer stable prompt tokens for the same request.
-- It keeps stable prompt chunks deterministic and cache-friendly.
-- It selects the expected skill closure for common requests.
-- It explains why each skill was selected.
-- It compiles and syncs the same skill source across hosts.
+- It can ingest scattered harness inputs such as `SKILL.md`, `AGENTS.md`,
+  `CLAUDE.md`, and framework-specific modules into a common routing graph.
+- It loads fewer stable prompt tokens for the same request than all-in-one
+  guidance or all-skills loading.
+- It keeps stable prompt chunks deterministic, hashable, and cache-friendly.
+- It selects the expected target, skill closure, and pipeline operations for
+  common requests.
+- It explains why each target or skill was selected.
+- It compiles and syncs the same structured harness source across hosts.
+- It preserves host-native compatibility while providing a better control
+  plane for selection and prompt-prefix assembly.
 
 `agentmf benchmark harness` is the primary command that produces this evidence.
 A narrower `agentmf benchmark skills` command remains a possible compatibility
 view focused only on native skill selection.
 
+The broader competition-style suite design lives in
+[agentmf_harness_benchmark_suite_spec.md](agentmf_harness_benchmark_suite_spec.md).
+That suite extends this command from deterministic harness-management metrics
+to optional execution benchmarks with host adapters, verifiers, cost, latency,
+and pass-rate metrics.
+
 ## Goals
 
-- Compare AgentMakefile request routing against all-in-one prompt, harness, or skill
-  baselines.
+- Compare AgentMakefile request routing against all-in-one prompt, harness, or
+  skill baselines.
+- Compare authored AgentMakefile modules and imported guidance modules using
+  the same benchmark payload shape.
 - Quantify stable prompt size and approximate token savings.
+- Report baseline kind, source files, content hash, and approximate tokens.
 - Show stable prefix hashes so cache reuse can be inspected across cases.
 - Report selected pipeline size and operation group counts.
 - Report guard/permission coverage for selected pipelines.
@@ -94,6 +115,7 @@ agentmf benchmark harness \
 ```bash
 agentmf benchmark harness \
   --file /tmp/scanned-superpowers.AgentMakefile \
+  --baseline all-skills \
   --baseline-skills-dir ~/.codex/skills \
   --case "debug failing test" \
   --format markdown
@@ -108,7 +130,7 @@ agentmf benchmark harness \
 --cases-file PATH                 # YAML or JSON benchmark cases
 --target NAME                     # optional explicit target baseline case
 --backend agents-fragments|claude-fragments
---baseline agents-md|claude-md|skills-index|all-skills|none
+--baseline agents-md|claude-md|skills-index|baseline-file|all-skills|none
 --baseline-file PATH              # explicit all-in-one baseline file
 --baseline-skills-dir PATH        # repeatable SKILL.md root for all-skills baseline
 --fail-on-mismatch                # nonzero exit if expected labels do not match
@@ -201,6 +223,12 @@ Suite-level summary should report:
 
 ## Baselines
 
+Baselines represent what a host or user would have loaded without structured
+AgentMakefile routing. Each baseline records its kind, source paths, content
+size, approximate tokens, and hash so benchmark output can distinguish
+"smaller because selected" from "different because measured against a smaller
+source."
+
 ### `agents-md`
 
 Compile or render the all-in-one generic `AGENTS.md` backend and compare the
@@ -216,11 +244,18 @@ stable prefix against that output.
 Compile or render `skills/index.md` and compare selected skills against the
 complete generated skill catalog.
 
+This is the compatibility baseline for systems that already rely on a skill
+index but do not have a structured dependency and pipeline selector.
+
 ### `all-skills`
 
 Read every `*/SKILL.md` under `--baseline-skills-dir` roots, concatenate them
 in deterministic path order, and compare selected stable prefix size against
 loading all installed skills.
+
+This is the clearest baseline for showing the value of request-time harness
+selection: AgentMakefile should select the relevant target and skill closure
+instead of asking the model to inspect every installed skill.
 
 ### `baseline-file`
 
@@ -228,66 +263,71 @@ Read a caller-provided file and use it as the baseline. This is useful for
 comparing against an existing hand-written `AGENTS.md`, `CLAUDE.md`, or
 `skills/index.md`.
 
+### `none`
+
+Disable baseline comparison while still reporting selected targets, selected
+skills, pipeline metrics, stable prefix hash, guard coverage, permission
+coverage, and selection trace quality.
+
 ## JSON Output Shape
 
 ```json
 {
   "ok": true,
-  "version": 1,
-  "agentmakefile_path": "modules/superpowers/AgentMakefile",
-  "host": "codex",
-  "backend": "agents-fragments",
-  "baseline": {
-    "kind": "agents-md",
-    "chars": 14110,
-    "approx_tokens": 3528
-  },
-  "summary": {
-    "case_count": 2,
-    "matched_target_cases": 2,
-    "matched_skill_cases": 2,
-    "average_savings_tokens": 2400,
-    "median_savings_tokens": 2400,
-    "average_savings_percent": 68.1,
-    "unique_stable_prefix_hashes": 2
-  },
-  "cases": [
-    {
-      "id": "write-plan",
-      "request": "write an implementation plan",
-      "selected_targets": ["methodology.plan"],
-      "target_closure": ["methodology.bootstrap", "methodology.plan"],
-      "selected_skills": [
-        "superpowers:using-superpowers",
-        "superpowers:verification-before-completion",
-        "superpowers:writing-plans"
-      ],
-      "expected_targets_match": true,
-      "expected_skills_match": true,
-      "stable_prefix": {
-        "chars": 3131,
-        "approx_tokens": 783,
-        "hash": "sha256:..."
-      },
-      "savings": {
-        "chars": 10979,
-        "approx_tokens": 2745,
-        "percent": 77.8
-      },
-      "selection": {
-        "target": "methodology.plan",
-        "matched_terms": ["implementation plan"],
-        "match_details": [
-          {
-            "term": "implementation plan",
-            "method": "substring",
-            "score": 100,
-            "evidence": "implementation plan"
-          }
-        ]
+  "harness_benchmark": {
+    "version": 1,
+    "mode": "harness_benchmark",
+    "host": "codex",
+    "backend": "agents-fragments",
+    "baseline": "all-skills",
+    "summary": {
+      "case_count": 1,
+      "total_selected_pipeline_size": 23,
+      "stable_prefix_hashes": ["sha256:..."]
+    },
+    "cases": [
+      {
+        "id": "case-1",
+        "request": "implement this feature",
+        "selected_targets": ["methodology.code_change"],
+        "selected_skills": [
+          "superpowers:using-superpowers",
+          "superpowers:verification-before-completion",
+          "superpowers:test-driven-development"
+        ],
+        "pipeline_metrics": {
+          "selected_pipeline_size": 23,
+          "prompt_ops": 2,
+          "context_ops": 1,
+          "guard_ops": 19,
+          "permission_ops": 0,
+          "fallback_ops": 0
+        },
+        "stable_prefix_hash": "sha256:...",
+        "baseline": {
+          "kind": "all-skills",
+          "path": "<all-skills>",
+          "sources": ["/home/user/.codex/skills/tdd/SKILL.md"],
+          "chars": 114020,
+          "approx_tokens": 28505,
+          "hash": "sha256:..."
+        },
+        "baseline_savings": {
+          "chars": 107068,
+          "approx_tokens": 26767
+        },
+        "guard_permission_coverage": {
+          "guard_ops": 19,
+          "permission_ops": 0
+        },
+        "selection_trace_quality": {
+          "has_selected_target": true,
+          "candidate_count": 4,
+          "has_match_details": true
+        }
       }
-    }
-  ],
+    ]
+  },
   "diagnostics": []
 }
 ```
@@ -295,32 +335,15 @@ comparing against an existing hand-written `AGENTS.md`, `CLAUDE.md`, or
 ## Markdown Output Shape
 
 ```markdown
-# AgentMakefile Skill Benchmark
+# AgentMakefile Harness Benchmark
 
-Source: `modules/superpowers/AgentMakefile`
-Host: `codex`
-Baseline: `agents-md`, ~3528 tokens
+- Cases: 1
+- Backend: agents-fragments
+- Baseline: all-skills
 
-| Case | Selected Target | Selected Skills | Prefix Tokens | Savings | Match |
-|---|---:|---:|---:|---:|---|
-| write-plan | methodology.plan | 3 | 783 | 2745 tokens / 77.8% | pass |
-
-## write-plan
-
-Request: `write an implementation plan`
-
-Selected skills:
-- `superpowers:using-superpowers`
-- `superpowers:verification-before-completion`
-- `superpowers:writing-plans`
-
-Selection evidence:
-- `implementation plan` matched by `substring`, score 100
-
-Stable prefix:
-- chars: 3131
-- approx tokens: 783
-- hash: `sha256:...`
+| Case | Selected Targets | Baseline | Savings Tokens | Pipeline Ops | Prompt Ops | Context Ops | Guard Ops | Permission Ops |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| case-1 | methodology.code_change | all-skills | 26767 | 23 | 2 | 1 | 19 | 0 |
 ```
 
 ## Exit Codes
@@ -382,14 +405,14 @@ agentmf benchmark harness \
 The first implementation should be intentionally small:
 
 1. Add `agentmf benchmark harness`.
-2. Support `--file`, `--case`, `--host`, `--backend`, `--baseline agents-md`,
-   and `--format json|markdown`.
+2. Support `--file`, `--case`, `--host`, `--backend`, `--format json|markdown`,
+   and baseline choices `agents-md`, `claude-md`, `skills-index`,
+   `baseline-file`, `all-skills`, and `none`.
 3. Use `create_plugin_payload` for each case.
 4. Use the payload's existing `trace.comparison` for baseline and savings.
 5. Report selected pipeline size, operation counts, stable prefix hash,
    guard/permission coverage, and compact selection-trace quality.
-6. Add cases files, explicit baselines, report writing, and mismatch handling
-   in later slices.
+6. Add cases files, report writing, and mismatch handling in later slices.
 
 This keeps the first benchmark useful for demos while avoiding a large cases
 file parser in the first pass.

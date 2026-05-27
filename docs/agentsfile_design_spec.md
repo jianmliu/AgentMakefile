@@ -26,6 +26,13 @@ existing skill and instruction ecosystems keep their current package layout
 while gaining a structured dependency graph, deterministic prompt fragments,
 explainable selection, and cross-platform outputs.
 
+AgentMakefile also supports a future evidence-driven evolution loop for large
+skill ecosystems. Selection traces, benchmark reports, registry metadata, and
+user corrections can be collected as evidence, turned into reviewable
+AgentMakefile candidate patches, compiled in isolation, evaluated, and promoted
+only after explicit review. This Skill Workshop / Dream Mode direction is
+specified in [agentmf_evolution_skill_workshop_spec.md](agentmf_evolution_skill_workshop_spec.md).
+
 In the same way that a `Makefile` tells a build system how to produce targets from dependencies, an `AgentMakefile` tells agent harnesses how to assemble task-specific behavior and enforce project-specific guardrails. Each target defines a **compilable agent harness pipeline**: dependency closure, selected skills, policies, prompt operations, context rules, guards, permissions, fallbacks, and output contracts. It is not a traditional shell recipe. This also gives AgentMakefile a path to avoid unnecessary recompilation: unchanged modules, targets, skills, and backend settings should be reusable across builds, while only affected prompt-prefix artifacts are regenerated.
 
 The top-level harness architecture is specified in [agentmf_agent_harness_architecture.md](agentmf_agent_harness_architecture.md).

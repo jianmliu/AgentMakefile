@@ -1,16 +1,28 @@
 # AgentMakefile
 
-AgentMakefile is a portable agent harness specification, compiler, and host adapter layer. It turns scattered `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, framework rules, policies, permissions, and workflow targets into buildable source files and request-time payloads that can be compiled, synced, selected, and handed to existing coding-agent hosts.
+AgentMakefile is a build system and routing layer for agent harnesses. It
+turns scattered `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, framework rules, policies,
+permissions, and workflow targets into a structured, dependency-aware harness
+graph that can be compiled, synced, selected, explained, and handed to existing
+coding-agent hosts.
+
+The goal is not to replace Codex, Claude Code, Cursor, OpenCode, Superpowers,
+Oh My OpenAgent, or project-specific Markdown guidance. The goal is to organize
+those harnesses systematically: import their guidance, normalize it into typed
+targets and pipelines, compile it back to host-native artifacts, and select the
+smallest useful harness for each request.
 
 The core value is harness infrastructure:
 
-- **Structured harness source of truth**: author reusable skills, rules, policies, permissions, dependencies, output contracts, and fallback behavior in AgentMakefile modules instead of hand-maintaining scattered Markdown files.
+- **Structured harness graph**: represent reusable skills, rules, policies, permissions, dependencies, output contracts, fallback behavior, and pipeline steps as typed AgentMakefile source instead of hand-maintaining scattered Markdown files.
+- **Harness consolidation**: scan installed skills, project `AGENTS.md`, `CLAUDE.md`, standalone `SKILL.md`, and framework-specific rules into a common routing module.
 - **Cross-platform skill compilation**: compile the same module into Codex skills, Claude Code skills, `skills/index.md`, `AGENTS.md`, `CLAUDE.md`, Cursor rules, OpenCode config, and Claude Code settings/hooks where supported.
 - **System skill sync**: sync generated Codex or Claude Code skill packages into a host skill root with a dry-run-first `agentmf skills sync` workflow.
-- **Guidance import and routing optimization**: scan existing `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, and related guidance files into an AgentMakefile routing module, then use `agentmf plugin payload` to choose only the relevant skills or instruction fragments for each request.
+- **Request-time routing optimization**: use `agentmf plugin payload` to choose only the relevant targets, skills, prompt fragments, guards, permissions, and output contracts for the current request.
 - **Pipeline-aware harness compilation**: normalize each target into ordered operations such as `use_skill`, `select_context`, `link_prompt`, `check_guard`, `check_permission`, `validate_output`, and `fallback`, while preserving legacy `action` steps.
 - **Harness payload assembly**: return stable prompt prefixes, volatile context, guard/permission metadata, output contracts, and host-specific instructions without taking over the host's model or tool runtime.
 - **Explainable selection**: every request-time choice can return `selected_targets`, `selected_skills`, `selected_pipeline`, dependency closure, native skill artifact paths, and `selection_trace` rationale.
+- **Measurable advantage**: benchmark structured harness selection against all-in-one `AGENTS.md`, `CLAUDE.md`, generated `skills/index.md`, explicit baseline files, or all installed `SKILL.md` files.
 
 Generated files such as `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `skills/index.md`, `.codex/skills/*/SKILL.md`, and `.claude/skills/*/SKILL.md` are build artifacts. AgentMakefile modules are the source of truth.
 
@@ -28,6 +40,7 @@ The agent harness architecture lives in [docs/agentmf_agent_harness_architecture
 The proposed runtime CLI design lives in [docs/agentmf_runtime_cli_spec.md](docs/agentmf_runtime_cli_spec.md).
 The guidance ingestion design lives in [docs/agentmf_guidance_ingestion_spec.md](docs/agentmf_guidance_ingestion_spec.md).
 The benchmark CLI design lives in [docs/agentmf_benchmark_cli_spec.md](docs/agentmf_benchmark_cli_spec.md).
+The harness benchmark suite design lives in [docs/agentmf_harness_benchmark_suite_spec.md](docs/agentmf_harness_benchmark_suite_spec.md).
 The plugin-first adapter design lives in [docs/agentmf_plugin_adapter_spec.md](docs/agentmf_plugin_adapter_spec.md).
 Example host adapter flows live in [docs/agentmf_plugin_adapter_examples.md](docs/agentmf_plugin_adapter_examples.md).
 The current runtime walkthrough lives in [docs/agentmf_step_by_step_demo.md](docs/agentmf_step_by_step_demo.md).
@@ -68,7 +81,17 @@ MVP 2.5 has started the bridge toward runtime-native prompt assembly with target
 - `agentmf plugin payload` exposes `selected_skills`, `selected_pipeline`, flat operation groups (`stable_prompt_ops`, `volatile_context_ops`, `guard_ops`, `permission_ops`, `fallback_ops`), generated Codex/Claude skill artifact paths, and `selection_trace` rationale so host adapters can use AgentMakefile as an explainable harness-routing layer. Request routing can match either explicit target `match` terms or the `match` terms of skills referenced by a target.
 - `agentmf skills scan` imports existing `SKILL.md` directories into a generated AgentMakefile skill-index module, with an optional bootstrap skill represented as an explicit target dependency. Scanned skill targets now emit pipeline steps that `use_skill` and `link_prompt` to the source `SKILL.md`.
 - `agentmf skills sync` compiles an AgentMakefile module into host-native Codex or Claude Code skill packages and syncs them to a host skill root only when `--write` is set.
-- `agentmf benchmark harness` reports selected targets, selected skills, selected pipeline size, stable prefix hashes, all-in-one baseline comparison, guard/permission coverage, and selection-trace quality without calling a model.
+- `agentmf benchmark harness` reports selected targets, selected skills, selected pipeline size, stable prefix hashes, guard/permission coverage, selection-trace quality, and baseline comparisons against `agents-md`, `claude-md`, `skills-index`, explicit files, or all scanned `SKILL.md` files without calling a model.
+- `agentmf clawbench export` emits a ClawBench-compatible harness trace bundle for one task instruction: selected AgentMakefile targets, skills, pipeline operations, stable prefix content/hash, volatile context, guard/permission/fallback ops, output contracts, and downstream execution metadata with execution disabled.
+- `agentmf clawbench export-jsonl` converts a JSONL task file into one harness trace bundle per line so an external ClawBench-style runner can consume AgentMakefile-selected harnesses task by task.
+- `agentmf clawbench adapter-contract` emits the JSONL input/output contract expected by a host adapter that will execute exported ClawBench harness bundles.
+- `agentmf clawbench import-results` reads external runner result JSONL and summarizes pass rate, cost, latency, tokens, tool-call counts, denied tool calls, and stable prefix hash reuse.
+- `agentmf swebench export-jsonl` converts a local SWE-bench Lite-style JSONL subset into one AgentMakefile-selected coding harness bundle per instance, with `--limit` for small smoke subsets.
+- `agentmf swebench compare` renders a deterministic SWE-bench Lite harness comparison report across selected AgentMakefile pipelines and compiled baselines such as `AGENTS.md`, `CLAUDE.md`, and `skills/index.md`.
+- `agentmf swebench adapter-contract` defines the JSONL boundary for external SWE-bench execution adapters, while `agentmf swebench import-results` and `agentmf swebench pass-report` summarize resolved/pass-rate metrics after an external runner executes tasks.
+- `agentmf swebench predictions` converts external execution results into official SWE-bench predictions JSONL with `instance_id`, `model_name_or_path`, and `model_patch`.
+- `agentmf swebench official-command` emits the official `swebench.harness.run_evaluation` command for Lite or Verified profiles without executing it, and `agentmf swebench import-official-report` imports the official schema-v2 report JSON after the runner finishes.
+- `agentmf swebench official-dry-run` validates an official predictions JSONL file and emits an adapter plan with smoke-subset and full-profile command previews, keeping execution disabled so Lite/Verified runs are explicit external steps.
 - Request selection normalizes punctuation and hyphenation, expands common Chinese/English development intents, and falls back to deterministic token-overlap matching before returning `AMF118`.
 - `skills-index` emits a generated `skills/index.md` compatibility catalog for all normalized skill entries, with links to the Claude and Codex skill package paths.
 - `claude-code` emits native Claude Code settings and hook artifacts under `.claude/` where feasible.
@@ -95,7 +118,22 @@ agentmf plugin payload --host codex --request "review code" --format json
 agentmf plugin payload --host codex --target project.default --plan docs/superpowers/plans/2026-05-25-agentmf-plugin-adapter.md --include-git-status --format json
 agentmf skills scan --skills-dir ~/.codex/skills --namespace superpowers --bootstrap-skill using-superpowers --out /tmp/superpowers.AgentMakefile --write
 agentmf skills sync --file modules/oh-my-openagent/AgentMakefile --host codex --write --format json
-agentmf benchmark harness --file modules/superpowers/AgentMakefile --case "implement this feature" --format json
+agentmf benchmark harness --file modules/superpowers/AgentMakefile --case "implement this feature" --baseline agents-md --format json
+agentmf benchmark harness --file modules/superpowers/AgentMakefile --case "implement this feature" --baseline all-skills --baseline-skills-dir ~/.codex/skills --format json
+agentmf clawbench export --file AgentMakefile --task-id clawbench-demo-1 --instruction "implement this feature" --host codex --model claude-opus-4-7 --format json
+agentmf clawbench export-jsonl --file AgentMakefile --tasks-file benchmarks/clawbench-tasks.jsonl --host codex --model claude-opus-4-7 > /tmp/agentmf-clawbench-harnesses.jsonl
+agentmf clawbench adapter-contract --host codex --format json
+agentmf clawbench import-results --results-file /tmp/clawbench-results.jsonl --format json
+agentmf swebench export-jsonl --file AgentMakefile --tasks-file benchmarks/swebench-lite-subset.jsonl --host codex --model gpt-5.4 --limit 5 > /tmp/agentmf-swebench-harnesses.jsonl
+agentmf swebench compare --file AgentMakefile --tasks-file benchmarks/swebench-lite-subset.jsonl --baseline agents-md --baseline claude-md --baseline skills-index --format markdown
+agentmf swebench adapter-contract --host codex --format json
+agentmf swebench import-results --results-file benchmarks/swebench-lite-results.example.jsonl --format json
+agentmf swebench pass-report --results-file benchmarks/swebench-lite-results.example.jsonl --baseline-report benchmarks/swebench-lite-comparison.md --format markdown
+agentmf swebench predictions --results-file /tmp/swebench-results-with-patches.jsonl --model-name agentmf-gpt-5.4 --dataset lite > /tmp/swebench-predictions.jsonl
+agentmf swebench official-dry-run --dataset lite --predictions-path /tmp/swebench-predictions.jsonl --run-id agentmf-lite --smoke-limit 5 --format json
+agentmf swebench official-command --dataset lite --predictions-path /tmp/swebench-predictions.jsonl --run-id agentmf-lite --max-workers 4
+agentmf swebench official-command --dataset verified --predictions-path /tmp/swebench-verified-predictions.jsonl --run-id agentmf-verified --max-workers 4
+agentmf swebench import-official-report --report-file agentmf-gpt-5.4.agentmf-lite.json --format json
 agentmf compile --file AgentMakefile --write
 ```
 

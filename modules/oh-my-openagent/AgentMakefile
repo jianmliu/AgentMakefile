@@ -246,8 +246,15 @@ targets:
 
   omo.research:
     phony: true
-    priority: 80
+    priority: 91
     description: Read-only research, codebase exploration, and architecture consultation.
+    match:
+      user_intent:
+        - architecture review
+        - design decision
+        - debug consultation
+        - documentation lookup
+        - multi repo analysis
     policies:
       - use_read_only_consultants
       - verify_orchestrated_results
@@ -255,10 +262,52 @@ targets:
       - omo:librarian-research
       - omo:explore-codebase
       - omo:oracle-consultation
+    steps:
+      - use_skill: omo:librarian-research
+      - use_skill: omo:explore-codebase
+      - use_skill: omo:oracle-consultation
+      - select_context:
+          include:
+            - user_request
+            - project_state
+      - link_prompt:
+          fragment: omo.research
+      - check_guard: use_read_only_consultants
+      - validate_output: findings
     output_format:
       - evidence
       - findings
       - recommendations
+
+  omo.category_routing:
+    phony: true
+    priority: 96
+    description: Choose the appropriate OMO category or model family for delegated work.
+    match:
+      user_intent:
+        - choose category
+        - model matching
+        - delegate specialist
+        - route work
+    policies:
+      - route_by_intent
+      - match_model_to_work
+      - verify_orchestrated_results
+    skills:
+      - omo:category-routing
+    steps:
+      - use_skill: omo:category-routing
+      - select_context:
+          include:
+            - user_request
+            - constraints
+      - link_prompt:
+          fragment: omo.category-routing
+      - validate_output: routing_decision
+    output_format:
+      - intent
+      - selected_agent_or_category
+      - routing_reason
 
   omo.team_mode:
     phony: true

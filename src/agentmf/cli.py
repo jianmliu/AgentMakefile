@@ -8,6 +8,12 @@ from typing import List, Optional
 
 from agentmf.ask import create_ask_payload
 from agentmf.benchmark import create_harness_benchmark_payload, render_harness_benchmark_markdown
+from agentmf.clawbench import (
+    create_clawbench_harness_export,
+    create_clawbench_host_adapter_contract,
+    create_clawbench_jsonl_export,
+    create_clawbench_result_summary,
+)
 from agentmf.compiler import compile_agentmakefile
 from agentmf.loader import load_source_with_diagnostics
 from agentmf.plugin import create_plugin_payload
@@ -17,6 +23,20 @@ from agentmf.runtime import create_run_plan
 from agentmf.selector import create_link_plan
 from agentmf.skill_scanner import render_agentmakefile_from_skill_dirs
 from agentmf.skill_sync import HOST_SKILL_PROFILES, create_skill_sync_payload
+from agentmf.swebench import (
+    SWE_BENCH_PROFILES,
+    create_swebench_comparison_report,
+    create_swebench_execution_adapter_contract,
+    create_swebench_jsonl_export,
+    create_swebench_official_adapter_plan,
+    create_swebench_official_report_summary,
+    create_swebench_official_run_command,
+    create_swebench_pass_rate_report,
+    create_swebench_predictions_export,
+    create_swebench_result_summary,
+    render_swebench_comparison_markdown,
+    render_swebench_pass_rate_markdown,
+)
 from agentmf.tool_loop import create_exec_payload
 
 
@@ -156,7 +176,154 @@ def main(argv: Optional[List[str]] = None) -> int:
     benchmark_harness_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
     benchmark_harness_cmd.add_argument("--case", action="append", dest="cases", required=True)
     benchmark_harness_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    benchmark_harness_cmd.add_argument(
+        "--baseline",
+        choices=["agents-md", "claude-md", "skills-index", "all-skills", "baseline-file", "none"],
+        default="agents-md",
+    )
+    benchmark_harness_cmd.add_argument("--baseline-file")
+    benchmark_harness_cmd.add_argument("--baseline-skills-dir", action="append", dest="baseline_skills_dirs")
     benchmark_harness_cmd.add_argument("--format", choices=["text", "json", "markdown"], default="markdown")
+
+    clawbench_cmd = subparsers.add_parser("clawbench", help="ClawBench compatibility commands")
+    clawbench_subcommands = clawbench_cmd.add_subparsers(dest="clawbench_command", required=True)
+    clawbench_export_cmd = clawbench_subcommands.add_parser(
+        "export",
+        help="export a ClawBench-compatible AgentMakefile harness bundle",
+    )
+    clawbench_export_cmd.add_argument("--file", default="AgentMakefile")
+    clawbench_export_cmd.add_argument("--task-id", required=True)
+    clawbench_export_cmd.add_argument("--instruction", required=True)
+    clawbench_export_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    clawbench_export_cmd.add_argument("--model")
+    clawbench_export_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    clawbench_export_cmd.add_argument("--include-git-status", action="store_true")
+    clawbench_export_cmd.add_argument("--include-git-diff", action="store_true")
+    clawbench_export_cmd.add_argument("--context-file", action="append", dest="context_files")
+    clawbench_export_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    clawbench_export_jsonl_cmd = clawbench_subcommands.add_parser(
+        "export-jsonl",
+        help="export a JSONL file of ClawBench-compatible AgentMakefile harness bundles",
+    )
+    clawbench_export_jsonl_cmd.add_argument("--file", default="AgentMakefile")
+    clawbench_export_jsonl_cmd.add_argument("--tasks-file", required=True)
+    clawbench_export_jsonl_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    clawbench_export_jsonl_cmd.add_argument("--model")
+    clawbench_export_jsonl_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    clawbench_export_jsonl_cmd.add_argument("--include-git-status", action="store_true")
+    clawbench_export_jsonl_cmd.add_argument("--include-git-diff", action="store_true")
+    clawbench_export_jsonl_cmd.add_argument("--context-file", action="append", dest="context_files")
+    clawbench_export_jsonl_cmd.add_argument("--out")
+    clawbench_export_jsonl_cmd.add_argument("--write", action="store_true")
+    clawbench_adapter_cmd = clawbench_subcommands.add_parser(
+        "adapter-contract",
+        help="emit the external runner contract for ClawBench host adapters",
+    )
+    clawbench_adapter_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    clawbench_adapter_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    clawbench_import_cmd = clawbench_subcommands.add_parser(
+        "import-results",
+        help="import external ClawBench runner results and summarize scores",
+    )
+    clawbench_import_cmd.add_argument("--results-file", required=True)
+    clawbench_import_cmd.add_argument("--format", choices=["text", "json"], default="json")
+
+    swebench_cmd = subparsers.add_parser("swebench", help="SWE-bench compatibility commands")
+    swebench_subcommands = swebench_cmd.add_subparsers(dest="swebench_command", required=True)
+    swebench_export_jsonl_cmd = swebench_subcommands.add_parser(
+        "export-jsonl",
+        help="export a JSONL file of SWE-bench-compatible AgentMakefile harness bundles",
+    )
+    swebench_export_jsonl_cmd.add_argument("--file", default="AgentMakefile")
+    swebench_export_jsonl_cmd.add_argument("--tasks-file", required=True)
+    swebench_export_jsonl_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    swebench_export_jsonl_cmd.add_argument("--model")
+    swebench_export_jsonl_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    swebench_export_jsonl_cmd.add_argument("--limit", type=int)
+    swebench_export_jsonl_cmd.add_argument("--include-git-status", action="store_true")
+    swebench_export_jsonl_cmd.add_argument("--include-git-diff", action="store_true")
+    swebench_export_jsonl_cmd.add_argument("--context-file", action="append", dest="context_files")
+    swebench_export_jsonl_cmd.add_argument("--out")
+    swebench_export_jsonl_cmd.add_argument("--write", action="store_true")
+    swebench_compare_cmd = swebench_subcommands.add_parser(
+        "compare",
+        help="render a deterministic SWE-bench Lite harness comparison report",
+    )
+    swebench_compare_cmd.add_argument("--file", default="AgentMakefile")
+    swebench_compare_cmd.add_argument("--tasks-file", required=True)
+    swebench_compare_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    swebench_compare_cmd.add_argument("--model")
+    swebench_compare_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
+    swebench_compare_cmd.add_argument("--limit", type=int)
+    swebench_compare_cmd.add_argument(
+        "--baseline",
+        action="append",
+        dest="baselines",
+        choices=["agents-md", "claude-md", "skills-index", "baseline-file", "none"],
+    )
+    swebench_compare_cmd.add_argument("--baseline-file")
+    swebench_compare_cmd.add_argument("--out")
+    swebench_compare_cmd.add_argument("--write", action="store_true")
+    swebench_compare_cmd.add_argument("--format", choices=["json", "markdown"], default="markdown")
+    swebench_adapter_cmd = swebench_subcommands.add_parser(
+        "adapter-contract",
+        help="emit the external runner contract for SWE-bench execution adapters",
+    )
+    swebench_adapter_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
+    swebench_adapter_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    swebench_import_cmd = swebench_subcommands.add_parser(
+        "import-results",
+        help="import external SWE-bench execution results and summarize pass-rate metrics",
+    )
+    swebench_import_cmd.add_argument("--results-file", required=True)
+    swebench_import_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    swebench_pass_report_cmd = swebench_subcommands.add_parser(
+        "pass-report",
+        help="render a SWE-bench pass-rate report from imported execution results",
+    )
+    swebench_pass_report_cmd.add_argument("--results-file", required=True)
+    swebench_pass_report_cmd.add_argument("--baseline-report")
+    swebench_pass_report_cmd.add_argument("--out")
+    swebench_pass_report_cmd.add_argument("--write", action="store_true")
+    swebench_pass_report_cmd.add_argument("--format", choices=["json", "markdown"], default="markdown")
+    swebench_predictions_cmd = swebench_subcommands.add_parser(
+        "predictions",
+        help="export official SWE-bench predictions JSONL from external execution results",
+    )
+    swebench_predictions_cmd.add_argument("--results-file", required=True)
+    swebench_predictions_cmd.add_argument("--model-name", required=True)
+    swebench_predictions_cmd.add_argument("--dataset", choices=sorted(SWE_BENCH_PROFILES), default="lite")
+    swebench_predictions_cmd.add_argument("--out")
+    swebench_predictions_cmd.add_argument("--write", action="store_true")
+    swebench_predictions_cmd.add_argument("--format", choices=["json", "jsonl"], default="jsonl")
+    swebench_official_command_cmd = swebench_subcommands.add_parser(
+        "official-command",
+        help="emit the official SWE-bench run_evaluation command for a dataset profile",
+    )
+    swebench_official_command_cmd.add_argument("--dataset", choices=sorted(SWE_BENCH_PROFILES), default="lite")
+    swebench_official_command_cmd.add_argument("--predictions-path", required=True)
+    swebench_official_command_cmd.add_argument("--run-id", required=True)
+    swebench_official_command_cmd.add_argument("--max-workers", type=int, default=4)
+    swebench_official_command_cmd.add_argument("--split")
+    swebench_official_command_cmd.add_argument("--instance-id", action="append", dest="instance_ids")
+    swebench_official_command_cmd.add_argument("--format", choices=["text", "json"], default="text")
+    swebench_official_report_cmd = swebench_subcommands.add_parser(
+        "import-official-report",
+        help="import an official SWE-bench run report JSON file",
+    )
+    swebench_official_report_cmd.add_argument("--report-file", required=True)
+    swebench_official_report_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    swebench_official_dry_run_cmd = swebench_subcommands.add_parser(
+        "official-dry-run",
+        help="validate predictions and emit a side-effect-free official SWE-bench adapter plan",
+    )
+    swebench_official_dry_run_cmd.add_argument("--dataset", choices=sorted(SWE_BENCH_PROFILES), default="lite")
+    swebench_official_dry_run_cmd.add_argument("--predictions-path", required=True)
+    swebench_official_dry_run_cmd.add_argument("--run-id", required=True)
+    swebench_official_dry_run_cmd.add_argument("--max-workers", type=int, default=4)
+    swebench_official_dry_run_cmd.add_argument("--smoke-limit", type=int, default=5)
+    swebench_official_dry_run_cmd.add_argument("--split")
+    swebench_official_dry_run_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
     args = parser.parse_args(argv)
     if args.command == "validate":
@@ -179,6 +346,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _skills(args)
     if args.command == "benchmark":
         return _benchmark(args)
+    if args.command == "clawbench":
+        return _clawbench(args)
+    if args.command == "swebench":
+        return _swebench(args)
     return 2
 
 
@@ -539,12 +710,404 @@ def _benchmark(args: argparse.Namespace) -> int:
     return 2
 
 
+def _clawbench(args: argparse.Namespace) -> int:
+    if args.clawbench_command == "export":
+        return _clawbench_export(args)
+    if args.clawbench_command == "export-jsonl":
+        return _clawbench_export_jsonl(args)
+    if args.clawbench_command == "adapter-contract":
+        return _clawbench_adapter_contract(args)
+    if args.clawbench_command == "import-results":
+        return _clawbench_import_results(args)
+    return 2
+
+
+def _swebench(args: argparse.Namespace) -> int:
+    if args.swebench_command == "export-jsonl":
+        return _swebench_export_jsonl(args)
+    if args.swebench_command == "compare":
+        return _swebench_compare(args)
+    if args.swebench_command == "adapter-contract":
+        return _swebench_adapter_contract(args)
+    if args.swebench_command == "import-results":
+        return _swebench_import_results(args)
+    if args.swebench_command == "pass-report":
+        return _swebench_pass_report(args)
+    if args.swebench_command == "predictions":
+        return _swebench_predictions(args)
+    if args.swebench_command == "official-command":
+        return _swebench_official_command(args)
+    if args.swebench_command == "import-official-report":
+        return _swebench_import_official_report(args)
+    if args.swebench_command == "official-dry-run":
+        return _swebench_official_dry_run(args)
+    return 2
+
+
+def _swebench_official_dry_run(args: argparse.Namespace) -> int:
+    result = create_swebench_official_adapter_plan(
+        dataset_profile=args.dataset,
+        predictions_path=Path(args.predictions_path),
+        run_id=args.run_id,
+        max_workers=args.max_workers,
+        smoke_limit=args.smoke_limit,
+        split=args.split,
+    )
+    if not result.ok:
+        print(result.diagnostics.format(), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print(json.dumps({"ok": True, "swebench_official_dry_run": result.payload}, indent=2))
+    else:
+        print("SWE-bench official dry-run adapter plan:")
+        print(f"  profile: {result.payload['profile']['id']}")
+        print(f"  predictions: {result.payload['prediction_summary']['prediction_count']}")
+        print(f"  smoke command: {result.payload['commands']['smoke']['command_text']}")
+        print(f"  full command: {result.payload['commands']['full']['command_text']}")
+    return 0
+
+
+def _swebench_predictions(args: argparse.Namespace) -> int:
+    result = create_swebench_predictions_export(
+        results_file=Path(args.results_file),
+        model_name_or_path=args.model_name,
+        dataset_profile=args.dataset,
+    )
+    if not result.ok:
+        print(result.diagnostics.format(), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        content = json.dumps({"ok": True, "swebench_predictions": result.payload}, indent=2) + "\n"
+    else:
+        content = result.payload["jsonl"]
+    if args.out:
+        out_path = Path(args.out)
+        if args.write:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(content, encoding="utf-8")
+        else:
+            print(f"would write {out_path}")
+            print(content, end="")
+    else:
+        print(content, end="")
+    for item in result.diagnostics.items:
+        if item.severity != "error":
+            print(item.format(), file=sys.stderr)
+    return 0
+
+
+def _swebench_official_command(args: argparse.Namespace) -> int:
+    result = create_swebench_official_run_command(
+        dataset_profile=args.dataset,
+        predictions_path=Path(args.predictions_path),
+        run_id=args.run_id,
+        max_workers=args.max_workers,
+        split=args.split,
+        instance_ids=args.instance_ids,
+    )
+    if not result.ok:
+        print(result.diagnostics.format(), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print(json.dumps({"ok": True, "swebench_official_command": result.payload}, indent=2))
+    else:
+        print(result.payload["command_text"])
+    return 0
+
+
+def _swebench_import_official_report(args: argparse.Namespace) -> int:
+    result = create_swebench_official_report_summary(report_file=Path(args.report_file))
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "swebench_official_report": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            print(result.diagnostics.format(), file=sys.stderr if result.diagnostics.has_errors else sys.stdout)
+        if result.payload:
+            summary = result.payload["summary"]
+            print("SWE-bench official report:")
+            print(f"  submitted: {summary['submitted_instances']}")
+            print(f"  completed: {summary['completed_instances']}")
+            print(f"  resolved rate: {summary['resolved_rate']}")
+    return 1 if not result.ok else 0
+
+
+def _swebench_adapter_contract(args: argparse.Namespace) -> int:
+    result = create_swebench_execution_adapter_contract(host=args.host)
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "swebench_adapter_contract": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            print(result.diagnostics.format(), file=sys.stderr if result.diagnostics.has_errors else sys.stdout)
+        if result.payload:
+            print("SWE-bench execution adapter contract:")
+            print(f"  host: {result.payload['adapter']['host']}")
+            print(f"  input: {result.payload['input_contract']['format']} {result.payload['input_contract']['record_mode']}")
+            print(f"  output: {result.payload['output_contract']['format']} {result.payload['output_contract']['record_mode']}")
+    return 1 if not result.ok else 0
+
+
+def _swebench_import_results(args: argparse.Namespace) -> int:
+    result = create_swebench_result_summary(results_file=Path(args.results_file))
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "swebench_results": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            print(result.diagnostics.format(), file=sys.stderr if result.diagnostics.has_errors else sys.stdout)
+        if result.payload:
+            summary = result.payload["summary"]
+            print("SWE-bench execution results:")
+            print(f"  results: {summary['result_count']}")
+            print(f"  resolved rate: {summary['resolved_rate']}")
+            print(f"  tests passed rate: {summary['tests_passed_rate']}")
+    return 1 if not result.ok else 0
+
+
+def _swebench_pass_report(args: argparse.Namespace) -> int:
+    result = create_swebench_pass_rate_report(
+        results_file=Path(args.results_file),
+        baseline_report=Path(args.baseline_report) if args.baseline_report else None,
+    )
+    if not result.ok:
+        print(result.diagnostics.format(), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        content = json.dumps({"ok": True, "swebench_pass_report": result.payload}, indent=2) + "\n"
+    else:
+        content = render_swebench_pass_rate_markdown(result.payload)
+    if args.out:
+        out_path = Path(args.out)
+        if args.write:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(content, encoding="utf-8")
+        else:
+            print(f"would write {out_path}")
+            print(content, end="")
+    else:
+        print(content, end="")
+    for item in result.diagnostics.items:
+        if item.severity != "error":
+            print(item.format(), file=sys.stderr)
+    return 0
+
+
+def _swebench_compare(args: argparse.Namespace) -> int:
+    result = create_swebench_comparison_report(
+        path=Path(args.file),
+        tasks_file=Path(args.tasks_file),
+        host=args.host,
+        model=args.model,
+        backend=args.backend,
+        limit=args.limit,
+        baselines=args.baselines,
+        baseline_file=Path(args.baseline_file) if args.baseline_file else None,
+    )
+    if not result.ok:
+        print(result.diagnostics.format(), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        content = json.dumps({"ok": True, "swebench_comparison": result.payload}, indent=2) + "\n"
+    else:
+        content = render_swebench_comparison_markdown(result.payload)
+    if args.out:
+        out_path = Path(args.out)
+        if args.write:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(content, encoding="utf-8")
+        else:
+            print(f"would write {out_path}")
+            print(content, end="")
+    else:
+        print(content, end="")
+    for item in result.diagnostics.items:
+        if item.severity != "error":
+            print(item.format(), file=sys.stderr)
+    return 0
+
+
+def _swebench_export_jsonl(args: argparse.Namespace) -> int:
+    result = create_swebench_jsonl_export(
+        path=Path(args.file),
+        tasks_file=Path(args.tasks_file),
+        host=args.host,
+        model=args.model,
+        backend=args.backend,
+        limit=args.limit,
+        include_git_status=args.include_git_status,
+        include_git_diff=args.include_git_diff,
+        context_files=[Path(item) for item in args.context_files] if args.context_files else None,
+    )
+    if not result.ok:
+        print(result.diagnostics.format(), file=sys.stderr)
+        return 1
+    if args.out:
+        out_path = Path(args.out)
+        if args.write:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(result.payload["jsonl"], encoding="utf-8")
+        else:
+            print(f"would write {out_path}")
+            print(result.payload["jsonl"], end="")
+    else:
+        print(result.payload["jsonl"], end="")
+    for item in result.diagnostics.items:
+        if item.severity != "error":
+            print(item.format(), file=sys.stderr)
+    return 0
+
+
+def _clawbench_adapter_contract(args: argparse.Namespace) -> int:
+    result = create_clawbench_host_adapter_contract(host=args.host)
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "clawbench_adapter_contract": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            print(result.diagnostics.format(), file=sys.stderr if result.diagnostics.has_errors else sys.stdout)
+        if result.payload:
+            print("ClawBench host adapter contract:")
+            print(f"  host: {result.payload['adapter']['host']}")
+            print(f"  input: {result.payload['input_contract']['format']} {result.payload['input_contract']['record_mode']}")
+            print(f"  output: {result.payload['output_contract']['format']} {result.payload['output_contract']['record_mode']}")
+    return 1 if not result.ok else 0
+
+
+def _clawbench_import_results(args: argparse.Namespace) -> int:
+    result = create_clawbench_result_summary(results_file=Path(args.results_file))
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "clawbench_results": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            print(result.diagnostics.format(), file=sys.stderr if result.diagnostics.has_errors else sys.stdout)
+        if result.payload:
+            summary = result.payload["summary"]
+            print("ClawBench external runner results:")
+            print(f"  results: {summary['result_count']}")
+            print(f"  pass rate: {summary['pass_rate']}")
+            print(f"  average total tokens: {summary['average_total_tokens']}")
+            print(f"  average cost usd: {summary['average_cost_usd']}")
+            print(f"  denied tool calls: {summary['denied_tool_calls']}")
+    return 1 if not result.ok else 0
+
+
+def _clawbench_export_jsonl(args: argparse.Namespace) -> int:
+    result = create_clawbench_jsonl_export(
+        path=Path(args.file),
+        tasks_file=Path(args.tasks_file),
+        host=args.host,
+        model=args.model,
+        backend=args.backend,
+        include_git_status=args.include_git_status,
+        include_git_diff=args.include_git_diff,
+        context_files=[Path(path) for path in args.context_files or []],
+    )
+    if result.diagnostics.items:
+        print(result.diagnostics.format(), file=sys.stderr)
+    if not result.ok:
+        return 1
+    if args.write:
+        if not args.out:
+            print("error: --write requires --out", file=sys.stderr)
+            return 2
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(result.payload["jsonl"], encoding="utf-8")
+        print(f"Wrote {out}")
+    else:
+        print(result.payload["jsonl"], end="")
+    return 0
+
+
+def _clawbench_export(args: argparse.Namespace) -> int:
+    result = create_clawbench_harness_export(
+        path=Path(args.file),
+        task_id=args.task_id,
+        instruction=args.instruction,
+        host=args.host,
+        model=args.model,
+        backend=args.backend,
+        include_git_status=args.include_git_status,
+        include_git_diff=args.include_git_diff,
+        context_files=[Path(path) for path in args.context_files or []],
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "clawbench_harness": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print("ClawBench harness export:")
+            print(f"  task: {result.payload['task']['id']}")
+            print(f"  host: {result.payload['run']['host']}")
+            print(f"  model: {result.payload['run']['model']}")
+            print(f"  selected targets: {', '.join(result.payload['agentmf']['selected_targets'])}")
+            print(f"  stable prefix: {result.payload['agentmf']['stable_prefix_hash']}")
+            print("  execution: not performed")
+    return 1 if not result.ok else 0
+
+
 def _benchmark_harness(args: argparse.Namespace) -> int:
     result = create_harness_benchmark_payload(
         path=Path(args.file),
         cases=args.cases,
         host=args.host,
         backend=args.backend,
+        baseline=args.baseline,
+        baseline_file=Path(args.baseline_file) if args.baseline_file else None,
+        baseline_skills_dirs=[Path(path) for path in args.baseline_skills_dirs or []],
     )
     if args.format == "json":
         print(
