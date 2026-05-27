@@ -160,12 +160,17 @@ def _alternatives_from_trace(
 
     candidates = selection_trace.get("candidates") if isinstance(selection_trace, dict) else None
     if isinstance(candidates, list):
-        for candidate in candidates:
-            if not isinstance(candidate, dict) or candidate.get("selected"):
-                continue
+        scored_candidates = [
+            cand for cand in candidates
+            if isinstance(cand, dict) and not cand.get("selected") and cand.get("target") not in seen_targets
+        ]
+        # Re-rank matcher-scored alternatives with closure-proximity as an
+        # additional tie-breaker: when two candidates tie on score, the one
+        # whose deps include the selected target ranks ahead (it would
+        # extend the selected pipeline rather than replace it).
+        scored_candidates.sort(key=lambda cand: _alternative_sort_key(cand, primary_target, targets_by_name))
+        for candidate in scored_candidates:
             target_name = candidate.get("target")
-            if target_name in seen_targets:
-                continue
             alternatives.append(
                 {
                     "rank": len(alternatives) + 1,
@@ -180,6 +185,43 @@ def _alternatives_from_trace(
             if len(alternatives) >= n_best - 1:
                 break
     return alternatives
+
+
+def _alternative_sort_key(
+    candidate: Dict[str, Any],
+    primary_target: Optional[IRTarget],
+    targets_by_name: Optional[Dict[str, IRTarget]],
+) -> tuple:
+    score = candidate.get("match_score") or 0
+    target_name = candidate.get("target") or ""
+    proximity = _closure_proximity(target_name, primary_target, targets_by_name)
+    match_details = candidate.get("match_details") if isinstance(candidate.get("match_details"), list) else []
+    term_length = max(
+        (len(detail.get("term", "")) for detail in match_details if detail.get("score") == score),
+        default=0,
+    )
+    return (-score, -proximity, -term_length, target_name)
+
+
+def _closure_proximity(
+    candidate_name: str,
+    primary_target: Optional[IRTarget],
+    targets_by_name: Optional[Dict[str, IRTarget]],
+) -> int:
+    """1 when the candidate's deps include the primary target (candidate is
+    a causally-adjacent extender), else 0. Only the reverse direction
+    matters here: forward deps (primary -> candidate) already pull the
+    candidate into target_closure, so it's not really an "alternative"
+    the LLM would choose instead.
+    """
+    if primary_target is None or not targets_by_name or not candidate_name:
+        return 0
+    candidate_target = targets_by_name.get(candidate_name)
+    if candidate_target is None:
+        return 0
+    if primary_target.name in candidate_target.deps:
+        return 1
+    return 0
 
 
 def _fallback_entry_target(entry: Any) -> Optional[str]:

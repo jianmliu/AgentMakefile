@@ -604,6 +604,52 @@ targets:
     ]
 
 
+def test_link_plan_alternatives_prefer_dep_proximity_on_score_ties(tmp_path: Path) -> None:
+    """When two matcher-scored alternative targets tie on score, the one
+    that depends on the selected target (i.e. would extend the selected
+    pipeline rather than replace it) ranks ahead. This pulls Makefile-style
+    causal adjacency into routing-relevance signal.
+    """
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.foundation:
+    match:
+      user_intent:
+        - foo handler request
+    steps:
+      - inspect
+  skill.afar:
+    match:
+      user_intent:
+        - request
+    steps:
+      - inspect
+  skill.zextends:
+    match:
+      user_intent:
+        - request
+    deps:
+      - skill.foundation
+    steps:
+      - inspect
+""",
+    )
+
+    result = create_link_plan(path, request="foo handler request", n_best=3)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.foundation"]
+    alt_targets = [entry["target"] for entry in result.plan["alternatives"]]
+    # afar and zextends both match "request" at score 100. Without proximity
+    # boosting, alphabetical (afar < zextends) puts afar first. With
+    # proximity boosting, zextends wins because skill.foundation appears in
+    # its deps — zextends is causally adjacent to the selected target.
+    assert alt_targets == ["skill.zextends", "skill.afar"]
+
+
 def test_link_plan_prepends_declared_fallback_targets_to_alternatives(tmp_path: Path) -> None:
     """Targets declared via `target.fallback` are author-curated alternatives
     and should appear in `plan.alternatives` BEFORE matcher-scored ones,
