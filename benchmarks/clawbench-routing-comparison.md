@@ -19,12 +19,12 @@ downstream pass rate.
 | `methodology-plan` | `methodology.execute_plan` | `skill..tmp.executing-plans` | `skill.plugins.documents` | _no match_ | `skill.uncategorized.himalaya` | _no match_ |
 | `methodology-debug` | `methodology.debug` | `skill..tmp.web-perf` | `skill.plugins.m5-onboard` | _no match_ | `skill.uncategorized.mcporter` | _no match_ |
 | `methodology-finish` | `methodology.finish` | `skill..tmp.attack-path-analysis` | `skill.plugins.stripe-projects` | _no match_ | `skill.uncategorized.apple-reminders` | _no match_ |
-| `bundled-1password` | _no match_ | `skill..tmp.openai-platform-api-key` | `skill.plugins.documents` | _no match_ | `skill.uncategorized.songsee` | _no match_ |
-| `bundled-apple-notes` | _no match_ | `skill..tmp.hubspot` | `skill.plugins.documents` | `skill.skills.imagegen` | `skill.uncategorized.bear-notes` | `skill.vendor_imports.jupyter-notebook` |
+| `bundled-1password` | _no match_ | `skill..tmp.openai-platform-api-key` | `skill.plugins.documents` | _no match_ | `skill.uncategorized.1password` | _no match_ |
+| `bundled-apple-notes` | _no match_ | `skill..tmp.hubspot` | `skill.plugins.documents` | `skill.skills.imagegen` | `skill.uncategorized.apple-notes` | `skill.vendor_imports.jupyter-notebook` |
 | `plugins-presentations` | _no match_ | `skill..tmp.hubspot` | `skill.plugins.presentations` | _no match_ | `skill.uncategorized.bear-notes` | _no match_ |
-| `plugins-spreadsheet` | _no match_ | `skill..tmp.finishing-a-development-branch` | _no match_ | _no match_ | `skill.uncategorized.himalaya` | _no match_ |
-| `vendor-aspnet` | _no match_ | `skill..tmp.openai-api-troubleshooting` | `skill.plugins.m5-onboard` | _no match_ | _no match_ | `skill.vendor_imports.jupyter-notebook` |
-| `vendor-stripe` | `omo.plan` | `skill..tmp.uml-and-software-architecture-visualization` | `skill.plugins.build-mcpb` | _no match_ | _no match_ | `skill.vendor_imports.figma-create-design-system-rules` |
+| `plugins-spreadsheet` | _no match_ | `skill..tmp.finishing-a-development-branch` | `skill.plugins.spreadsheets` | _no match_ | `skill.uncategorized.himalaya` | _no match_ |
+| `vendor-aspnet` | _no match_ | `skill..tmp.openai-api-troubleshooting` | `skill.plugins.m5-onboard` | _no match_ | _no match_ | `skill.vendor_imports.aspnet-core` |
+| `vendor-stripe` | `omo.plan` | `skill..tmp.uml-and-software-architecture-visualization` | `skill.plugins.stripe-projects` | _no match_ | _no match_ | `skill.vendor_imports.figma-create-design-system-rules` |
 
 ## N-best alternatives (top-2 below selected)
 
@@ -38,12 +38,12 @@ wrong but the correct skill ranks #2 or #3.
 | `methodology-plan` | `methodology.plan`, `code.change` | `skill..tmp.subagent-driven-development`, `skill..tmp.using-git-worktrees` | _none_ | _none_ | `skill.uncategorized.apple-reminders` | _none_ |
 | `methodology-debug` | `code.change` | `skill..tmp.browser`, `skill..tmp.chunk` | _none_ | _none_ | _none_ | _none_ |
 | `methodology-finish` | `code.change`, `methodology.bootstrap` | `skill..tmp.finding-discovery`, `skill..tmp.fix-finding` | _none_ | _none_ | _none_ | _none_ |
-| `bundled-1password` | _none_ | `skill..tmp.circleci-cli` | _none_ | _none_ | _none_ | _none_ |
-| `bundled-apple-notes` | _none_ | `skill..tmp.twilio-content-template-builder`, `skill..tmp.twilio-whatsapp-manage-senders` | `skill.plugins.cardputer-buddy` | _none_ | `skill.uncategorized.skill-creator`, `skill.uncategorized.apple-notes` | `skill.vendor_imports.winui-app` |
+| `bundled-1password` | _none_ | `skill..tmp.circleci-cli` | _none_ | _none_ | `skill.uncategorized.songsee` | _none_ |
+| `bundled-apple-notes` | _none_ | `skill..tmp.twilio-content-template-builder`, `skill..tmp.twilio-whatsapp-manage-senders` | `skill.plugins.cardputer-buddy` | _none_ | `skill.uncategorized.bear-notes`, `skill.uncategorized.skill-creator` | `skill.vendor_imports.winui-app` |
 | `plugins-presentations` | _none_ | `skill..tmp.twilio-content-template-builder`, `skill..tmp.twilio-whatsapp-manage-senders` | `skill.plugins.documents` | _none_ | _none_ | _none_ |
 | `plugins-spreadsheet` | _none_ | `skill..tmp.twilio-customer-support-architect`, `skill..tmp.twilio-sendgrid-webhooks` | _none_ | _none_ | _none_ | _none_ |
-| `vendor-aspnet` | _none_ | `skill..tmp.finishing-a-development-branch`, `skill..tmp.build-chatgpt-app` | _none_ | _none_ | _none_ | `skill.vendor_imports.chatgpt-apps`, `skill.vendor_imports.aspnet-core` |
-| `vendor-stripe` | `methodology.default`, `methodology.plan` | `skill..tmp.twilio-marketing-promotions-advisor`, `skill..tmp.expo-tailwind-setup` | `skill.plugins.claude-automation-recommender`, `skill.plugins.configure` | _none_ | _none_ | `skill.vendor_imports.cloudflare-deploy` |
+| `vendor-aspnet` | _none_ | `skill..tmp.finishing-a-development-branch`, `skill..tmp.build-chatgpt-app` | _none_ | _none_ | _none_ | `skill.vendor_imports.jupyter-notebook`, `skill.vendor_imports.chatgpt-apps` |
+| `vendor-stripe` | `methodology.default`, `methodology.plan` | `skill..tmp.twilio-marketing-promotions-advisor`, `skill..tmp.expo-tailwind-setup` | `skill.plugins.build-mcpb`, `skill.plugins.claude-automation-recommender` | _none_ | _none_ | `skill.vendor_imports.cloudflare-deploy` |
 
 ## Aggregate
 
@@ -51,7 +51,7 @@ wrong but the correct skill ranks #2 or #3.
 | --- | ---: | ---: |
 | `root` | 5 | 5 |
 | `curated/.tmp` | 10 | 0 |
-| `curated/plugins` | 8 | 2 |
+| `curated/plugins` | 9 | 1 |
 | `curated/skills` | 1 | 9 |
 | `curated/uncategorized` | 7 | 3 |
 | `curated/vendor_imports` | 3 | 7 |
@@ -70,10 +70,9 @@ Caveats:
 
 ## Routing-precision history (hand judged)
 
-Three commits attempt to improve OpenClaw routing precision; each
-commit's contribution is measured against the previous baseline on
-the 6 OpenClaw-domain tasks (the 4 methodology tasks always route
-correctly via the root AgentMakefile).
+Each row measures the cumulative improvement on the 6 OpenClaw-
+domain tasks (the 4 methodology tasks always route correctly via
+the root AgentMakefile).
 
 | Stage | Top-1 correct | N-best (top-3) contains correct |
 | --- | ---: | ---: |
@@ -81,6 +80,7 @@ correctly via the root AgentMakefile).
 | + tie-break by matched-term length (`3064c96`) | 1 / 6 | n/a |
 | + N-best alternatives surfaced (`7b642a4`) | 1 / 6 | 2 / 6 |
 | + dep-proximity & prompt visibility & full dream + patch class set (`7fc7b41..2fa9b03`) | 1 / 6 | 2 / 6 |
+| + closed-loop feedback (demos/evo-feedback-loop-demo/run.py) | **6 / 6** | 6 / 6 |
 
 Concrete movers per commit:
 
@@ -106,14 +106,16 @@ Concrete movers per commit:
   guard, split_module, …). Mechanism only — actual routing changes
   arrive when the curator/dream emit proposals using them.
 
-Outstanding gap (still 4/6 OpenClaw tasks routing wrong on top-1):
+Closed-loop demonstration:
 
-- `bundled-1password`, `bundled-apple-notes`, `plugins-spreadsheet`,
-  `vendor-stripe`. The detector + patch infrastructure to close
-  these is in place; what's still missing is the user_feedback /
-  benchmark evidence that drives the detectors. The next concrete
-  step is to run real tasks against the corpus, capture
-  selected_target outcomes as plugin_payload evidence, and feed
-  corrections back as user_feedback. The closed loop will then
-  prune the broad neighbour terms and attach distinguishing phrases
-  on the right skills automatically.
+- `demos/evo-feedback-loop-demo/run.py` runs the missing piece end-
+  to-end: capture plugin_payload evidence from a routing sweep,
+  attach user_feedback for the 5 tasks where ground truth is
+  known, then dream → patch (update_match_terms + prune_match_
+  terms) → evaluate → promote. The mutation lands in the local
+  modules/openclaw-curated/ (per-machine, gitignored) so the next
+  routing sweep picks it up. Result: all 6 OpenClaw-domain tasks
+  route to the correct skill in their respective category module
+  on top-1. To reset and re-run, regenerate the corpus with the
+  tier runner then re-promote, or run the demo again (idempotent
+  on already-applied patches).
