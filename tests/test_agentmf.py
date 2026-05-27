@@ -7115,6 +7115,61 @@ targets:
     assert payload["trace"]["target_closure"] == ["review.task"]
 
 
+def test_prompt_payload_surfaces_routing_summary_with_closure_provenance_and_alternatives(tmp_path: Path) -> None:
+    """The prompt payload must expose a routing_summary that the LLM can
+    use to understand which target was selected, what got auto-loaded
+    via Makefile-style deps, and which alternatives the selector
+    considered. The final composed prompt content must render a
+    '## Routing Decision' section so the LLM literally sees this signal.
+    """
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.foundation:
+    match:
+      user_intent:
+        - assemble foundation widget
+    deps:
+      - skill.utility
+    fallback:
+      runtime:
+        - skill.alt
+    steps:
+      - action: build_foundation
+  skill.utility:
+    steps:
+      - action: utility_step
+  skill.alt:
+    steps:
+      - action: alt_step
+""",
+    )
+
+    from agentmf.prompt import create_prompt_payload
+
+    result = create_prompt_payload(path=path, request="assemble foundation widget")
+
+    assert result.ok, result.diagnostics.format()
+    summary = result.payload["routing_summary"]
+    assert summary["primary"]["target"] == "skill.foundation"
+    closure_by_target = {entry["target"]: entry for entry in summary["closure"]}
+    # The primary itself is also in closure, but with no "depended_on_by".
+    assert closure_by_target["skill.foundation"]["depended_on_by"] is None
+    # skill.utility was pulled in because skill.foundation depends on it.
+    assert closure_by_target["skill.utility"]["depended_on_by"] == "skill.foundation"
+    # Alternatives include the declared fallback.
+    alt_targets = [a["target"] for a in summary["alternatives"]]
+    assert "skill.alt" in alt_targets
+
+    content = result.payload["final_prompt"]["content"]
+    assert "## Routing Decision" in content
+    # closure target and alternative target both visible in rendered prompt
+    assert "skill.utility" in content
+    assert "skill.alt" in content
+
+
 def test_prompt_payload_stable_prefix_hash_ignores_request_text(tmp_path: Path) -> None:
     path = write_agentmakefile(
         tmp_path,
