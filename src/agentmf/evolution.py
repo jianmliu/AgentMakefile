@@ -33,7 +33,18 @@ _SOURCE_DIRS = {
 
 PROMOTION_STATUSES = {"candidate", "rejected", "accepted", "superseded"}
 
-SUPPORTED_PATCH_TYPES = {"update_match_terms", "merge_duplicate_targets", "prune_match_terms"}
+SUPPORTED_PATCH_TYPES = {
+    "update_match_terms",
+    "merge_duplicate_targets",
+    "prune_match_terms",
+    "add_target",
+    "add_dependency",
+    "deprecate_skill",
+    "add_registry_metadata",
+    "add_benchmark_case",
+    "update_permission_guard",
+    "split_module",
+}
 
 
 @dataclass
@@ -1248,6 +1259,20 @@ def _candidate_source_files_for_proposal(
             _apply_merge_duplicate_targets_change(change, proposal, source_map, diagnostics)
         elif change_type == "prune_match_terms":
             _apply_prune_match_terms_change(change, proposal, source_map, diagnostics)
+        elif change_type == "add_target":
+            _apply_add_target_change(change, proposal, source_map, diagnostics)
+        elif change_type == "add_dependency":
+            _apply_add_dependency_change(change, proposal, source_map, diagnostics)
+        elif change_type == "deprecate_skill":
+            _apply_deprecate_skill_change(change, proposal, source_map, diagnostics)
+        elif change_type == "add_registry_metadata":
+            _apply_add_registry_metadata_change(change, proposal, source_map, diagnostics)
+        elif change_type == "add_benchmark_case":
+            _apply_add_benchmark_case_change(change, proposal, source_map, diagnostics)
+        elif change_type == "update_permission_guard":
+            _apply_update_permission_guard_change(change, proposal, source_map, diagnostics)
+        elif change_type == "split_module":
+            _apply_split_module_change(change, proposal, source_map, diagnostics)
 
     candidate_files = []
     for source_path, record in source_map.items():
@@ -1345,6 +1370,301 @@ def _apply_prune_match_terms_change(
         return
     remove_set = {str(term) for term in terms}
     match["user_intent"] = [term for term in user_intent if str(term) not in remove_set]
+
+
+def _apply_add_target_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    """Insert a brand-new target into a module's targets dict."""
+    module_path = _change_module_path(change, proposal)
+    target_name = change.get("target") or change.get("name")
+    definition = change.get("definition")
+    if not module_path or not target_name or not isinstance(definition, dict):
+        diagnostics.error(
+            "AMF226",
+            "add_target requires module, target, and definition",
+            "evo.patch.changes",
+        )
+        return
+    record = _load_module_record(Path(str(module_path)), source_map, diagnostics)
+    if record is None:
+        return
+    data = record["data"]
+    targets = data.setdefault("targets", {})
+    if target_name in targets:
+        diagnostics.error(
+            "AMF233",
+            f"add_target refuses to overwrite existing target: {target_name}",
+            "evo.patch.target",
+        )
+        return
+    targets[target_name] = dict(definition)
+
+
+def _apply_add_dependency_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    """Append dep edges to an existing target's `deps` list."""
+    module_path = _change_module_path(change, proposal)
+    target_name = change.get("target") or _first(proposal.get("scope", {}).get("targets", []))
+    add_deps = change.get("add_deps") or change.get("deps") or []
+    if not module_path or not target_name or not isinstance(add_deps, list):
+        diagnostics.error(
+            "AMF226",
+            "add_dependency requires module, target, and add_deps",
+            "evo.patch.changes",
+        )
+        return
+    record = _load_module_record(Path(str(module_path)), source_map, diagnostics)
+    if record is None:
+        return
+    targets = record["data"].setdefault("targets", {})
+    if target_name not in targets:
+        diagnostics.error("AMF227", f"proposal target not found: {target_name}", "evo.patch.target")
+        return
+    target = targets[target_name]
+    deps = target.setdefault("deps", [])
+    if not isinstance(deps, list):
+        diagnostics.error("AMF226", f"target deps must be a list: {target_name}", "evo.patch.target")
+        return
+    for dep in add_deps:
+        dep_text = str(dep)
+        if dep_text and dep_text not in deps:
+            deps.append(dep_text)
+
+
+def _apply_deprecate_skill_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    """Annotate a skill as deprecated (implementation.deprecated=true plus
+    optional reason). Does not delete; preserves auditability.
+    """
+    module_path = _change_module_path(change, proposal)
+    skill_name = change.get("skill")
+    reason = change.get("reason")
+    replaced_by = change.get("replaced_by")
+    if not module_path or not skill_name:
+        diagnostics.error(
+            "AMF226",
+            "deprecate_skill requires module and skill",
+            "evo.patch.changes",
+        )
+        return
+    record = _load_module_record(Path(str(module_path)), source_map, diagnostics)
+    if record is None:
+        return
+    skills = record["data"].get("skills") or {}
+    if not isinstance(skills, dict) or skill_name not in skills:
+        diagnostics.error("AMF227", f"proposal skill not found: {skill_name}", "evo.patch.skill")
+        return
+    skill = skills[skill_name]
+    impl = skill.setdefault("implementation", {})
+    if not isinstance(impl, dict):
+        diagnostics.error("AMF226", f"skill implementation must be a mapping: {skill_name}", "evo.patch.skill")
+        return
+    impl["deprecated"] = True
+    if reason:
+        impl["deprecation_reason"] = str(reason)
+    if replaced_by:
+        impl["replaced_by"] = str(replaced_by)
+
+
+def _apply_add_registry_metadata_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    """Attach registry-source metadata (origin, version, signed-by, …) to a
+    skill so downstream tools can audit provenance.
+    """
+    module_path = _change_module_path(change, proposal)
+    skill_name = change.get("skill")
+    metadata = change.get("metadata")
+    if not module_path or not skill_name or not isinstance(metadata, dict):
+        diagnostics.error(
+            "AMF226",
+            "add_registry_metadata requires module, skill, and metadata",
+            "evo.patch.changes",
+        )
+        return
+    record = _load_module_record(Path(str(module_path)), source_map, diagnostics)
+    if record is None:
+        return
+    skills = record["data"].get("skills") or {}
+    if not isinstance(skills, dict) or skill_name not in skills:
+        diagnostics.error("AMF227", f"proposal skill not found: {skill_name}", "evo.patch.skill")
+        return
+    skill = skills[skill_name]
+    impl = skill.setdefault("implementation", {})
+    if not isinstance(impl, dict):
+        diagnostics.error("AMF226", f"skill implementation must be a mapping: {skill_name}", "evo.patch.skill")
+        return
+    registry = impl.setdefault("registry_metadata", {})
+    if not isinstance(registry, dict):
+        diagnostics.error("AMF226", f"skill registry_metadata must be a mapping: {skill_name}", "evo.patch.skill")
+        return
+    registry.update(metadata)
+
+
+def _apply_add_benchmark_case_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    """Append a benchmark case to a target's output_schema.benchmark_cases
+    list (kept inside the free-form output_schema dict so we don't need
+    a strict-model expansion).
+    """
+    module_path = _change_module_path(change, proposal)
+    target_name = change.get("target") or _first(proposal.get("scope", {}).get("targets", []))
+    case = change.get("case")
+    if not module_path or not target_name or not isinstance(case, dict):
+        diagnostics.error(
+            "AMF226",
+            "add_benchmark_case requires module, target, and case",
+            "evo.patch.changes",
+        )
+        return
+    record = _load_module_record(Path(str(module_path)), source_map, diagnostics)
+    if record is None:
+        return
+    targets = record["data"].setdefault("targets", {})
+    if target_name not in targets:
+        diagnostics.error("AMF227", f"proposal target not found: {target_name}", "evo.patch.target")
+        return
+    target = targets[target_name]
+    output_schema = target.setdefault("output_schema", {})
+    if not isinstance(output_schema, dict):
+        diagnostics.error("AMF226", f"target output_schema must be a mapping: {target_name}", "evo.patch.target")
+        return
+    cases = output_schema.setdefault("benchmark_cases", [])
+    if not isinstance(cases, list):
+        diagnostics.error("AMF226", f"benchmark_cases must be a list: {target_name}", "evo.patch.target")
+        return
+    if case not in cases:
+        cases.append(dict(case))
+
+
+def _apply_update_permission_guard_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    """Set permissions[tool][pattern] = action (allow / ask / deny)."""
+    module_path = _change_module_path(change, proposal)
+    tool = change.get("tool")
+    pattern = change.get("pattern")
+    action = change.get("action")
+    if not module_path or not tool or not pattern or action not in {"allow", "ask", "deny"}:
+        diagnostics.error(
+            "AMF226",
+            "update_permission_guard requires module, tool, pattern, and action (allow|ask|deny)",
+            "evo.patch.changes",
+        )
+        return
+    record = _load_module_record(Path(str(module_path)), source_map, diagnostics)
+    if record is None:
+        return
+    data = record["data"]
+    permissions = data.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        diagnostics.error("AMF226", "module permissions must be a mapping", "evo.patch.module")
+        return
+    # Support both flat (`permissions.<tool>.<pattern>`) and nested
+    # (`permissions.rules.<tool>.<pattern>`) layouts. Prefer the layout
+    # already present in the file; default to flat for new entries.
+    rules = permissions.get("rules") if isinstance(permissions.get("rules"), dict) else None
+    bucket = rules if rules is not None else permissions
+    tool_rules = bucket.setdefault(tool, {})
+    if not isinstance(tool_rules, dict):
+        diagnostics.error("AMF226", f"permissions for tool must be a mapping: {tool}", "evo.patch.permissions")
+        return
+    tool_rules[pattern] = action
+
+
+def _apply_split_module_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    """Move named skills + targets from a source module into a new module
+    file. The new module's record is added to source_map with empty
+    original_content so the candidate-patch / evaluate steps treat it
+    as a fresh file write.
+    """
+    source_module = change.get("source_module")
+    target_module = change.get("target_module")
+    move_skills = change.get("skills") or []
+    move_targets = change.get("targets") or []
+    if not source_module or not target_module or not isinstance(move_skills, list) or not isinstance(move_targets, list):
+        diagnostics.error(
+            "AMF226",
+            "split_module requires source_module, target_module, skills, and targets",
+            "evo.patch.changes",
+        )
+        return
+    if not move_skills and not move_targets:
+        diagnostics.error(
+            "AMF226",
+            "split_module requires at least one skill or target to move",
+            "evo.patch.changes",
+        )
+        return
+    source_path = Path(str(source_module))
+    target_path = Path(str(target_module))
+    if source_path == target_path:
+        diagnostics.error(
+            "AMF226",
+            "split_module source and target must differ",
+            "evo.patch.changes",
+        )
+        return
+
+    source_record = _load_module_record(source_path, source_map, diagnostics)
+    if source_record is None:
+        return
+
+    target_record = source_map.get(target_path)
+    if target_record is None:
+        if target_path.exists():
+            target_record = _load_module_record(target_path, source_map, diagnostics)
+            if target_record is None:
+                return
+        else:
+            target_record = {
+                "original_content": "",
+                "data": {"version": source_record["data"].get("version", "0.1"), "skills": {}, "targets": {}},
+            }
+            source_map[target_path] = target_record
+
+    source_skills = source_record["data"].get("skills") or {}
+    source_targets = source_record["data"].get("targets") or {}
+    new_skills = target_record["data"].setdefault("skills", {})
+    new_targets = target_record["data"].setdefault("targets", {})
+
+    for skill_name in move_skills:
+        if skill_name not in source_skills:
+            continue
+        new_skills[skill_name] = source_skills[skill_name]
+        del source_skills[skill_name]
+    for target_name in move_targets:
+        if target_name not in source_targets:
+            continue
+        new_targets[target_name] = source_targets[target_name]
+        del source_targets[target_name]
 
 
 def _apply_merge_duplicate_targets_change(

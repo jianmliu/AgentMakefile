@@ -2786,6 +2786,312 @@ def test_dream_mode_dry_run_detects_recurring_routing_gaps(tmp_path: Path) -> No
     assert proposal_path.exists()
 
 
+def _write_proposal(path: Path, *, proposal_id: str, module: Path, changes: list, targets: list = None) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": proposal_id,
+                "title": proposal_id,
+                "scope": {"modules": [str(module)], "targets": targets or []},
+                "evidence": [{"event_id": f"sha256:{proposal_id}", "reason": "test"}],
+                "changes": changes,
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+
+def test_candidate_patch_class_add_target_inserts_new_target(tmp_path: Path) -> None:
+    module = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  existing.task:
+    steps:
+      - inspect
+""",
+    )
+    proposal_path = tmp_path / "add_target.proposal.json"
+    _write_proposal(
+        proposal_path,
+        proposal_id="add-target",
+        module=module,
+        changes=[
+            {
+                "type": "add_target",
+                "module": str(module),
+                "target": "new.task",
+                "definition": {
+                    "match": {"user_intent": ["do new thing"]},
+                    "steps": [{"action": "do_new"}],
+                },
+            }
+        ],
+    )
+    from agentmf.evolution import create_candidate_patch_payload
+
+    result = create_candidate_patch_payload(proposal_file=proposal_path, out_dir=tmp_path / "cands", write=False)
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["patch_status"] == "generated"
+    assert "+  new.task:" in result.payload["patch"]
+
+
+def test_candidate_patch_class_add_dependency_appends_dep_edge(tmp_path: Path) -> None:
+    module = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  child.task:
+    steps:
+      - inspect
+  parent.task:
+    steps:
+      - inspect
+""",
+    )
+    proposal_path = tmp_path / "add_dep.proposal.json"
+    _write_proposal(
+        proposal_path,
+        proposal_id="add-dep",
+        module=module,
+        changes=[
+            {
+                "type": "add_dependency",
+                "module": str(module),
+                "target": "child.task",
+                "add_deps": ["parent.task"],
+            }
+        ],
+    )
+    from agentmf.evolution import create_candidate_patch_payload, create_compile_evaluate_payload
+
+    patch = create_candidate_patch_payload(proposal_file=proposal_path, out_dir=tmp_path / "cands", write=False)
+    eval_ = create_compile_evaluate_payload(proposal_file=proposal_path, workspace_dir=tmp_path / "ws", write=True)
+    assert patch.ok and eval_.ok, (patch.diagnostics.format(), eval_.diagnostics.format())
+    candidate = load_source(Path(eval_.payload["candidate_files"][0]["path"]))
+    assert "parent.task" in candidate.targets["child.task"].deps
+
+
+def test_candidate_patch_class_deprecate_skill_annotates_implementation(tmp_path: Path) -> None:
+    module = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  legacy.foo:
+    description: legacy.
+    implementation:
+      source: skills/foo.md
+    match:
+      user_intent:
+        - foo
+""",
+    )
+    proposal_path = tmp_path / "deprecate.proposal.json"
+    _write_proposal(
+        proposal_path,
+        proposal_id="deprecate",
+        module=module,
+        changes=[
+            {
+                "type": "deprecate_skill",
+                "module": str(module),
+                "skill": "legacy.foo",
+                "reason": "superseded by core.foo",
+                "replaced_by": "core.foo",
+            }
+        ],
+    )
+    from agentmf.evolution import create_candidate_patch_payload, create_compile_evaluate_payload
+
+    patch = create_candidate_patch_payload(proposal_file=proposal_path, out_dir=tmp_path / "cands", write=False)
+    eval_ = create_compile_evaluate_payload(proposal_file=proposal_path, workspace_dir=tmp_path / "ws", write=True)
+    assert patch.ok and eval_.ok, (patch.diagnostics.format(), eval_.diagnostics.format())
+    candidate = load_source(Path(eval_.payload["candidate_files"][0]["path"]))
+    impl = candidate.skills["legacy.foo"].implementation
+    assert impl["deprecated"] is True
+    assert impl["deprecation_reason"] == "superseded by core.foo"
+    assert impl["replaced_by"] == "core.foo"
+
+
+def test_candidate_patch_class_add_registry_metadata_attaches_provenance(tmp_path: Path) -> None:
+    module = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  plugins.docs:
+    description: docs.
+    implementation:
+      source: skills/docs.md
+    match:
+      user_intent:
+        - docs
+""",
+    )
+    proposal_path = tmp_path / "registry.proposal.json"
+    _write_proposal(
+        proposal_path,
+        proposal_id="registry",
+        module=module,
+        changes=[
+            {
+                "type": "add_registry_metadata",
+                "module": str(module),
+                "skill": "plugins.docs",
+                "metadata": {"origin": "openclaw", "version": "1.2.3", "signed_by": "registry@openclaw"},
+            }
+        ],
+    )
+    from agentmf.evolution import create_candidate_patch_payload, create_compile_evaluate_payload
+
+    patch = create_candidate_patch_payload(proposal_file=proposal_path, out_dir=tmp_path / "cands", write=False)
+    eval_ = create_compile_evaluate_payload(proposal_file=proposal_path, workspace_dir=tmp_path / "ws", write=True)
+    assert patch.ok and eval_.ok, (patch.diagnostics.format(), eval_.diagnostics.format())
+    candidate = load_source(Path(eval_.payload["candidate_files"][0]["path"]))
+    registry = candidate.skills["plugins.docs"].implementation["registry_metadata"]
+    assert registry["origin"] == "openclaw"
+    assert registry["version"] == "1.2.3"
+
+
+def test_candidate_patch_class_add_benchmark_case_appends_case(tmp_path: Path) -> None:
+    module = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.review:
+    steps:
+      - inspect
+""",
+    )
+    proposal_path = tmp_path / "benchmark.proposal.json"
+    _write_proposal(
+        proposal_path,
+        proposal_id="benchmark",
+        module=module,
+        changes=[
+            {
+                "type": "add_benchmark_case",
+                "module": str(module),
+                "target": "skill.review",
+                "case": {"id": "review-1", "instruction": "review the diff", "expected_target": "skill.review"},
+            }
+        ],
+    )
+    from agentmf.evolution import create_candidate_patch_payload, create_compile_evaluate_payload
+
+    patch = create_candidate_patch_payload(proposal_file=proposal_path, out_dir=tmp_path / "cands", write=False)
+    eval_ = create_compile_evaluate_payload(proposal_file=proposal_path, workspace_dir=tmp_path / "ws", write=True)
+    assert patch.ok and eval_.ok, (patch.diagnostics.format(), eval_.diagnostics.format())
+    candidate = load_source(Path(eval_.payload["candidate_files"][0]["path"]))
+    cases = candidate.targets["skill.review"].output_schema["benchmark_cases"]
+    assert any(c["id"] == "review-1" for c in cases)
+
+
+def test_candidate_patch_class_update_permission_guard_sets_rule(tmp_path: Path) -> None:
+    module = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.foo:
+    steps:
+      - inspect
+permissions:
+  bash:
+    'ls *': allow
+""",
+    )
+    proposal_path = tmp_path / "perm.proposal.json"
+    _write_proposal(
+        proposal_path,
+        proposal_id="perm",
+        module=module,
+        changes=[
+            {
+                "type": "update_permission_guard",
+                "module": str(module),
+                "tool": "bash",
+                "pattern": "npm install*",
+                "action": "ask",
+            }
+        ],
+    )
+    from agentmf.evolution import create_candidate_patch_payload, create_compile_evaluate_payload
+
+    patch = create_candidate_patch_payload(proposal_file=proposal_path, out_dir=tmp_path / "cands", write=False)
+    eval_ = create_compile_evaluate_payload(proposal_file=proposal_path, workspace_dir=tmp_path / "ws", write=True)
+    assert patch.ok and eval_.ok, (patch.diagnostics.format(), eval_.diagnostics.format())
+    candidate_text = Path(eval_.payload["candidate_files"][0]["path"]).read_text()
+    assert "npm install*: ask" in candidate_text
+
+
+def test_candidate_patch_class_split_module_moves_skills_and_targets(tmp_path: Path) -> None:
+    source_module = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  keep.me:
+    description: stay.
+    implementation:
+      source: skills/keep.md
+  move.me:
+    description: move.
+    implementation:
+      source: skills/move.md
+targets:
+  keep.task:
+    steps:
+      - inspect
+  move.task:
+    steps:
+      - inspect
+""",
+    )
+    target_module = tmp_path / "moved" / "AgentMakefile"
+    proposal_path = tmp_path / "split.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "split",
+                "title": "split",
+                "scope": {"modules": [str(source_module), str(target_module)], "targets": []},
+                "evidence": [{"event_id": "sha256:split", "reason": "test"}],
+                "changes": [
+                    {
+                        "type": "split_module",
+                        "source_module": str(source_module),
+                        "target_module": str(target_module),
+                        "skills": ["move.me"],
+                        "targets": ["move.task"],
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    eval_ = create_compile_evaluate_payload(proposal_file=proposal_path, workspace_dir=tmp_path / "ws", write=True)
+    assert eval_.ok, eval_.diagnostics.format()
+    candidates = {entry["source"]: Path(entry["path"]) for entry in eval_.payload["candidate_files"]}
+    new_source = load_source(candidates[str(source_module)])
+    new_target = load_source(candidates[str(target_module)])
+    assert "move.me" not in new_source.skills
+    assert "move.task" not in new_source.targets
+    assert "keep.me" in new_source.skills
+    assert "move.me" in new_target.skills
+    assert "move.task" in new_target.targets
+
+
 def test_candidate_patch_generator_prunes_match_terms(tmp_path: Path) -> None:
     """Mirror of update_match_terms: prune_match_terms removes specified
     entries from a target's match.user_intent so overly-broad triggers
