@@ -867,6 +867,15 @@ def create_dream_mode_payload(
     proposals.extend(
         _dream_drifted_permissions(evidence_files, out_dir, timestamp, write, diagnostics)
     )
+    proposals.extend(
+        _dream_trust_annotation(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
+    proposals.extend(
+        _dream_heavy_tool_warning(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
+    proposals.extend(
+        _dream_benchmark_case_suggester(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
     if diagnostics.has_errors:
         return DreamModeResult(diagnostics)
     return DreamModeResult(
@@ -1183,6 +1192,261 @@ def _dream_drifted_permissions(
                     "patch_status": _dream_patch_status(result.payload),
                 }
             )
+    return proposals
+
+
+CACHE_PATH_HINTS = ("/cache/", ".tmp/")
+HEAVY_TOOL_KEYWORDS = ("sudo ", "rm -rf", "docker ", "kubectl ", "ssh ", "scp ", "curl http", "wget http")
+DREAM_BENCHMARK_CASE_THRESHOLD = 3
+
+
+def _modules_from_openclaw_evidence(evidence_files: list[Path], diagnostics: Diagnostics) -> list[Path]:
+    """Collect unique module paths referenced by openclaw_import records."""
+    seen: list[Path] = []
+    seen_set: set[str] = set()
+    for evidence_file in evidence_files:
+        for record in _load_evidence_records([evidence_file], diagnostics):
+            if record.get("source") != "openclaw_import":
+                continue
+            summary = record.get("summary") or {}
+            module_paths = summary.get("module_paths") if isinstance(summary, dict) else None
+            if not isinstance(module_paths, list):
+                continue
+            for ref in module_paths:
+                if not isinstance(ref, str) or ref in seen_set:
+                    continue
+                seen_set.add(ref)
+                seen.append(Path(ref))
+    return seen
+
+
+def _dream_trust_annotation(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """For every module referenced by openclaw_import evidence, emit one
+    proposal with `add_registry_metadata` changes annotating any skill
+    whose `relative_source` lives under a cache or scratch path. Existing
+    `registry_metadata.cache_derived` annotations are left alone so reruns
+    are idempotent.
+    """
+    proposals: list[Dict[str, Any]] = []
+    module_paths = _modules_from_openclaw_evidence(evidence_files, diagnostics)
+    for module_path in module_paths:
+        if not module_path.exists():
+            continue
+        try:
+            data = yaml.safe_load(module_path.read_text(encoding="utf-8")) or {}
+        except OSError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        skills = data.get("skills") or {}
+        if not isinstance(skills, dict):
+            continue
+        changes: list[Dict[str, Any]] = []
+        for skill_name, skill in skills.items():
+            if not isinstance(skill, dict):
+                continue
+            impl = skill.get("implementation") or {}
+            if not isinstance(impl, dict):
+                continue
+            rel = impl.get("relative_source")
+            if not isinstance(rel, str):
+                continue
+            if not any(hint in rel for hint in CACHE_PATH_HINTS):
+                continue
+            existing = impl.get("registry_metadata") if isinstance(impl.get("registry_metadata"), dict) else {}
+            if existing.get("cache_derived"):
+                continue
+            changes.append(
+                {
+                    "type": "add_registry_metadata",
+                    "module": str(module_path),
+                    "skill": skill_name,
+                    "metadata": {
+                        "cache_derived": True,
+                        "source_path": rel,
+                        "annotated_by": "dream.trust_annotation",
+                    },
+                }
+            )
+        if not changes:
+            continue
+        result = create_skill_workshop_proposal_payload(
+            title=f"Annotate cache-derived skills in {module_path.name}",
+            evidence_records=[],
+            scope={"modules": [str(module_path)], "targets": []},
+            changes=changes,
+            evaluation_commands=[],
+            out_dir=out_dir,
+            timestamp=timestamp,
+            write=write,
+        )
+        diagnostics.extend(result.diagnostics.items)
+        if result.payload:
+            proposals.append({**result.payload, "patch_status": _dream_patch_status(result.payload)})
+    return proposals
+
+
+def _dream_heavy_tool_warning(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """Scan skills in modules referenced by openclaw_import evidence for
+    description or match.user_intent containing risky-tool keywords (sudo,
+    rm -rf, docker, kubectl, ssh, scp, curl http*, wget http*). Each
+    flagged skill becomes its own investigate_heavy_tool_usage proposal —
+    intentionally not a patch, since deciding to gate or rewrite is a
+    security-sensitive call best left to a reviewer.
+    """
+    proposals: list[Dict[str, Any]] = []
+    module_paths = _modules_from_openclaw_evidence(evidence_files, diagnostics)
+    for module_path in module_paths:
+        if not module_path.exists():
+            continue
+        try:
+            data = yaml.safe_load(module_path.read_text(encoding="utf-8")) or {}
+        except OSError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        skills = data.get("skills") or {}
+        if not isinstance(skills, dict):
+            continue
+        for skill_name, skill in skills.items():
+            if not isinstance(skill, dict):
+                continue
+            tokens: list[str] = []
+            blob_parts: list[str] = []
+            description = skill.get("description")
+            if isinstance(description, str):
+                blob_parts.append(description)
+            match = skill.get("match")
+            if isinstance(match, dict):
+                user_intent = match.get("user_intent")
+                if isinstance(user_intent, list):
+                    blob_parts.extend(str(term) for term in user_intent)
+                elif isinstance(user_intent, str):
+                    blob_parts.append(user_intent)
+            haystack = " ".join(blob_parts).lower()
+            for keyword in HEAVY_TOOL_KEYWORDS:
+                if keyword in haystack:
+                    tokens.append(keyword.strip())
+            if not tokens:
+                continue
+            change = {
+                "type": "investigate_heavy_tool_usage",
+                "module": str(module_path),
+                "skill": skill_name,
+                "matched_tokens": sorted(set(tokens)),
+            }
+            result = create_skill_workshop_proposal_payload(
+                title=f"Heavy tool usage in {skill_name}",
+                evidence_records=[],
+                scope={"modules": [str(module_path)], "targets": []},
+                changes=[change],
+                evaluation_commands=[],
+                out_dir=out_dir,
+                timestamp=timestamp,
+                write=write,
+            )
+            diagnostics.extend(result.diagnostics.items)
+            if result.payload:
+                proposals.append({**result.payload, "patch_status": _dream_patch_status(result.payload)})
+    return proposals
+
+
+def _dream_benchmark_case_suggester(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """For each `selected_target` that the plugin_payload evidence shows
+    >=N times, propose an add_benchmark_case change so the route gets a
+    permanent regression test. The target's module is resolved by
+    scanning modules referenced in any openclaw_import evidence in the
+    same evidence set; targets we can't locate are skipped.
+    """
+    selections_by_target: Dict[str, list[Dict[str, Any]]] = {}
+    for evidence_file in evidence_files:
+        for record in _load_evidence_records([evidence_file], diagnostics):
+            if record.get("source") != "plugin_payload":
+                continue
+            target = record.get("selected_target")
+            if not isinstance(target, str) or not target:
+                continue
+            selections_by_target.setdefault(target, []).append(record)
+
+    if not selections_by_target:
+        return []
+
+    target_to_module: Dict[str, Path] = {}
+    for module_path in _modules_from_openclaw_evidence(evidence_files, diagnostics):
+        if not module_path.exists():
+            continue
+        try:
+            data = yaml.safe_load(module_path.read_text(encoding="utf-8")) or {}
+        except OSError:
+            continue
+        targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
+        for target_name in targets:
+            if target_name not in target_to_module:
+                target_to_module[target_name] = module_path
+
+    proposals: list[Dict[str, Any]] = []
+    for target in sorted(selections_by_target):
+        records = selections_by_target[target]
+        if len(records) < DREAM_BENCHMARK_CASE_THRESHOLD:
+            continue
+        module_path = target_to_module.get(target)
+        if module_path is None:
+            continue
+        # Most-frequent request for the case instruction.
+        request_counts: Dict[str, int] = {}
+        for record in records:
+            summary = record.get("summary") or {}
+            request = None
+            if isinstance(summary, dict):
+                request = summary.get("request")
+            if not isinstance(request, str):
+                # _summary_for_source("plugin_payload") doesn't store
+                # request; fall back to record-level fingerprint hash
+                # so we still produce a stable case id.
+                request = record.get("request_fingerprint") or ""
+            request_counts[request] = request_counts.get(request, 0) + 1
+        best_request, _ = max(request_counts.items(), key=lambda kv: kv[1])
+        change = {
+            "type": "add_benchmark_case",
+            "module": str(module_path),
+            "target": target,
+            "case": {
+                "id": f"popular-{_sha256_text(target)[7:19]}",
+                "instruction": best_request,
+                "expected_target": target,
+            },
+        }
+        result = create_skill_workshop_proposal_payload(
+            title=f"Add benchmark case for popular route {target}",
+            evidence_records=records,
+            scope={"modules": [str(module_path)], "targets": [target]},
+            changes=[change],
+            evaluation_commands=[],
+            out_dir=out_dir,
+            timestamp=timestamp,
+            write=write,
+        )
+        diagnostics.extend(result.diagnostics.items)
+        if result.payload:
+            proposals.append({**result.payload, "patch_status": _dream_patch_status(result.payload)})
     return proposals
 
 

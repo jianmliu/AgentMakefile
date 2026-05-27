@@ -2355,9 +2355,9 @@ Acceptance:
 
 ### AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator
 
-Status: implemented for the duplicate + missing-term path; trust /
-heavy-tool / benchmark-case suggester detectors pending (see Implemented
-scope).
+Status: implemented (duplicate + missing-term + trust + heavy-tool +
+benchmark-case suggester all ship); category module suggestions remain
+the only spec deliverable not yet detected.
 
 Goal: use the evolution loop to curate large imported skill ecosystems such as
 OpenClaw instead of loading thousands of skills as a flat index.
@@ -2378,16 +2378,28 @@ Implemented scope:
   proposals from OpenClaw `duplicate_original_names` evidence; flows
   end-to-end through evaluate + promote so a real corpus is curated on
   disk (per-machine, gitignored under `modules/openclaw-curated/`).
-- The dream `missing_match_terms` detector closes the routing-precision
-  half: it raises the routing baseline from 13/29 to 29/29 ground-truth
-  correct on the 37-task probe set (`demos/evo-feedback-loop-demo/run.py`).
-- The patch class set covers trust/provenance annotation
-  (`add_registry_metadata`) and benchmark cases (`add_benchmark_case`),
-  but no detector yet emits these — they're available for hand-authored
-  proposals only.
-- Heavy or unsafe tool requirement warnings are not yet detected.
-- Category module suggestions remain a future task (OpenClaw importer
-  already splits modules per category at scan time).
+- Dream detectors emitting EVO-006 outputs:
+  - `_dream_missing_match_terms` (match-rule improvements): raises the
+    routing baseline from 13/29 to 29/29 ground-truth correct on the
+    37-task probe (`demos/evo-feedback-loop-demo/run.py`).
+  - `_dream_trust_annotation` (trust/provenance): emits
+    `add_registry_metadata` patches tagging skills whose
+    `relative_source` lives under `/cache/` or `.tmp/` paths as
+    cache-derived so downstream tools see the provenance.
+  - `_dream_heavy_tool_warning` (heavy/unsafe tool warnings): scans
+    skill descriptions + `match.user_intent` for risky shell tokens
+    (sudo, rm -rf, docker, kubectl, ssh, scp, curl http*, wget http*)
+    and emits `investigate_heavy_tool_usage` flags (review-only, not
+    a patch — flipping permission policy is a security-sensitive call).
+  - `_dream_benchmark_case_suggester` (candidate benchmark cases):
+    counts `plugin_payload.selected_target` occurrences; routes hit
+    >=3 times become `add_benchmark_case` patches with the most-
+    common request as the case instruction. The target's module is
+    resolved by scanning modules referenced in any nearby
+    openclaw_import evidence.
+- Category module suggestions remain a future task (the OpenClaw
+  importer already splits modules per category at scan time, so this
+  primarily covers re-splitting an already-imported tree).
 
 ## Post-MVP Runtime Work
 
@@ -2492,12 +2504,12 @@ Completed:
 - AMF-EVO-004B Compile and Benchmark Candidate Gates (folded into AMF-EVO-004 above).
 - AMF-EVO-005 Dream Mode Dry-Run (4/4 detectors: openclaw duplicates, recurring routing gaps, missing match terms, drifted permissions).
 - AMF-EVO-005B Additional Dream Mode Detectors (folded into AMF-EVO-005 above).
-- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator (duplicate + missing-term path closed end-to-end; routing baseline 13/29 -> 29/29 via the closed-loop demo).
+- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator (duplicate + missing-term + trust + heavy-tool + benchmark-case suggester all ship; routing baseline 13/29 -> 29/29 via the closed-loop demo).
+- AMF-EVO-006B OpenClaw Trust and Overlap Analysis (folded into AMF-EVO-006 above).
 
 Next:
 
 - AMF-PAD-014 Multi-Source Guidance Ingestion (CLI wiring + four source readers; library facade `guidance_scanner` already shipped).
-- AMF-EVO-006B OpenClaw Trust and Overlap Analysis (detector emitting `add_registry_metadata`; heavy/unsafe-tool warning; category-split suggester; benchmark-case suggester emitting `add_benchmark_case`).
 - AMF-BENCH-002 Suite File Parser.
 - AMF-BENCH-003 Deterministic Suite Runner.
 - AMF-BENCH-004 Report Writer.

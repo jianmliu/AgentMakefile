@@ -3633,6 +3633,263 @@ targets:
     assert patch_result.payload["patch_status"] == "generated"
 
 
+def test_dream_mode_trust_annotation_flags_cache_derived_skills(tmp_path: Path) -> None:
+    """Skills whose implementation.relative_source comes from ephemeral
+    cache paths (`.tmp/` or `/cache/`) should be tagged with
+    registry_metadata so downstream tools know the source isn't
+    canonical. The detector emits an add_registry_metadata change per
+    such skill, bundled per module.
+    """
+    module_path = tmp_path / "uncategorized" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  uncategorized.canonical:
+    description: canonical skill.
+    implementation:
+      source: /some/canonical/skills/foo/SKILL.md
+      relative_source: uncategorized/canonical/SKILL.md
+    match:
+      user_intent:
+        - foo
+  uncategorized.from-tmp:
+    description: cached scratch skill.
+    implementation:
+      source: /Users/x/.codex/.tmp/scratch/SKILL.md
+      relative_source: .tmp/scratch/SKILL.md
+    match:
+      user_intent:
+        - scratch
+  uncategorized.from-plugin-cache:
+    description: cached marketplace skill.
+    implementation:
+      source: /Users/x/.codex/plugins/cache/openclaw-bundled/foo/SKILL.md
+      relative_source: plugins/cache/openclaw-bundled/foo/SKILL.md
+    match:
+      user_intent:
+        - plugin
+"""
+    )
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+
+    create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload={
+            "openclaw_import": {
+                "root_path": str(tmp_path / "modules" / "openclaw" / "AgentMakefile"),
+                "skill_count": 3,
+                "category_count": 1,
+                "categories": [{"name": "uncategorized", "skill_count": 3}],
+                "curator_evidence": {
+                    "skill_count": 3,
+                    "category_count": 1,
+                    "categories": {"uncategorized": 3},
+                    "duplicate_original_names": {},
+                    "module_paths": [str(module_path)],
+                },
+            }
+        },
+        out_dir=evidence_dir,
+        write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_dir,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    trust_proposals = [
+        p
+        for p in result.payload["proposals"]
+        if any(c["type"] == "add_registry_metadata" for c in p["proposal"]["changes"])
+    ]
+    assert len(trust_proposals) == 1
+    proposal = trust_proposals[0]["proposal"]
+    flagged_skills = {c["skill"] for c in proposal["changes"] if c["type"] == "add_registry_metadata"}
+    assert flagged_skills == {"uncategorized.from-tmp", "uncategorized.from-plugin-cache"}
+    assert "uncategorized.canonical" not in flagged_skills
+    # Patch class is supported, so dream marks it accordingly.
+    assert trust_proposals[0]["patch_status"] == "would_generate_patch"
+
+
+def test_dream_mode_heavy_tool_warning_flags_risky_skills(tmp_path: Path) -> None:
+    """Skills whose description or match.user_intent mentions risky shell
+    tools (sudo, rm -rf, docker, kubectl, ssh) surface as
+    investigate_heavy_tool_usage proposals so a reviewer can decide
+    whether the skill should be gated by stricter permission rules.
+    """
+    module_path = tmp_path / "plugins" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  plugins.safe-tool:
+    description: simple text formatter.
+    implementation:
+      source: skills/safe-tool/SKILL.md
+      relative_source: plugins/safe-tool/SKILL.md
+    match:
+      user_intent:
+        - format text
+  plugins.devops-helper:
+    description: Use to run docker compose stacks and kubectl rollouts.
+    implementation:
+      source: skills/devops/SKILL.md
+      relative_source: plugins/devops/SKILL.md
+    match:
+      user_intent:
+        - manage clusters
+  plugins.cleaner:
+    description: Removes temp dirs.
+    implementation:
+      source: skills/cleaner/SKILL.md
+      relative_source: plugins/cleaner/SKILL.md
+    match:
+      user_intent:
+        - run rm -rf on the tmp dir
+"""
+    )
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+
+    create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload={
+            "openclaw_import": {
+                "root_path": str(tmp_path / "modules" / "openclaw" / "AgentMakefile"),
+                "skill_count": 3,
+                "category_count": 1,
+                "categories": [{"name": "plugins", "skill_count": 3}],
+                "curator_evidence": {
+                    "skill_count": 3,
+                    "category_count": 1,
+                    "categories": {"plugins": 3},
+                    "duplicate_original_names": {},
+                    "module_paths": [str(module_path)],
+                },
+            }
+        },
+        out_dir=evidence_dir,
+        write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_dir,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    heavy = [
+        p
+        for p in result.payload["proposals"]
+        if p["proposal"]["changes"][0]["type"] == "investigate_heavy_tool_usage"
+    ]
+    flagged = {p["proposal"]["changes"][0]["skill"] for p in heavy}
+    assert "plugins.devops-helper" in flagged
+    assert "plugins.cleaner" in flagged
+    assert "plugins.safe-tool" not in flagged
+    # investigate_* is not a supported patch class, so dream marks as skipped.
+    for proposal in heavy:
+        assert proposal["patch_status"] == "skipped_unsupported_change"
+        change = proposal["proposal"]["changes"][0]
+        assert isinstance(change["matched_tokens"], list) and change["matched_tokens"]
+
+
+def test_dream_mode_benchmark_case_suggester_for_popular_targets(tmp_path: Path) -> None:
+    """When plugin_payload evidence shows the same selected_target
+    chosen >=3 times, the suggester proposes adding a benchmark case to
+    cement the target as a regression-tested route. The target's module
+    is resolved by scanning modules referenced in any openclaw_import
+    evidence in the same evidence set.
+    """
+    module_path = tmp_path / "plugins" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        """\
+version: "0.1"
+targets:
+  skill.plugins.docs:
+    match:
+      user_intent:
+        - write the document
+    skills: []
+    steps:
+      - inspect
+"""
+    )
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+
+    # OpenClaw import evidence so the suggester can resolve target -> module.
+    create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload={
+            "openclaw_import": {
+                "root_path": str(tmp_path / "modules" / "openclaw" / "AgentMakefile"),
+                "skill_count": 0,
+                "category_count": 1,
+                "categories": [{"name": "plugins", "skill_count": 0}],
+                "curator_evidence": {
+                    "skill_count": 0,
+                    "category_count": 1,
+                    "categories": {"plugins": 0},
+                    "duplicate_original_names": {},
+                    "module_paths": [str(module_path)],
+                },
+            }
+        },
+        out_dir=evidence_dir,
+        write=True,
+    )
+
+    # Three plugin_payload records picking the same target.
+    for index in range(3):
+        create_evolution_evidence_payload(
+            source="plugin_payload",
+            payload={
+                "request": f"write the document about quarter {index}",
+                "selected_target": "skill.plugins.docs",
+                "selected_targets": ["skill.plugins.docs"],
+                "selected_skills": [],
+            },
+            out_dir=evidence_dir,
+            write=True,
+        )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_dir,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    suggestions = [
+        p
+        for p in result.payload["proposals"]
+        if p["proposal"]["changes"][0]["type"] == "add_benchmark_case"
+    ]
+    assert len(suggestions) == 1
+    change = suggestions[0]["proposal"]["changes"][0]
+    assert change["target"] == "skill.plugins.docs"
+    assert change["module"] == str(module_path)
+    assert change["case"]["expected_target"] == "skill.plugins.docs"
+    assert change["case"]["instruction"]  # non-empty representative request
+    assert suggestions[0]["patch_status"] == "would_generate_patch"
+
+
 def test_dream_mode_proposes_pruning_broad_terms_from_actual_target(tmp_path: Path) -> None:
     """When user_feedback says request X mis-routed to actual_target Y instead
     of intended Z, dream must (a) add distinguishing terms to Z AND (b) propose
