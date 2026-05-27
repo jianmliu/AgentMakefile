@@ -2653,6 +2653,79 @@ def test_dream_mode_dry_run_detects_recurring_routing_gaps(tmp_path: Path) -> No
     assert proposal_path.exists()
 
 
+def test_candidate_patch_generator_prunes_match_terms(tmp_path: Path) -> None:
+    """Mirror of update_match_terms: prune_match_terms removes specified
+    entries from a target's match.user_intent so overly-broad triggers
+    that cause false positives can be retired. Canonical source stays
+    untouched; only the candidate workspace gets the trimmed module.
+    """
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.plugins.documents:
+    match:
+      user_intent:
+        - Create
+        - edit Word documents
+        - render docx PDFs
+    steps:
+      - action: handle_documents
+""",
+    )
+    proposal_path = tmp_path / "prune.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-prune",
+                "title": "Prune broad match terms from plugins.documents",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.plugins.documents"]},
+                "evidence": [{"event_id": "sha256:prune", "reason": "broad single-word matcher"}],
+                "changes": [
+                    {
+                        "type": "prune_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.plugins.documents",
+                        "remove_terms": ["Create"],
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_candidate_patch_payload, create_compile_evaluate_payload
+
+    patch_result = create_candidate_patch_payload(
+        proposal_file=proposal_path,
+        out_dir=tmp_path / "candidates",
+        write=False,
+    )
+    eval_result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+
+    assert patch_result.ok, patch_result.diagnostics.format()
+    assert patch_result.payload["patch_status"] == "generated"
+    assert patch_result.payload["unsupported_changes"] == []
+    assert "-        - Create" in patch_result.payload["patch"]
+    assert eval_result.ok, eval_result.diagnostics.format()
+
+    candidate_path = Path(eval_result.payload["candidate_files"][0]["path"])
+    candidate_source = load_source(candidate_path)
+    assert candidate_source.targets["skill.plugins.documents"].match["user_intent"] == [
+        "edit Word documents",
+        "render docx PDFs",
+    ]
+    # Canonical source untouched.
+    assert "Create" in load_source(module_path).targets["skill.plugins.documents"].match["user_intent"]
+
+
 def test_dream_mode_missing_match_terms_proposes_update_for_user_feedback(tmp_path: Path) -> None:
     """user_feedback evidence saying "request X should have routed to target Y"
     must surface as an update_match_terms proposal that adds the request to
@@ -2743,6 +2816,91 @@ targets:
 
     # End-to-end: the dream-emitted proposal really is patch-generatable.
     proposal_path = Path(proposal_wrapper["paths"]["proposal_json"])
+    patch_result = create_candidate_patch_payload(
+        proposal_file=proposal_path,
+        out_dir=tmp_path / "patch",
+        write=True,
+    )
+    assert patch_result.ok, patch_result.diagnostics.format()
+    assert patch_result.payload["patch_status"] == "generated"
+
+
+def test_dream_mode_proposes_pruning_broad_terms_from_actual_target(tmp_path: Path) -> None:
+    """When user_feedback says request X mis-routed to actual_target Y instead
+    of intended Z, dream must (a) add distinguishing terms to Z AND (b) propose
+    pruning the broad, short single-word term on Y that caused the false
+    positive. Output is one combined proposal with both change types so the
+    patch generator applies them atomically.
+    """
+    module_path = tmp_path / "plugins" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        """\
+version: "0.1"
+targets:
+  skill.plugins.documents:
+    match:
+      user_intent:
+        - Create
+        - edit Word documents
+    steps:
+      - action: handle_documents
+  skill.plugins.presentations:
+    match:
+      user_intent:
+        - build slides
+    steps:
+      - action: handle_presentations
+"""
+    )
+    evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    from agentmf.evolution import (
+        create_candidate_patch_payload,
+        create_dream_mode_payload,
+        create_evolution_evidence_payload,
+    )
+
+    create_evolution_evidence_payload(
+        source="user_feedback",
+        payload={
+            "request": "create a presentation about Q4 results",
+            "intended_module": str(module_path),
+            "intended_target": "skill.plugins.presentations",
+            "actual_target": "skill.plugins.documents",
+        },
+        out_dir=evidence_root,
+        write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_root,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    match_proposals = [
+        p
+        for p in result.payload["proposals"]
+        if any(c["type"] in {"update_match_terms", "prune_match_terms"} for c in p["proposal"]["changes"])
+    ]
+    assert len(match_proposals) == 1
+    proposal = match_proposals[0]["proposal"]
+    change_types = [c["type"] for c in proposal["changes"]]
+    assert "update_match_terms" in change_types
+    assert "prune_match_terms" in change_types
+
+    prune_change = next(c for c in proposal["changes"] if c["type"] == "prune_match_terms")
+    assert prune_change["target"] == "skill.plugins.documents"
+    assert "Create" in prune_change["remove_terms"]
+    # Multi-word legitimate terms ("edit Word documents") must NOT be pruned —
+    # only the broad single-word distractor goes.
+    assert "edit Word documents" not in prune_change["remove_terms"]
+
+    # End-to-end: the combined proposal generates a patch covering both classes.
+    proposal_path = Path(match_proposals[0]["paths"]["proposal_json"])
     patch_result = create_candidate_patch_payload(
         proposal_file=proposal_path,
         out_dir=tmp_path / "patch",

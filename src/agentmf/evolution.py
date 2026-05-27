@@ -33,7 +33,7 @@ _SOURCE_DIRS = {
 
 PROMOTION_STATUSES = {"candidate", "rejected", "accepted", "superseded"}
 
-SUPPORTED_PATCH_TYPES = {"update_match_terms", "merge_duplicate_targets"}
+SUPPORTED_PATCH_TYPES = {"update_match_terms", "merge_duplicate_targets", "prune_match_terms"}
 
 
 @dataclass
@@ -750,12 +750,21 @@ def _dream_missing_match_terms(
     diagnostics: Diagnostics,
 ) -> list[Dict[str, Any]]:
     """Read user_feedback evidence (requests that should have routed elsewhere)
-    and emit `update_match_terms` proposals grouped by (intended_module,
-    intended_target). Each proposal adds the request texts (or the user-
-    supplied corrective_terms) to the intended target's match.user_intent.
+    and emit a combined proposal per (intended_module, intended_target):
+
+    - update_match_terms adds the request texts (or user-supplied
+      corrective_terms) to the intended target's match.user_intent so
+      the corrective phrase is visible to the matcher.
+    - prune_match_terms (when feedback names an actual_target) removes
+      overly-broad single-word triggers from the actual_target that
+      caused the false positive in the first place.
+
+    The two changes ship in one proposal so the patch generator applies
+    them atomically.
     """
     by_target: Dict[tuple[str, str], list[Dict[str, Any]]] = {}
     terms_by_target: Dict[tuple[str, str], list[str]] = {}
+    actuals_by_target: Dict[tuple[str, str], Dict[str, list[str]]] = {}
     for evidence_file in evidence_files:
         for record in _load_evidence_records([evidence_file], diagnostics):
             if record.get("source") != "user_feedback":
@@ -778,23 +787,41 @@ def _dream_missing_match_terms(
             for term in candidate_terms:
                 if term and term not in bucket:
                     bucket.append(term)
+            actual_target = summary.get("actual_target")
+            if isinstance(actual_target, str) and actual_target:
+                actuals_by_target.setdefault(key, {}).setdefault(actual_target, []).append(str(request_text))
 
     proposals: list[Dict[str, Any]] = []
     for key in sorted(by_target):
         module_path, target_name = key
         records = by_target[key]
         terms = terms_by_target[key]
-        change = {
-            "type": "update_match_terms",
-            "module": module_path,
-            "target": target_name,
-            "add_terms": terms,
-        }
+        changes: list[Dict[str, Any]] = [
+            {
+                "type": "update_match_terms",
+                "module": module_path,
+                "target": target_name,
+                "add_terms": terms,
+            }
+        ]
+        # Generate prune proposals for each actual_target that wrongly won.
+        for actual_target, requests in sorted(actuals_by_target.get(key, {}).items()):
+            broad_terms = _broad_match_terms_to_prune(Path(module_path), actual_target, requests)
+            if broad_terms:
+                changes.append(
+                    {
+                        "type": "prune_match_terms",
+                        "module": module_path,
+                        "target": actual_target,
+                        "remove_terms": broad_terms,
+                    }
+                )
+
         result = create_skill_workshop_proposal_payload(
             title=f"Add match terms to {target_name}",
             evidence_records=records,
             scope={"modules": [module_path], "targets": [target_name]},
-            changes=[change],
+            changes=changes,
             evaluation_commands=[],
             out_dir=out_dir,
             timestamp=timestamp,
@@ -809,6 +836,55 @@ def _dream_missing_match_terms(
                 }
             )
     return proposals
+
+
+def _broad_match_terms_to_prune(
+    module_path: Path, target_name: str, requests: list[str]
+) -> list[str]:
+    """Identify single-word, short user_intent terms on `target_name` that
+    substring-match one or more of `requests`. These are the broad
+    triggers most likely to cause false positives — multi-word or longer
+    phrases are left alone (they're presumed intentional).
+    """
+    try:
+        data = yaml.safe_load(module_path.read_text(encoding="utf-8")) or {}
+    except OSError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    targets = data.get("targets")
+    if not isinstance(targets, dict):
+        return []
+    target = targets.get(target_name)
+    if not isinstance(target, dict):
+        return []
+    match = target.get("match")
+    if not isinstance(match, dict):
+        return []
+    user_intent = match.get("user_intent")
+    if isinstance(user_intent, str):
+        user_intent = [user_intent]
+    if not isinstance(user_intent, list):
+        return []
+    from agentmf.matcher import build_request_profile, match_term
+
+    profiles = [build_request_profile(req) for req in requests]
+    broad: list[str] = []
+    for term in user_intent:
+        term_text = str(term).strip()
+        if not term_text:
+            continue
+        # Pruning criterion: short, single-word triggers ("Create",
+        # "Edit", "Files") are the broad ones. Multi-word phrases stay.
+        if " " in term_text or len(term_text) > 12:
+            continue
+        for profile in profiles:
+            detail = match_term(profile, term_text)
+            if detail and detail.get("score", 0) >= 95:
+                if term_text not in broad:
+                    broad.append(term_text)
+                break
+    return broad
 
 
 def _dream_patch_status(wrapper: Dict[str, Any]) -> str:
@@ -1089,6 +1165,8 @@ def _candidate_source_files_for_proposal(
             _apply_update_match_terms_change(change, proposal, source_map, diagnostics)
         elif change_type == "merge_duplicate_targets":
             _apply_merge_duplicate_targets_change(change, proposal, source_map, diagnostics)
+        elif change_type == "prune_match_terms":
+            _apply_prune_match_terms_change(change, proposal, source_map, diagnostics)
 
     candidate_files = []
     for source_path, record in source_map.items():
@@ -1142,6 +1220,50 @@ def _apply_update_match_terms_change(
         if term_text and term_text not in user_intent:
             user_intent.append(term_text)
     match["user_intent"] = user_intent
+
+
+def _apply_prune_match_terms_change(
+    change: Dict[str, Any],
+    proposal: Dict[str, Any],
+    source_map: Dict[Path, Dict[str, Any]],
+    diagnostics: Diagnostics,
+) -> None:
+    """Mirror of update_match_terms: remove specified terms from a target's
+    match.user_intent. Used when an overly-broad term (e.g. a stray single
+    word) is causing false-positive routing.
+    """
+    module_path = _change_module_path(change, proposal)
+    target_name = change.get("target") or _first(proposal.get("scope", {}).get("targets", []))
+    terms = change.get("remove_terms") or change.get("terms") or []
+    if not module_path or not target_name or not isinstance(terms, list):
+        diagnostics.error(
+            "AMF226",
+            "prune_match_terms requires module, target, and remove_terms",
+            "evo.patch.changes",
+        )
+        return
+    source_path = Path(str(module_path))
+    record = _load_module_record(source_path, source_map, diagnostics)
+    if record is None:
+        return
+
+    data = record["data"]
+    targets = data.get("targets") or {}
+    if target_name not in targets:
+        diagnostics.error("AMF227", f"proposal target not found: {target_name}", "evo.patch.target")
+        return
+    target = targets[target_name]
+    match = target.get("match") if isinstance(target.get("match"), dict) else None
+    if match is None:
+        return
+    user_intent = match.get("user_intent")
+    if isinstance(user_intent, str):
+        user_intent = [user_intent]
+    if not isinstance(user_intent, list):
+        diagnostics.error("AMF226", f"target match.user_intent must be a list: {target_name}", "evo.patch.target")
+        return
+    remove_set = {str(term) for term in terms}
+    match["user_intent"] = [term for term in user_intent if str(term) not in remove_set]
 
 
 def _apply_merge_duplicate_targets_change(
