@@ -363,7 +363,7 @@ targets:
     assert result.plan["selected_targets"] == ["code.task"]
     assert result.plan["selection_trace"] == {
         "mode": "request",
-        "algorithm": "normalize_translate_semantic_priority_score_name",
+        "algorithm": "normalize_translate_semantic_priority_score_term-length_name",
         "request": "please implement feature",
         "normalized_request": "please implement feature",
         "expanded_request_terms": ["please", "implement", "feature", "implement this feature"],
@@ -602,6 +602,43 @@ targets:
             "evidence": "complete task",
         }
     ]
+
+
+def test_link_plan_breaks_score_ties_by_longer_matched_term(tmp_path: Path) -> None:
+    """When two targets match a request at the same max score, the target
+    whose matched term is longer wins. Without this rule, a single broad
+    word like `Create` always beats a specific phrase like `create a
+    presentation about Q4 results` because both produce substring score
+    100 and name-alphabetical (`broad` < `specific`) breaks the tie the
+    wrong way — which is the exact failure mode the missing_match_terms
+    detector's add_terms cannot fix on its own.
+    """
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.docs.broad:
+    priority: 70
+    match:
+      user_intent:
+        - Create
+    steps:
+      - action: handle_docs
+  skill.docs.specific:
+    priority: 70
+    match:
+      user_intent:
+        - create a presentation about Q4 results
+    steps:
+      - action: handle_presentation
+""",
+    )
+
+    result = create_link_plan(path, request="create a presentation about Q4 results")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.docs.specific"]
 
 
 def test_link_plan_prefers_verification_for_completion_reports(tmp_path: Path) -> None:

@@ -122,11 +122,13 @@ def _targets_for_request(
     for target in targets:
         match_details = _match_details(target, profile)
         if match_details:
+            score = _match_score(match_details)
             matches.append(
                 (
                     _candidate_source_rank(match_details),
                     target.priority,
-                    _match_score(match_details),
+                    score,
+                    _best_term_length(match_details, score),
                     target.name,
                     target,
                     match_details,
@@ -135,8 +137,8 @@ def _targets_for_request(
     if not matches:
         diagnostics.error("AMF118", "no target matched request", "request")
         return [], {}
-    matches.sort(key=lambda item: (item[0], -item[1], -item[2], item[3]))
-    selected_target = matches[0][4]
+    matches.sort(key=lambda item: (item[0], -item[1], -item[2], -item[3], item[4]))
+    selected_target = matches[0][5]
     selected_name = selected_target.name
     candidates = [
         {
@@ -149,11 +151,12 @@ def _targets_for_request(
             "selected": target.name == selected_name,
             "reason": _reason(match_details),
         }
-        for index, (_source_rank, priority, score, _name, target, match_details) in enumerate(matches, start=1)
+        for index, (_source_rank, priority, score, _best_term_length, _name, target, match_details)
+        in enumerate(matches, start=1)
     ]
     trace = {
         "mode": "request",
-        "algorithm": "normalize_translate_semantic_priority_score_name",
+        "algorithm": "normalize_translate_semantic_priority_score_term-length_name",
         "request": request,
         "normalized_request": profile.normalized,
         "expanded_request_terms": profile.expanded_terms,
@@ -161,8 +164,8 @@ def _targets_for_request(
         "selected": {
             "target": selected_target.name,
             "priority": selected_target.priority,
-            "matched_terms": [detail["term"] for detail in matches[0][5]],
-            "match_details": matches[0][5],
+            "matched_terms": [detail["term"] for detail in matches[0][6]],
+            "match_details": matches[0][6],
             "match_score": matches[0][2],
             "dependency_closure": [],
         },
@@ -223,6 +226,22 @@ def _match_score(match_details: List[dict]) -> int:
     if not match_details:
         return 0
     return max(detail["score"] for detail in match_details)
+
+
+def _best_term_length(match_details: List[dict], top_score: int) -> int:
+    """Length of the longest matched term among details that hit the top score.
+
+    Used as a tie-break in target ranking: when two targets both reach the
+    same max score, the one whose matched term is more specific (longer)
+    wins. Without this, broad single-word match.user_intent entries like
+    `Create` always beat narrow phrases at the same score on name order.
+    """
+    if not match_details:
+        return 0
+    return max(
+        (len(detail.get("term", "")) for detail in match_details if detail.get("score") == top_score),
+        default=0,
+    )
 
 
 def _detail_source_rank(detail: dict) -> int:
