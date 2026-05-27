@@ -2,9 +2,36 @@
 {"id":"methodology-plan","instruction":"write an implementation plan for adding password reset"}
 {"id":"methodology-debug","instruction":"debug failing pytest in tests/test_auth.py"}
 {"id":"methodology-finish","instruction":"finish the development branch and open a pull request"}
-{"id":"bundled-1password","instruction":"retrieve a secret from 1Password CLI"}
-{"id":"bundled-apple-notes","instruction":"create a new Apple Note titled Standup"}
+{"id":"methodology-skill-authoring","instruction":"write a new agentmakefile skill for handling code review"}
+{"id":"methodology-parallel","instruction":"dispatch parallel agents to fix three independent bugs"}
+{"id":"methodology-worktree","instruction":"start feature work in an isolated git worktree"}
+{"id":"methodology-request-review","instruction":"request code review before merging"}
 {"id":"plugins-presentations","instruction":"create a presentation about Q4 results"}
 {"id":"plugins-spreadsheet","instruction":"build a spreadsheet tracking customer churn"}
+{"id":"plugins-stripe","instruction":"set up Stripe Checkout for a subscription plan"}
+{"id":"plugins-documents","instruction":"draft a Word document with formatted text"}
+{"id":"plugins-build-mcp-server","instruction":"build an MCP server for a new tool"}
+{"id":"plugins-build-mcp-app","instruction":"build an MCP application end to end"}
+{"id":"plugins-claude-md-improver","instruction":"improve the project CLAUDE.md guidance file"}
+{"id":"plugins-frontend-design","instruction":"design a frontend component with Tailwind"}
+{"id":"plugins-agent-development","instruction":"develop a new sub-agent for code review"}
+{"id":"plugins-skill-development","instruction":"develop a new claude-code skill"}
+{"id":"skills-imagegen","instruction":"generate an image of a cat wearing sunglasses"}
+{"id":"skills-openai-docs","instruction":"show me documentation for the OpenAI Realtime API"}
+{"id":"skills-skill-installer","instruction":"install a new skill from the clawhub registry"}
+{"id":"bundled-1password","instruction":"retrieve a secret from 1Password CLI"}
+{"id":"bundled-apple-notes","instruction":"create a new Apple Note titled Standup"}
+{"id":"bundled-apple-reminders","instruction":"add a reminder to call the dentist tomorrow"}
+{"id":"bundled-bear-notes","instruction":"open my Bear notes app and search for project notes"}
+{"id":"bundled-discord","instruction":"send a message in the Discord channel"}
+{"id":"bundled-slack","instruction":"post an update to the Slack #engineering channel"}
+{"id":"bundled-github","instruction":"open a GitHub issue for the regression"}
+{"id":"bundled-spotify","instruction":"play the next song on Spotify"}
+{"id":"bundled-weather","instruction":"check the weather forecast for tomorrow"}
+{"id":"bundled-notion","instruction":"create a Notion page summarizing the meeting"}
 {"id":"vendor-aspnet","instruction":"scaffold an ASP.NET Core minimal API project"}
-{"id":"vendor-stripe","instruction":"set up Stripe Checkout for a subscription plan"}
+{"id":"vendor-chatgpt-apps","instruction":"build a ChatGPT app with the apps SDK"}
+{"id":"vendor-figma","instruction":"use Figma MCP to inspect the design tokens"}
+{"id":"vendor-cloudflare-deploy","instruction":"deploy a worker to Cloudflare"}
+{"id":"vendor-vercel-deploy","instruction":"deploy the Next.js app to Vercel"}
+{"id":"vendor-playwright","instruction":"write a Playwright test for the checkout flow"}

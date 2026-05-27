@@ -47,31 +47,44 @@ CURATED_ROOT = REPO_ROOT / "modules" / "openclaw-curated"
 # Hand-curated ground truth: which curated module hosts the *correct* skill
 # for each OpenClaw-domain task. The methodology-* tasks route correctly via
 # the root AgentMakefile and are intentionally absent here.
+def _gt(category: str, target: str) -> Dict[str, str]:
+    return {"module": str(CURATED_ROOT / category / "AgentMakefile"), "target": target}
+
+
 GROUND_TRUTH: Dict[str, Dict[str, str]] = {
-    "bundled-1password": {
-        "module": str(CURATED_ROOT / "uncategorized" / "AgentMakefile"),
-        "target": "skill.uncategorized.1password",
-    },
-    "bundled-apple-notes": {
-        "module": str(CURATED_ROOT / "uncategorized" / "AgentMakefile"),
-        "target": "skill.uncategorized.apple-notes",
-    },
-    "plugins-presentations": {
-        "module": str(CURATED_ROOT / "plugins" / "AgentMakefile"),
-        "target": "skill.plugins.presentations",
-    },
-    "plugins-spreadsheet": {
-        "module": str(CURATED_ROOT / "plugins" / "AgentMakefile"),
-        "target": "skill.plugins.spreadsheets",
-    },
-    "vendor-aspnet": {
-        "module": str(CURATED_ROOT / "vendor_imports" / "AgentMakefile"),
-        "target": "skill.vendor_imports.aspnet-core",
-    },
-    "vendor-stripe": {
-        "module": str(CURATED_ROOT / "plugins" / "AgentMakefile"),
-        "target": "skill.plugins.stripe-projects",
-    },
+    # plugins
+    "plugins-presentations": _gt("plugins", "skill.plugins.presentations"),
+    "plugins-spreadsheet": _gt("plugins", "skill.plugins.spreadsheets"),
+    "plugins-stripe": _gt("plugins", "skill.plugins.stripe-projects"),
+    "plugins-documents": _gt("plugins", "skill.plugins.documents"),
+    "plugins-build-mcp-server": _gt("plugins", "skill.plugins.build-mcp-server"),
+    "plugins-build-mcp-app": _gt("plugins", "skill.plugins.build-mcp-app"),
+    "plugins-claude-md-improver": _gt("plugins", "skill.plugins.claude-md-improver"),
+    "plugins-frontend-design": _gt("plugins", "skill.plugins.frontend-design"),
+    "plugins-agent-development": _gt("plugins", "skill.plugins.agent-development"),
+    "plugins-skill-development": _gt("plugins", "skill.plugins.skill-development"),
+    # skills
+    "skills-imagegen": _gt("skills", "skill.skills.imagegen"),
+    "skills-openai-docs": _gt("skills", "skill.skills.openai-docs"),
+    "skills-skill-installer": _gt("skills", "skill.skills.skill-installer"),
+    # bundled (uncategorized)
+    "bundled-1password": _gt("uncategorized", "skill.uncategorized.1password"),
+    "bundled-apple-notes": _gt("uncategorized", "skill.uncategorized.apple-notes"),
+    "bundled-apple-reminders": _gt("uncategorized", "skill.uncategorized.apple-reminders"),
+    "bundled-bear-notes": _gt("uncategorized", "skill.uncategorized.bear-notes"),
+    "bundled-discord": _gt("uncategorized", "skill.uncategorized.discord"),
+    "bundled-slack": _gt("uncategorized", "skill.uncategorized.slack"),
+    "bundled-github": _gt("uncategorized", "skill.uncategorized.github"),
+    "bundled-spotify": _gt("uncategorized", "skill.uncategorized.spotify-player"),
+    "bundled-weather": _gt("uncategorized", "skill.uncategorized.weather"),
+    "bundled-notion": _gt("uncategorized", "skill.uncategorized.notion"),
+    # vendor_imports
+    "vendor-aspnet": _gt("vendor_imports", "skill.vendor_imports.aspnet-core"),
+    "vendor-chatgpt-apps": _gt("vendor_imports", "skill.vendor_imports.chatgpt-apps"),
+    "vendor-figma": _gt("vendor_imports", "skill.vendor_imports.figma"),
+    "vendor-cloudflare-deploy": _gt("vendor_imports", "skill.vendor_imports.cloudflare-deploy"),
+    "vendor-vercel-deploy": _gt("vendor_imports", "skill.vendor_imports.vercel-deploy"),
+    "vendor-playwright": _gt("vendor_imports", "skill.vendor_imports.playwright"),
 }
 
 
@@ -211,7 +224,28 @@ def render_delta(before: Dict[str, Dict[str, Optional[str]]], after: Dict[str, D
             lines.append(f"{task_id}, {module_label}, {b}, {a}, {target_for_module or '-'}, {flipped_correct}")
     lines.append("")
     lines.append(f"Total flips toward ground truth: {flips}")
+    # Per-snapshot ground-truth correctness count.
+    before_correct, after_correct = _ground_truth_correct_counts(before, after)
+    lines.append(f"Ground-truth correct (before loop): {before_correct} / {len(GROUND_TRUTH)}")
+    lines.append(f"Ground-truth correct (after loop):  {after_correct} / {len(GROUND_TRUTH)}")
     return "\n".join(lines)
+
+
+def _ground_truth_correct_counts(
+    before: Dict[str, Dict[str, Optional[str]]],
+    after: Dict[str, Dict[str, Optional[str]]],
+) -> Tuple[int, int]:
+    """Count, per snapshot, how many ground-truth tasks route to the right
+    skill in their intended module."""
+    before_correct = 0
+    after_correct = 0
+    for task_id, ground in GROUND_TRUTH.items():
+        intended_label = f"curated/{Path(ground['module']).parent.name}"
+        if before.get(task_id, {}).get(intended_label) == ground["target"]:
+            before_correct += 1
+        if after.get(task_id, {}).get(intended_label) == ground["target"]:
+            after_correct += 1
+    return before_correct, after_correct
 
 
 def main() -> int:
