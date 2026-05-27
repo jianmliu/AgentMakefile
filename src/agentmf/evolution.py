@@ -646,6 +646,9 @@ def create_dream_mode_payload(
     proposals.extend(
         _dream_missing_match_terms(evidence_files, out_dir, timestamp, write, diagnostics)
     )
+    proposals.extend(
+        _dream_drifted_permissions(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
     if diagnostics.has_errors:
         return DreamModeResult(diagnostics)
     return DreamModeResult(
@@ -885,6 +888,84 @@ def _broad_match_terms_to_prune(
                     broad.append(term_text)
                 break
     return broad
+
+
+DREAM_PERMISSION_DRIFT_THRESHOLD = 2
+
+
+def _dream_drifted_permissions(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """Surface recurring `denied_tool_calls` from benchmark evidence as
+    `investigate_permission_drift` proposals — one per
+    (target, tool, pattern) triple that appears in >=N records.
+
+    Like recurring_routing_gap this detector flags evidence for human
+    review rather than auto-patching: deciding to flip a deny to allow
+    or update the permission guard is a security-sensitive choice, so
+    the proposal stays "candidate + requires_review" and the patch
+    class (`update_permission_guard`) is intentionally separate.
+    """
+    denials_by_triple: Dict[tuple[str, str, str], list[Dict[str, Any]]] = {}
+    for evidence_file in evidence_files:
+        for record in _load_evidence_records([evidence_file], diagnostics):
+            if record.get("source") != "benchmark":
+                continue
+            summary = record.get("summary")
+            if not isinstance(summary, dict):
+                continue
+            denied = summary.get("denied_tool_calls")
+            if not isinstance(denied, list):
+                continue
+            for entry in denied:
+                if not isinstance(entry, dict):
+                    continue
+                target = entry.get("target")
+                tool = entry.get("tool")
+                pattern = entry.get("pattern")
+                if not isinstance(target, str) or not isinstance(tool, str) or not isinstance(pattern, str):
+                    continue
+                key = (target, tool, pattern)
+                denials_by_triple.setdefault(key, []).append(record)
+
+    proposals: list[Dict[str, Any]] = []
+    for key in sorted(denials_by_triple):
+        records = denials_by_triple[key]
+        if len(records) < DREAM_PERMISSION_DRIFT_THRESHOLD:
+            continue
+        target, tool, pattern = key
+        sample_event_ids = sorted(str(record.get("event_id", "")) for record in records)
+        change = {
+            "type": "investigate_permission_drift",
+            "target": target,
+            "tool": tool,
+            "pattern": pattern,
+            "denial_count": len(records),
+            "sample_event_ids": sample_event_ids[:5],
+        }
+        result = create_skill_workshop_proposal_payload(
+            title=f"Investigate permission drift: {target} / {tool} / {pattern}",
+            evidence_records=records,
+            scope={"modules": [], "targets": [target]},
+            changes=[change],
+            evaluation_commands=[],
+            out_dir=out_dir,
+            timestamp=timestamp,
+            write=write,
+        )
+        diagnostics.extend(result.diagnostics.items)
+        if result.payload:
+            proposals.append(
+                {
+                    **result.payload,
+                    "patch_status": _dream_patch_status(result.payload),
+                }
+            )
+    return proposals
 
 
 def _dream_patch_status(wrapper: Dict[str, Any]) -> str:

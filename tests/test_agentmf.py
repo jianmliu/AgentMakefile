@@ -2859,6 +2859,81 @@ targets:
     assert "Create" in load_source(module_path).targets["skill.plugins.documents"].match["user_intent"]
 
 
+def test_dream_mode_drifted_permissions_proposes_review_for_recurring_denials(tmp_path: Path) -> None:
+    """Benchmark evidence reporting recurring denied_tool_calls on the same
+    (target, tool, pattern) triple should surface as an
+    investigate_permission_drift proposal. Single denials don't qualify
+    as "drift" yet — threshold mirrors the recurring_routing_gap detector.
+    """
+    evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence" / "benchmarks"
+    evidence_root.mkdir(parents=True)
+    evidence_file = evidence_root / "benchmark.jsonl"
+    records = [
+        {
+            "version": 1,
+            "event_id": "sha256:b1",
+            "timestamp": "2026-05-27T00:00:00Z",
+            "source": "benchmark",
+            "request_fingerprint": "sha256:r1",
+            "selected_target": "skill.coding.review",
+            "summary": {
+                "denied_tool_calls": [{"target": "skill.coding.review", "tool": "bash", "pattern": "npm install*"}],
+            },
+        },
+        {
+            "version": 1,
+            "event_id": "sha256:b2",
+            "timestamp": "2026-05-27T00:00:01Z",
+            "source": "benchmark",
+            "request_fingerprint": "sha256:r2",
+            "selected_target": "skill.coding.review",
+            "summary": {
+                "denied_tool_calls": [{"target": "skill.coding.review", "tool": "bash", "pattern": "npm install*"}],
+            },
+        },
+        {
+            "version": 1,
+            "event_id": "sha256:b3",
+            "timestamp": "2026-05-27T00:00:02Z",
+            "source": "benchmark",
+            "request_fingerprint": "sha256:r3",
+            "selected_target": "skill.coding.review",
+            "summary": {
+                # Single occurrence; below the recurring threshold.
+                "denied_tool_calls": [{"target": "skill.coding.review", "tool": "bash", "pattern": "rm -rf*"}],
+            },
+        },
+    ]
+    evidence_file.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+    from agentmf.evolution import create_dream_mode_payload
+
+    result = create_dream_mode_payload(
+        evidence_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-27T01:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    drift_proposals = [
+        p
+        for p in result.payload["proposals"]
+        if p["proposal"]["changes"][0]["type"] == "investigate_permission_drift"
+    ]
+    # Only the npm install pattern recurred (2 denials); rm -rf occurred once
+    # and is below threshold.
+    assert len(drift_proposals) == 1
+    change = drift_proposals[0]["proposal"]["changes"][0]
+    assert change["target"] == "skill.coding.review"
+    assert change["tool"] == "bash"
+    assert change["pattern"] == "npm install*"
+    assert change["denial_count"] == 2
+    assert sorted(change["sample_event_ids"]) == ["sha256:b1", "sha256:b2"]
+    # Not a fix yet — patch generator can't act on this class.
+    assert drift_proposals[0]["patch_status"] == "skipped_unsupported_change"
+
+
 def test_dream_mode_missing_match_terms_proposes_update_for_user_feedback(tmp_path: Path) -> None:
     """user_feedback evidence saying "request X should have routed to target Y"
     must surface as an update_match_terms proposal that adds the request to
