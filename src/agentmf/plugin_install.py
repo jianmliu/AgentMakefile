@@ -6,6 +6,7 @@ from shlex import quote
 from typing import Any, Dict, Optional, Sequence, Union
 
 from agentmf.diagnostics import Diagnostics
+from agentmf.guidance_scanner import render_agentmakefile_from_guidance_files
 from agentmf.plugin import HOSTS
 from agentmf.skill_scanner import render_agentmakefile_from_skill_dirs
 
@@ -24,8 +25,9 @@ class PluginInstallPayloadResult:
 
 
 def create_plugin_install_payload(
-    skill_dirs: Sequence[Union[Path, str]],
+    skill_dirs: Sequence[Union[Path, str]] = (),
     *,
+    sources: Sequence[Union[Path, str]] = (),
     host: str = "generic",
     namespace: Optional[str] = None,
     package_name: str = "scanned-skills",
@@ -34,6 +36,17 @@ def create_plugin_install_payload(
     out_path: Union[Path, str] = DEFAULT_PLUGIN_AGENTMAKEFILE,
     write: bool = False,
 ) -> PluginInstallPayloadResult:
+    """Generate a plugin AgentMakefile from one of:
+
+    - `skill_dirs`: directory trees of SKILL.md files (existing behaviour;
+      uses `render_agentmakefile_from_skill_dirs`)
+    - `sources`: single guidance files (SKILL.md / AGENTS.md / CLAUDE.md /
+      markdown; uses `render_agentmakefile_from_guidance_files`)
+
+    Exactly one mode wins per call. When both are passed, skill_dirs takes
+    precedence (preserves legacy callers) and sources is reported but
+    unused; a diagnostic flags the conflict.
+    """
     diagnostics = Diagnostics()
     if host not in HOSTS:
         diagnostics.error(
@@ -44,20 +57,44 @@ def create_plugin_install_payload(
         )
         return PluginInstallPayloadResult(diagnostics)
 
-    paths = [Path(path) for path in skill_dirs]
-    try:
-        content = render_agentmakefile_from_skill_dirs(
-            paths,
-            namespace=namespace,
-            package_name=package_name,
-            package_description=package_description,
-            bootstrap_skill=bootstrap_skill,
+    skill_dir_paths = [Path(path) for path in skill_dirs]
+    source_paths = [Path(path) for path in sources]
+    if not skill_dir_paths and not source_paths:
+        diagnostics.error(
+            "AMF139",
+            "plugin install requires at least one --skills-dir or --source",
+            "plugin.install.sources",
         )
+        return PluginInstallPayloadResult(diagnostics)
+    if skill_dir_paths and source_paths:
+        diagnostics.warning(
+            "AMF139",
+            "both --skills-dir and --source provided; using --skills-dir and ignoring --source",
+            "plugin.install.sources",
+        )
+
+    try:
+        if skill_dir_paths:
+            content = render_agentmakefile_from_skill_dirs(
+                skill_dir_paths,
+                namespace=namespace,
+                package_name=package_name,
+                package_description=package_description,
+                bootstrap_skill=bootstrap_skill,
+            )
+            effective_sources: list = []
+        else:
+            content = render_agentmakefile_from_guidance_files(
+                source_paths,
+                package_name=package_name,
+                package_description=package_description,
+            )
+            effective_sources = source_paths
     except ValueError as exc:
         diagnostics.error(
             "AMF137",
-            "could not scan skills for plugin install",
-            "plugin.install.skills",
+            "could not scan inputs for plugin install",
+            "plugin.install.sources",
             str(exc),
         )
         return PluginInstallPayloadResult(diagnostics)
@@ -81,7 +118,8 @@ def create_plugin_install_payload(
         "version": 1,
         "host": host,
         "mode": "plugin_install",
-        "skills_dirs": [str(path) for path in paths],
+        "skills_dirs": [str(path) for path in skill_dir_paths],
+        "sources": [str(path) for path in effective_sources],
         "agentmakefile": {
             "path": str(destination),
             "wrote": write,

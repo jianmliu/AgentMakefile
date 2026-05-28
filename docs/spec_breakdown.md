@@ -1505,9 +1505,10 @@ Acceptance:
 
 ### AMF-PAD-014 Multi-Source Guidance Ingestion
 
-Status: implemented first slice (`agentmf guidance scan` ships with
-SKILL.md / AGENTS.md / CLAUDE.md / plain-markdown readers; `skill-dir`
-support stays at `agentmf skills scan`).
+Status: implemented (`agentmf guidance scan` ships SKILL.md / AGENTS.md /
+CLAUDE.md / plain-markdown readers; `agentmf plugin install --source`
+accepts the same source files alongside the legacy `--skills-dir` path;
+`skill-dir` directory-tree support stays at `agentmf skills scan`).
 
 Goal: generalize reverse import from existing `SKILL.md` package directories to
 broader guidance corpora such as `AGENTS.md`, `CLAUDE.md`, standalone
@@ -1808,6 +1809,41 @@ Acceptance:
 - JSON output is suitable for CI and future benchmark suites.
 
 Plan: `docs/superpowers/plans/2026-05-26-agentmf-benchmark-cli.md`.
+
+### AMF-BENCH-007 First Host Execution Adapter
+
+Status: implemented (subprocess-based; provider-agnostic).
+
+Goal: provide one opt-in execution adapter that runs each task through
+an external process, so the BENCH-006 contract can be exercised end-to-
+end without baking in a specific provider runtime.
+
+Implementation:
+
+- `agentmf benchmark suite --adapter subprocess-execution
+  --runner-command "<cmd>"` shells out per task. The adapter pipes a
+  JSON record (`{task_id, request, expected_targets, expected_skills,
+  agentmakefile}`) into the runner's stdin and parses the runner's
+  stdout as a JSON result.
+- Runner output follows the BENCH-006 host_execution_adapter_contract:
+  required `task_id`, `pass`; optional `actual_target`,
+  `fail_reason`, `cost_usd`, `wall_time_ms`, `prompt_tokens`,
+  `completion_tokens`.
+- A missing runner-command yields AMF253 and refuses to fabricate
+  results.
+- Subprocess errors, non-zero exits, and unparsable JSON all flip the
+  corresponding task to status=failed with a structured fail_reason
+  in the record.
+- Timeout is capped at 60 s per task to prevent runaway runners from
+  blocking the suite.
+
+Acceptance:
+
+- A team can ship a runner script (calling Codex / Claude Code / a
+  test harness) and exercise the full deterministic + execution
+  pipeline without changing AgentMakefile.
+- The contract test uses a vanilla Python runner script for CI so no
+  provider credentials are required.
 
 ### AMF-BENCH-006 Execution Adapter Contract
 
@@ -2462,9 +2498,12 @@ Implemented scope:
     common request as the case instruction. The target's module is
     resolved by scanning modules referenced in any nearby
     openclaw_import evidence.
-- Category module suggestions remain a future task (the OpenClaw
-  importer already splits modules per category at scan time, so this
-  primarily covers re-splitting an already-imported tree).
+  - `_dream_category_resplit` (re-split suggestion): groups skills
+    inside an already-imported module by the second segment of
+    `implementation.relative_source`. Sub-categories that gather
+    >=10 skills become `investigate_category_resplit` proposals
+    (flag-only — splitting an imported tree is a maintenance call
+    best left to a reviewer).
 
 ## Post-MVP Runtime Work
 
@@ -2574,7 +2613,7 @@ Completed:
 
 Next:
 
-- AMF-PAD-014 Multi-Source Guidance Ingestion (`agentmf guidance scan` ships SKILL.md / AGENTS.md / CLAUDE.md / markdown readers; skill-dir stays in `agentmf skills scan`. `agentmf plugin install --source` extension still pending).
+- AMF-PAD-014 Multi-Source Guidance Ingestion (`agentmf guidance scan` ships SKILL.md / AGENTS.md / CLAUDE.md / markdown readers; `agentmf plugin install --source` accepts the same; skill-dir stays in `agentmf skills scan`).
 - AMF-BENCH-002 Suite File Parser (`agentmf.benchmark_suite.parse_suite_file`; structured AMF250 diagnostics).
 - AMF-BENCH-003 Deterministic Suite Runner (`agentmf benchmark suite --adapter deterministic-selection` drives each task through `create_link_plan`).
 - AMF-BENCH-004 Report Writer (`render_suite_markdown` + JSON / text CLI formats).

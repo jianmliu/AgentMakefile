@@ -3633,6 +3633,92 @@ targets:
     assert patch_result.payload["patch_status"] == "generated"
 
 
+def test_dream_mode_category_resplit_suggests_sub_module_split(tmp_path: Path) -> None:
+    """When an already-imported module hosts many skills sharing a common
+    second-level path segment in their `relative_source`, the detector
+    suggests splitting them into a sub-module. Sub-categories below the
+    threshold are not flagged.
+    """
+    module_path = tmp_path / "modules" / "openclaw" / ".tmp" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    # Build a synthetic module: 12 skills under `.tmp/bundled-marketplaces/`,
+    # 4 skills under `.tmp/plugins/`, both nested under the same module.
+    skills_yaml_lines = ["version: \"0.1\"", "skills:"]
+    for index in range(12):
+        skills_yaml_lines.extend(
+            [
+                f"  .tmp.bundled-{index:02d}:",
+                "    description: bundled marketplace skill.",
+                "    implementation:",
+                f"      relative_source: .tmp/bundled-marketplaces/marketplace-{index}/skills/skill-{index}/SKILL.md",
+                "    match:",
+                "      user_intent:",
+                f"        - bundled {index}",
+            ]
+        )
+    for index in range(4):
+        skills_yaml_lines.extend(
+            [
+                f"  .tmp.plugin-{index:02d}:",
+                "    description: cached plugin skill.",
+                "    implementation:",
+                f"      relative_source: .tmp/plugins/plugin-{index}/SKILL.md",
+                "    match:",
+                "      user_intent:",
+                f"        - plugin {index}",
+            ]
+        )
+    module_path.write_text("\n".join(skills_yaml_lines) + "\n")
+
+    evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+
+    create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload={
+            "openclaw_import": {
+                "root_path": str(tmp_path / "modules" / "openclaw" / "AgentMakefile"),
+                "skill_count": 16,
+                "category_count": 1,
+                "categories": [{"name": ".tmp", "skill_count": 16}],
+                "curator_evidence": {
+                    "skill_count": 16,
+                    "category_count": 1,
+                    "categories": {".tmp": 16},
+                    "duplicate_original_names": {},
+                    "module_paths": [str(module_path)],
+                },
+            }
+        },
+        out_dir=evidence_dir,
+        write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_dir,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-28T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    resplits = [
+        p
+        for p in result.payload["proposals"]
+        if p["proposal"]["changes"][0]["type"] == "investigate_category_resplit"
+    ]
+    # Only the 12-skill bundled-marketplaces group hits the >=10 threshold.
+    assert len(resplits) == 1
+    change = resplits[0]["proposal"]["changes"][0]
+    assert change["module"] == str(module_path)
+    assert change["sub_category"] == "bundled-marketplaces"
+    assert change["skill_count"] == 12
+    assert isinstance(change["sample_skills"], list) and 1 <= len(change["sample_skills"]) <= 5
+    # Non-patch class.
+    assert resplits[0]["patch_status"] == "skipped_unsupported_change"
+
+
 def test_dream_mode_trust_annotation_flags_cache_derived_skills(tmp_path: Path) -> None:
     """Skills whose implementation.relative_source comes from ephemeral
     cache paths (`.tmp/` or `/cache/`) should be tagged with
@@ -3973,6 +4059,49 @@ targets:
     )
     assert patch_result.ok, patch_result.diagnostics.format()
     assert patch_result.payload["patch_status"] == "generated"
+
+
+def test_cli_plugin_install_accepts_source_for_guidance_md(tmp_path: Path, capsys) -> None:
+    """PAD-014 follow-up: `agentmf plugin install --source <markdown>` should
+    route through `guidance_scanner` and emit a guidance-index AgentMakefile,
+    parallel to the existing `--skills-dir` path. `--skills-dir` stays
+    optional when `--source` is provided.
+    """
+    agents_path = tmp_path / "AGENTS.md"
+    agents_path.write_text(
+        "# Project Agents\n\n"
+        "## Routing Guidance\n\n"
+        "Use when deciding which agent target to invoke.\n"
+    )
+    out_path = tmp_path / "plugin" / "AgentMakefile"
+
+    exit_code = main(
+        [
+            "plugin",
+            "install",
+            "--source",
+            str(agents_path),
+            "--host",
+            "generic",
+            "--out",
+            str(out_path),
+            "--write",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    install = payload["plugin_install_payload"]
+    assert install["agentmakefile"]["wrote"] is True
+    assert install["sources"] == [str(agents_path)]
+    assert install["skills_dirs"] == []
+    written = out_path.read_text()
+    data = yaml.safe_load(written)
+    assert data["metadata"]["module_type"] == "guidance-index"
+    assert any("routing-guidance" in name for name in data["targets"])
 
 
 def test_cli_guidance_scan_imports_agents_and_claude_md(tmp_path: Path, capsys) -> None:
@@ -4413,6 +4542,126 @@ def test_cli_benchmark_adapter_contract_emits_host_execution_schema(capsys) -> N
     # Optional cost/wall-time fields available for budgeting.
     assert "cost_usd" in contract["output_contract"]["optional_fields"]
     assert "wall_time_ms" in contract["output_contract"]["optional_fields"]
+
+
+def test_benchmark_suite_subprocess_adapter_runs_external_runner(tmp_path: Path) -> None:
+    """BENCH-007 first host execution adapter: a `subprocess-execution`
+    adapter pipes one JSON record per task into a configured external
+    runner and reads back a JSON pass/fail record. Verifies the contract
+    works end-to-end with a tiny Python runner script — no provider
+    credentials required.
+    """
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.review:
+    priority: 70
+    match:
+      user_intent:
+        - review the diff
+    steps:
+      - action: inspect
+""",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: subprocess-adapter
+  title: subprocess adapter check
+agentmakefile: {module_path}
+tasks:
+  - id: t-pass
+    request: review the diff carefully
+    expected_targets:
+      - skill.review
+  - id: t-fail
+    request: review the diff carefully
+    expected_targets:
+      - skill.review
+"""
+    )
+    runner_script = tmp_path / "runner.py"
+    runner_script.write_text(
+        "import sys, json\n"
+        "record = json.loads(sys.stdin.read())\n"
+        "result = {\n"
+        "    'task_id': record['task_id'],\n"
+        "    'pass': record['task_id'] == 't-pass',\n"
+        "    'actual_target': 'skill.review',\n"
+        "}\n"
+        "sys.stdout.write(json.dumps(result))\n"
+    )
+
+    from agentmf.benchmark_suite import create_suite_payload
+
+    import sys as _sys
+
+    result = create_suite_payload(
+        suite_file=suite_path,
+        agentmakefile=None,
+        adapter="subprocess-execution",
+        runner_command=f"{_sys.executable} {runner_script}",
+    )
+
+    assert result.ok, result.diagnostics.format()
+    summary = result.payload["summary"]
+    assert summary == {"total": 2, "passed": 1, "failed": 1, "skipped": 0}
+    by_id = {task["task_id"]: task for task in result.payload["tasks"]}
+    assert by_id["t-pass"]["status"] == "passed"
+    assert by_id["t-pass"]["actual_target"] == "skill.review"
+    assert by_id["t-fail"]["status"] == "failed"
+
+
+def test_benchmark_suite_subprocess_adapter_requires_runner_command(tmp_path: Path) -> None:
+    """When --adapter subprocess-execution is requested without a runner
+    command the suite returns a structured diagnostic and refuses to
+    fabricate results."""
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.x:
+    priority: 70
+    match:
+      user_intent:
+        - alpha
+    steps:
+      - action: a
+""",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: no-runner
+  title: no runner
+agentmakefile: {module_path}
+tasks:
+  - id: a
+    request: alpha please
+    expected_targets:
+      - skill.x
+"""
+    )
+
+    from agentmf.benchmark_suite import create_suite_payload
+
+    result = create_suite_payload(
+        suite_file=suite_path,
+        agentmakefile=None,
+        adapter="subprocess-execution",
+        runner_command=None,
+    )
+
+    assert not result.ok
+    codes = [item.code for item in result.diagnostics.items]
+    assert "AMF253" in codes
 
 
 def test_cli_benchmark_suite_runs_and_emits_json(tmp_path: Path, capsys) -> None:

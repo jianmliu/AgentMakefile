@@ -876,6 +876,9 @@ def create_dream_mode_payload(
     proposals.extend(
         _dream_benchmark_case_suggester(evidence_files, out_dir, timestamp, write, diagnostics)
     )
+    proposals.extend(
+        _dream_category_resplit(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
     if diagnostics.has_errors:
         return DreamModeResult(diagnostics)
     return DreamModeResult(
@@ -1447,6 +1450,81 @@ def _dream_benchmark_case_suggester(
         diagnostics.extend(result.diagnostics.items)
         if result.payload:
             proposals.append({**result.payload, "patch_status": _dream_patch_status(result.payload)})
+    return proposals
+
+
+DREAM_CATEGORY_RESPLIT_THRESHOLD = 10
+
+
+def _dream_category_resplit(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """Suggest splitting an already-imported module when many of its
+    skills cluster under a common second-level path segment in their
+    `implementation.relative_source`. Each sub-category that breaches the
+    threshold becomes one `investigate_category_resplit` proposal — a
+    flag for human review, not an automatic patch (the importer's
+    scan-time category split runs first; this detector fires on the
+    re-split case where the imported tree itself contains rich sub-
+    structure).
+    """
+    proposals: list[Dict[str, Any]] = []
+    for module_path in _modules_from_openclaw_evidence(evidence_files, diagnostics):
+        if not module_path.exists():
+            continue
+        try:
+            data = yaml.safe_load(module_path.read_text(encoding="utf-8")) or {}
+        except OSError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        skills = data.get("skills") or {}
+        if not isinstance(skills, dict):
+            continue
+        groups: Dict[str, list[str]] = {}
+        for skill_name, skill in skills.items():
+            if not isinstance(skill, dict):
+                continue
+            impl = skill.get("implementation") or {}
+            rel = impl.get("relative_source") if isinstance(impl, dict) else None
+            if not isinstance(rel, str):
+                continue
+            segments = [segment for segment in rel.split("/") if segment]
+            # Need at least <category>/<sub-category>/... to split.
+            if len(segments) < 3:
+                continue
+            sub_category = segments[1]
+            if not sub_category:
+                continue
+            groups.setdefault(sub_category, []).append(skill_name)
+        for sub_category in sorted(groups):
+            members = groups[sub_category]
+            if len(members) < DREAM_CATEGORY_RESPLIT_THRESHOLD:
+                continue
+            change = {
+                "type": "investigate_category_resplit",
+                "module": str(module_path),
+                "sub_category": sub_category,
+                "skill_count": len(members),
+                "sample_skills": sorted(members)[:5],
+            }
+            result = create_skill_workshop_proposal_payload(
+                title=f"Investigate re-splitting {module_path.name} into sub-module {sub_category}",
+                evidence_records=[],
+                scope={"modules": [str(module_path)], "targets": []},
+                changes=[change],
+                evaluation_commands=[],
+                out_dir=out_dir,
+                timestamp=timestamp,
+                write=write,
+            )
+            diagnostics.extend(result.diagnostics.items)
+            if result.payload:
+                proposals.append({**result.payload, "patch_status": _dream_patch_status(result.payload)})
     return proposals
 
 

@@ -145,9 +145,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     plugin_payload_cmd.add_argument("--format", choices=["text", "json"], default="json")
     plugin_install_cmd = plugin_subcommands.add_parser(
         "install",
-        help="scan skills into a plugin AgentMakefile and emit model instructions",
+        help="scan skills or guidance Markdown into a plugin AgentMakefile and emit model instructions",
     )
-    plugin_install_cmd.add_argument("--skills-dir", action="append", dest="skills_dirs", required=True)
+    plugin_install_cmd.add_argument(
+        "--skills-dir",
+        action="append",
+        dest="skills_dirs",
+        default=[],
+        help="scan a SKILL.md directory tree (repeatable); preserved for backwards compatibility",
+    )
+    plugin_install_cmd.add_argument(
+        "--source",
+        action="append",
+        dest="sources",
+        default=[],
+        help="scan a single guidance file (SKILL.md / AGENTS.md / CLAUDE.md / markdown); repeatable",
+    )
     plugin_install_cmd.add_argument("--host", choices=["generic", "codex", "claude-code", "cursor", "opencode"], default="generic")
     plugin_install_cmd.add_argument("--namespace")
     plugin_install_cmd.add_argument("--package-name", default="scanned-skills")
@@ -309,8 +322,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     benchmark_suite_cmd.add_argument("--file", help="AgentMakefile path; overrides suite.agentmakefile")
     benchmark_suite_cmd.add_argument(
         "--adapter",
-        choices=["deterministic-selection"],
+        choices=["deterministic-selection", "subprocess-execution"],
         default="deterministic-selection",
+    )
+    benchmark_suite_cmd.add_argument(
+        "--runner-command",
+        help="shell-split command invoked per task by the subprocess-execution adapter; "
+        "receives task JSON on stdin and must emit BENCH-006-shaped result JSON on stdout",
     )
     benchmark_suite_cmd.add_argument("--format", choices=["text", "json", "markdown"], default="json")
     benchmark_suite_cmd.add_argument(
@@ -918,6 +936,7 @@ def _benchmark_suite(args: argparse.Namespace) -> int:
         suite_file=Path(args.suite),
         agentmakefile=Path(args.file) if args.file else None,
         adapter=args.adapter,
+        runner_command=getattr(args, "runner_command", None),
     )
     if args.format == "json":
         print(
@@ -1844,8 +1863,14 @@ def _plugin_payload(args: argparse.Namespace) -> int:
 
 
 def _plugin_install(args: argparse.Namespace) -> int:
+    sources = getattr(args, "sources", []) or []
+    skills_dirs = getattr(args, "skills_dirs", []) or []
+    if not sources and not skills_dirs:
+        print("error: --skills-dir or --source is required for plugin install", file=sys.stderr)
+        return 2
     result = create_plugin_install_payload(
-        skill_dirs=[Path(path) for path in args.skills_dirs],
+        skill_dirs=[Path(path) for path in skills_dirs],
+        sources=[Path(path) for path in sources],
         host=args.host,
         namespace=args.namespace,
         package_name=args.package_name,

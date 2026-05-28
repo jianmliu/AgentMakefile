@@ -16,6 +16,9 @@ Public surface:
 
 from __future__ import annotations
 
+import json
+import shlex
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -26,7 +29,8 @@ from agentmf.diagnostics import Diagnostics
 
 KNOWN_TOP_LEVEL_KEYS = {"version", "suite", "tasks", "baselines", "adapters", "scoring", "agentmakefile"}
 KNOWN_TASK_KEYS = {"id", "request", "repo", "expected_targets", "expected_skills", "verifier", "tags"}
-SUPPORTED_ADAPTERS = {"deterministic-selection"}
+SUPPORTED_ADAPTERS = {"deterministic-selection", "subprocess-execution"}
+SUBPROCESS_RUNNER_TIMEOUT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -152,6 +156,7 @@ def create_suite_payload(
     suite_file: Union[Path, str],
     agentmakefile: Optional[Union[Path, str]] = None,
     adapter: str = "deterministic-selection",
+    runner_command: Optional[str] = None,
 ) -> SuiteRunResult:
     diagnostics = Diagnostics()
     if adapter not in SUPPORTED_ADAPTERS:
@@ -187,6 +192,15 @@ def create_suite_payload(
 
     if adapter == "deterministic-selection":
         task_records = _run_deterministic(suite, target_agentmakefile)
+    elif adapter == "subprocess-execution":
+        if not runner_command:
+            diagnostics.error(
+                "AMF253",
+                "subprocess-execution adapter requires --runner-command",
+                "benchmark.suite.runner_command",
+            )
+            return SuiteRunResult(diagnostics)
+        task_records = _run_subprocess(suite, target_agentmakefile, runner_command, diagnostics)
     else:  # pragma: no cover - guarded above
         task_records = []
 
@@ -250,6 +264,112 @@ def _run_deterministic(suite: SuiteSpec, agentmakefile: Path) -> List[Dict[str, 
                 "actual_skills": actual_skills,
                 "status": status,
                 "diagnostics": plan_result.diagnostics.to_list(),
+            }
+        )
+    return records
+
+
+def _run_subprocess(
+    suite: SuiteSpec,
+    agentmakefile: Path,
+    runner_command: str,
+    diagnostics: Diagnostics,
+) -> List[Dict[str, Any]]:
+    """BENCH-007 first host execution adapter.
+
+    For each task, send a one-line JSON record to the runner's stdin and
+    parse a one-line JSON record from its stdout. The runner is opaque to
+    AgentMakefile: it can be a script that shells out to Codex, a local
+    `agentmf ask --provider echo` invocation, or anything else that
+    speaks the BENCH-006 host_execution_adapter_contract.
+    """
+    try:
+        argv = shlex.split(runner_command)
+    except ValueError as exc:
+        diagnostics.error(
+            "AMF253",
+            f"could not parse runner command: {runner_command}",
+            "benchmark.suite.runner_command",
+            str(exc),
+        )
+        return []
+    if not argv:
+        diagnostics.error("AMF253", "runner command must be non-empty", "benchmark.suite.runner_command")
+        return []
+
+    records: List[Dict[str, Any]] = []
+    for task in suite.tasks:
+        input_record = {
+            "task_id": task.task_id,
+            "request": task.request,
+            "expected_targets": list(task.expected_targets),
+            "expected_skills": list(task.expected_skills),
+            "agentmakefile": str(agentmakefile),
+        }
+        try:
+            proc = subprocess.run(
+                argv,
+                input=json.dumps(input_record),
+                capture_output=True,
+                text=True,
+                timeout=SUBPROCESS_RUNNER_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            records.append(
+                {
+                    "task_id": task.task_id,
+                    "request": task.request,
+                    "expected_targets": list(task.expected_targets),
+                    "expected_skills": list(task.expected_skills),
+                    "actual_target": None,
+                    "status": "failed",
+                    "fail_reason": f"runner invocation error: {exc}",
+                }
+            )
+            continue
+        if proc.returncode != 0:
+            records.append(
+                {
+                    "task_id": task.task_id,
+                    "request": task.request,
+                    "expected_targets": list(task.expected_targets),
+                    "expected_skills": list(task.expected_skills),
+                    "actual_target": None,
+                    "status": "failed",
+                    "fail_reason": f"runner exit {proc.returncode}: {proc.stderr.strip()}",
+                }
+            )
+            continue
+        try:
+            output = json.loads(proc.stdout.strip().splitlines()[-1]) if proc.stdout.strip() else {}
+        except (json.JSONDecodeError, IndexError) as exc:
+            records.append(
+                {
+                    "task_id": task.task_id,
+                    "request": task.request,
+                    "expected_targets": list(task.expected_targets),
+                    "expected_skills": list(task.expected_skills),
+                    "actual_target": None,
+                    "status": "failed",
+                    "fail_reason": f"could not parse runner stdout: {exc}",
+                }
+            )
+            continue
+        passed = bool(output.get("pass"))
+        records.append(
+            {
+                "task_id": task.task_id,
+                "request": task.request,
+                "expected_targets": list(task.expected_targets),
+                "expected_skills": list(task.expected_skills),
+                "actual_target": output.get("actual_target"),
+                "status": "passed" if passed else "failed",
+                "fail_reason": output.get("fail_reason") if not passed else None,
+                "cost_usd": output.get("cost_usd"),
+                "wall_time_ms": output.get("wall_time_ms"),
+                "prompt_tokens": output.get("prompt_tokens"),
+                "completion_tokens": output.get("completion_tokens"),
             }
         )
     return records
