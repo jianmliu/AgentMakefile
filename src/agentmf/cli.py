@@ -178,6 +178,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     skills_sync_cmd.add_argument("--force", action="store_true")
     skills_sync_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
+    guidance_cmd = subparsers.add_parser("guidance", help="Import heterogeneous guidance corpora as AgentMakefile modules")
+    guidance_subcommands = guidance_cmd.add_subparsers(dest="guidance_command", required=True)
+    guidance_scan_cmd = guidance_subcommands.add_parser(
+        "scan",
+        help="scan SKILL.md / AGENTS.md / CLAUDE.md / plain Markdown into one guidance-index AgentMakefile",
+    )
+    guidance_scan_cmd.add_argument("--source", action="append", dest="sources", required=True)
+    guidance_scan_cmd.add_argument("--package-name", default="imported-guidance")
+    guidance_scan_cmd.add_argument("--package-description")
+    guidance_scan_cmd.add_argument("--out", required=True)
+    guidance_scan_cmd.add_argument("--write", action="store_true")
+    guidance_scan_cmd.add_argument("--format", choices=["text", "json"], default="json")
+
     openclaw_cmd = subparsers.add_parser("openclaw", help="OpenClaw skill ecosystem import commands")
     openclaw_subcommands = openclaw_cmd.add_subparsers(dest="openclaw_command", required=True)
     openclaw_scan_cmd = openclaw_subcommands.add_parser(
@@ -447,6 +460,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _plugin(args)
     if args.command == "skills":
         return _skills(args)
+    if args.command == "guidance":
+        return _guidance(args)
     if args.command == "openclaw":
         return _openclaw(args)
     if args.command == "evo":
@@ -1284,6 +1299,91 @@ def _skills_scan(args: argparse.Namespace) -> int:
     else:
         print(content, end="")
     return 0
+
+
+def _guidance(args: argparse.Namespace) -> int:
+    if args.guidance_command == "scan":
+        return _guidance_scan(args)
+    return 2
+
+
+def _guidance_scan(args: argparse.Namespace) -> int:
+    from agentmf.guidance_scanner import render_agentmakefile_from_guidance_files, scan_guidance_files
+
+    sources = [Path(path) for path in args.sources]
+    missing = [str(path) for path in sources if not path.exists()]
+    out_path = Path(args.out)
+    ok = True
+    payload: Dict[str, Any] = {
+        "version": 1,
+        "mode": "guidance_scan",
+        "sources": [str(path) for path in sources],
+        "out_path": str(out_path),
+        "wrote": False,
+    }
+    diagnostics: List[Dict[str, Any]] = []
+    if missing:
+        ok = False
+        diagnostics.append(
+            {
+                "code": "AMF240",
+                "severity": "error",
+                "message": f"guidance source not found: {', '.join(missing)}",
+                "path": "guidance.source",
+            }
+        )
+    else:
+        try:
+            sections = scan_guidance_files(sources)
+            content = render_agentmakefile_from_guidance_files(
+                sources,
+                package_name=args.package_name,
+                package_description=args.package_description,
+            )
+        except ValueError as exc:
+            ok = False
+            diagnostics.append(
+                {
+                    "code": "AMF241",
+                    "severity": "error",
+                    "message": str(exc),
+                    "path": "guidance.source",
+                }
+            )
+            content = ""
+            sections = []
+
+        payload["section_count"] = len(sections)
+        if args.write:
+            try:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(content, encoding="utf-8")
+                payload["wrote"] = True
+            except OSError as exc:
+                ok = False
+                diagnostics.append(
+                    {
+                        "code": "AMF242",
+                        "severity": "error",
+                        "message": f"could not write guidance AgentMakefile: {out_path} ({exc})",
+                        "path": "guidance.out",
+                    }
+                )
+        else:
+            payload["agentmakefile"] = content
+
+    if args.format == "json":
+        print(json.dumps({"ok": ok, "guidance_scan": payload, "diagnostics": diagnostics}, indent=2))
+    else:
+        for record in diagnostics:
+            stream = sys.stderr if record["severity"] == "error" else sys.stdout
+            print(f"{record['severity']}[{record['code']}]: {record['message']}", file=stream)
+        if ok:
+            action = "Wrote" if args.write else "Would write"
+            print(f"{action} guidance-index AgentMakefile:")
+            print(f"  out: {out_path}")
+            print(f"  sections: {payload.get('section_count', 0)}")
+    return 0 if ok else 1
 
 
 def _openclaw_scan(args: argparse.Namespace) -> int:

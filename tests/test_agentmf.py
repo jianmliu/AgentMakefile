@@ -3975,6 +3975,58 @@ targets:
     assert patch_result.payload["patch_status"] == "generated"
 
 
+def test_cli_guidance_scan_imports_agents_and_claude_md(tmp_path: Path, capsys) -> None:
+    """`agentmf guidance scan` reads heterogeneous guidance Markdown
+    (AGENTS.md, CLAUDE.md, standalone SKILL.md, plain markdown) and
+    emits one AgentMakefile with `module_type: guidance-index` and one
+    target per parsed section.
+    """
+    agents_path = tmp_path / "AGENTS.md"
+    agents_path.write_text(
+        "# Project Agents\n\n"
+        "## Review Workflow\n\n"
+        "Use this section when reviewing code.\n"
+    )
+    claude_path = tmp_path / "CLAUDE.md"
+    claude_path.write_text(
+        "# Project Claude\n\n"
+        "## Planning Guidance\n\n"
+        "Use this section when planning multi-step work.\n"
+    )
+    out_path = tmp_path / "modules" / "imported" / "AgentMakefile"
+
+    exit_code = main(
+        [
+            "guidance",
+            "scan",
+            "--source",
+            str(agents_path),
+            "--source",
+            str(claude_path),
+            "--out",
+            str(out_path),
+            "--write",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["guidance_scan"]["wrote"] is True
+    assert payload["guidance_scan"]["section_count"] == 2
+
+    written = out_path.read_text()
+    data = yaml.safe_load(written)
+    assert data["metadata"]["module_type"] == "guidance-index"
+    target_names = sorted(data["targets"])
+    assert any("review-workflow" in name for name in target_names)
+    assert any("planning-guidance" in name for name in target_names)
+
+
 def test_openclaw_curator_creates_duplicate_skill_proposal(tmp_path: Path) -> None:
     evidence_file = tmp_path / "openclaw_import.jsonl"
     evidence_file.write_text(

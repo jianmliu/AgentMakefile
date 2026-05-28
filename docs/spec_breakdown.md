@@ -1505,7 +1505,9 @@ Acceptance:
 
 ### AMF-PAD-014 Multi-Source Guidance Ingestion
 
-Status: planned.
+Status: implemented first slice (`agentmf guidance scan` ships with
+SKILL.md / AGENTS.md / CLAUDE.md / plain-markdown readers; `skill-dir`
+support stays at `agentmf skills scan`).
 
 Goal: generalize reverse import from existing `SKILL.md` package directories to
 broader guidance corpora such as `AGENTS.md`, `CLAUDE.md`, standalone
@@ -1526,6 +1528,25 @@ Implementation:
 - Preserve native `selected_skills` behavior for real skill package inputs.
 - Extend `agentmf plugin install` with planned `--source` / `--source-type`
   options while keeping `--skills-dir` compatibility.
+
+Implemented scope:
+
+- `agentmf.guidance_scanner` exposes `scan_guidance_files` and
+  `render_agentmakefile_from_guidance_files`. The reader detects
+  source_type from filename (`SKILL.md` -> skill, `AGENTS.md` -> agents,
+  `CLAUDE.md` -> claude, anything else -> markdown) and splits each
+  Markdown file by `##` headings into one routeable guidance target per
+  section.
+- `agentmf guidance scan --source <path> [--source ...] --out <module
+  path> [--write] [--format json|text]` wraps the facade. Per-source
+  missing-file errors and value errors surface as structured diagnostics
+  (AMF240/241/242). JSON output includes `section_count` and the
+  generated AgentMakefile content when not writing.
+- The generated module's `metadata.module_type` is `guidance-index`;
+  every target has `match.user_intent` derived from the section heading
+  + body bigrams.
+- `agentmf skills scan` (skill-dir reader) remains the path for
+  directory trees of SKILL.md packages.
 
 Acceptance:
 
@@ -2509,7 +2530,7 @@ Completed:
 
 Next:
 
-- AMF-PAD-014 Multi-Source Guidance Ingestion (CLI wiring + four source readers; library facade `guidance_scanner` already shipped).
+- AMF-PAD-014 Multi-Source Guidance Ingestion (`agentmf guidance scan` ships SKILL.md / AGENTS.md / CLAUDE.md / markdown readers; skill-dir stays in `agentmf skills scan`. `agentmf plugin install --source` extension still pending).
 - AMF-BENCH-002 Suite File Parser.
 - AMF-BENCH-003 Deterministic Suite Runner.
 - AMF-BENCH-004 Report Writer.
