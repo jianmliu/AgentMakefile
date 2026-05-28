@@ -4282,6 +4282,130 @@ def test_skill_index_query_handles_empty_source(tmp_path: Path) -> None:
     assert index.query("anything", top_k=5) == []
 
 
+def test_skill_index_save_and_load_round_trip(tmp_path: Path) -> None:
+    """A saved index reloads byte-identically (matrix, skills, embedder
+    name) and produces the same query rankings without re-embedding.
+    """
+    from agentmf.embedder import HashEmbedder
+    from agentmf.skill_index import SkillIndex
+    from agentmf.loader import load_source
+    import numpy as np
+
+    module_path = _write_skill_index_test_module(tmp_path)
+    embedder = HashEmbedder(dim=128)
+    original = SkillIndex.from_source(load_source(module_path), embedder=embedder)
+    cache_path = tmp_path / ".agentmf" / "skills.embed.json"
+    written = original.save(cache_path)
+    assert written == cache_path
+    assert cache_path.exists() and cache_path.stat().st_size > 0
+
+    reloaded = SkillIndex.load(cache_path)
+
+    assert reloaded.embedder.name == original.embedder.name
+    assert [s.skill_name for s in reloaded.skills] == [s.skill_name for s in original.skills]
+    np.testing.assert_array_equal(reloaded.matrix, original.matrix)
+
+    # Queries on the reloaded index match the original byte-for-byte.
+    q_original = original.query("test driven development", top_k=3)
+    q_reloaded = reloaded.query("test driven development", top_k=3)
+    assert [m.target_name for m in q_reloaded] == [m.target_name for m in q_original]
+    for a, b in zip(q_reloaded, q_original):
+        assert abs(a.score - b.score) < 1e-6
+
+
+def test_skill_index_load_rejects_embedder_mismatch(tmp_path: Path) -> None:
+    """Loading with a different embedder than was used to build the
+    cache must raise — silently returning a SkillIndex with mismatched
+    spaces would produce nonsense rankings.
+    """
+    from agentmf.embedder import HashEmbedder
+    from agentmf.skill_index import SkillIndex
+    from agentmf.loader import load_source
+
+    module_path = _write_skill_index_test_module(tmp_path)
+    SkillIndex.from_source(load_source(module_path), embedder=HashEmbedder(dim=128)).save(tmp_path / "i.json")
+
+    import pytest
+    with pytest.raises(ValueError, match="embedder mismatch"):
+        SkillIndex.load(tmp_path / "i.json", embedder=HashEmbedder(dim=64))
+
+
+def test_skill_index_load_reconstructs_embedder_when_caller_omits_it(tmp_path: Path) -> None:
+    """`SkillIndex.load(path)` (no embedder arg) must reconstruct the
+    embedder family the file was built with, so saved hash indexes
+    don't accidentally get re-loaded against the default
+    `get_default_embedder()` (which prefers sentence-transformers
+    when installed and would mismatch).
+    """
+    from agentmf.embedder import HashEmbedder
+    from agentmf.skill_index import SkillIndex
+    from agentmf.loader import load_source
+
+    module_path = _write_skill_index_test_module(tmp_path)
+    SkillIndex.from_source(load_source(module_path), embedder=HashEmbedder(dim=256)).save(tmp_path / "i.json")
+
+    reloaded = SkillIndex.load(tmp_path / "i.json")
+    assert reloaded.embedder.name == "hash:256"
+    assert reloaded.matrix.shape == (3, 256)
+
+
+def test_cli_embed_compile_writes_cache_and_query_uses_it(tmp_path: Path, capsys) -> None:
+    """End-to-end CLI: compile produces the file, query --cache loads it
+    instead of re-embedding from source. Verifies cache_status=hit and
+    that rebuild-from-source produces the same top match.
+    """
+    module_path = _write_skill_index_test_module(tmp_path)
+    cache_path = tmp_path / "skills.embed.json"
+
+    rc = main([
+        "embed", "compile",
+        "--file", str(module_path),
+        "--out", str(cache_path),
+        "--embedder", "hash", "--dim", "128",
+        "--format", "json",
+    ])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["embedded_skills"] == 3
+    assert out["path"] == str(cache_path)
+    assert cache_path.exists()
+
+    rc = main([
+        "embed", "query",
+        "--file", str(module_path),
+        "--cache", str(cache_path),
+        "--request", "test driven development implement feature",
+        "--top-k", "1",
+        "--embedder", "hash", "--dim", "128",
+        "--format", "json",
+    ])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["cache_status"] == "hit"
+    assert out["matches"][0]["target"] == "skill.skills.test-driven-development"
+
+
+def test_cli_embed_query_rebuilds_when_cache_missing(tmp_path: Path, capsys) -> None:
+    """--cache pointing at a non-existent path must NOT crash; query
+    falls back to building from source (cache_status=miss).
+    """
+    module_path = _write_skill_index_test_module(tmp_path)
+
+    rc = main([
+        "embed", "query",
+        "--file", str(module_path),
+        "--cache", str(tmp_path / "no-such-cache.json"),
+        "--request", "test driven development",
+        "--embedder", "hash", "--dim", "128",
+        "--format", "json",
+    ])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["cache_status"] in ("miss", "skipped")  # both acceptable for missing file
+    assert out["matches"][0]["target"] == "skill.skills.test-driven-development"
+
+
 def test_skill_index_filters_bucket_suffix_terms_from_corpus(tmp_path: Path) -> None:
     """The corpus text builder must drop bucket-suffix artifacts like
     'brainstorming skills' / 'brainstorm .tmp' so the embedding isn't

@@ -4,7 +4,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agentmf.skill_index import SkillIndex  # noqa: F401
 
 from agentmf.ask import create_ask_payload
 from agentmf.benchmark import create_harness_benchmark_payload, render_harness_benchmark_markdown
@@ -109,7 +112,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     embed_query.add_argument("--model", default=None, help="model id for --embedder sentence-transformer")
     embed_query.add_argument("--dim", type=int, default=384, help="dim for --embedder hash")
+    embed_query.add_argument(
+        "--cache",
+        default=None,
+        help="path to a saved index (`agentmf embed compile --out ...`); skips corpus re-embed when present and the embedder matches",
+    )
+    embed_query.add_argument("--rebuild", action="store_true",
+                             help="ignore --cache even when present and rebuild from source")
     embed_query.add_argument("--format", choices=["text", "json"], default="text")
+
+    embed_compile = embed_sub.add_parser(
+        "compile",
+        help="build the per-skill embedding matrix once and persist it to disk for fast reuse",
+    )
+    embed_compile.add_argument("--file", default="AgentMakefile")
+    embed_compile.add_argument(
+        "--out",
+        default=".agentmf/skills.embed.json",
+        help="output path for the cached index (parent dirs created)",
+    )
+    embed_compile.add_argument(
+        "--embedder",
+        choices=["auto", "hash", "sentence-transformer"],
+        default="auto",
+    )
+    embed_compile.add_argument("--model", default=None)
+    embed_compile.add_argument("--dim", type=int, default=384)
+    embed_compile.add_argument("--format", choices=["text", "json"], default="text")
 
     select_cmd = subparsers.add_parser("select", help="select AgentMakefile prompt fragments for a request")
     select_cmd.add_argument("--file", default="AgentMakefile")
@@ -664,19 +693,41 @@ def _configure(args: argparse.Namespace) -> int:
 
 
 def _embed(args: argparse.Namespace) -> int:
-    if args.embed_command != "query":
-        return 2
-    if args.embedder == "hash":
-        embedder = HashEmbedder(dim=args.dim)
-    elif args.embedder == "sentence-transformer":
-        embedder = SentenceTransformerEmbedder(model=args.model)
-    else:
-        embedder = get_default_embedder(dim=args.dim)
-    try:
-        index = SkillIndex.from_path(Path(args.file), embedder=embedder)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+    if args.embed_command == "query":
+        return _embed_query(args)
+    if args.embed_command == "compile":
+        return _embed_compile(args)
+    return 2
+
+
+def _build_embedder(choice: str, model: str, dim: int):
+    if choice == "hash":
+        return HashEmbedder(dim=dim)
+    if choice == "sentence-transformer":
+        return SentenceTransformerEmbedder(model=model)
+    return get_default_embedder(dim=dim)
+
+
+def _embed_query(args: argparse.Namespace) -> int:
+    embedder = _build_embedder(args.embedder, args.model, args.dim)
+    cache_path = Path(args.cache) if args.cache else None
+    cache_status = "skipped"
+    index: Optional[SkillIndex] = None
+    if cache_path and cache_path.exists() and not args.rebuild:
+        try:
+            index = SkillIndex.load(cache_path, embedder=embedder)
+            cache_status = "hit"
+        except ValueError as exc:
+            cache_status = f"miss ({exc})"
+            index = None
+    if index is None:
+        try:
+            index = SkillIndex.from_path(Path(args.file), embedder=embedder)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if cache_path and (args.rebuild or not cache_path.exists()):
+            cache_status = "miss" if cache_status == "skipped" else cache_status
     matches = index.query(args.request, top_k=args.top_k)
     if args.format == "json":
         print(json.dumps({
@@ -684,6 +735,8 @@ def _embed(args: argparse.Namespace) -> int:
             "file": args.file,
             "request": args.request,
             "embedder": embedder.name,
+            "cache_path": str(cache_path) if cache_path else None,
+            "cache_status": cache_status,
             "embedded_skills": len(index.skills),
             "matches": [
                 {
@@ -699,7 +752,8 @@ def _embed(args: argparse.Namespace) -> int:
     else:
         print(f"AgentMakefile: {args.file}")
         print(f"Request: {args.request!r}")
-        print(f"Embedder: {embedder.name}  (corpus size: {len(index.skills)} skills)")
+        cache_suffix = f"  [cache: {cache_status}]" if cache_path else ""
+        print(f"Embedder: {embedder.name}  (corpus size: {len(index.skills)} skills){cache_suffix}")
         if not matches:
             print("(no skills indexed)")
         else:
@@ -711,6 +765,31 @@ def _embed(args: argparse.Namespace) -> int:
                 print(f"  [{m.rank}] {m.score:0.4f}  {m.target_name}")
                 if desc:
                     print(f"        {desc}")
+    return 0
+
+
+def _embed_compile(args: argparse.Namespace) -> int:
+    embedder = _build_embedder(args.embedder, args.model, args.dim)
+    try:
+        index = SkillIndex.from_path(Path(args.file), embedder=embedder)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    out = Path(args.out)
+    written = index.save(out)
+    if args.format == "json":
+        print(json.dumps({
+            "ok": True,
+            "file": args.file,
+            "embedder": embedder.name,
+            "embedded_skills": len(index.skills),
+            "path": str(written),
+            "bytes": written.stat().st_size,
+        }, indent=2))
+    else:
+        print(f"AgentMakefile: {args.file}")
+        print(f"Embedder: {embedder.name}")
+        print(f"Embedded {len(index.skills)} skills -> {written} ({written.stat().st_size} bytes)")
     return 0
 
 
