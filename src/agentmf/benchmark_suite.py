@@ -238,6 +238,82 @@ def _run_deterministic(suite: SuiteSpec, agentmakefile: Path) -> List[Dict[str, 
     return records
 
 
+def create_host_execution_adapter_contract() -> Dict[str, Any]:
+    """BENCH-006: emit a documentation-only contract describing the schema
+    a hosted-agent execution adapter must accept (one harness bundle per
+    task) and emit (one result record per task). The contract is
+    intentionally provider-agnostic: real LLM execution stays opt-in and
+    out of this module (BENCH-007+).
+
+    Mirrors the shape of `clawbench.create_clawbench_host_adapter_contract`
+    but scoped to generic benchmark suites rather than ClawBench.
+    """
+    return {
+        "version": 1,
+        "mode": "host_execution_adapter_contract",
+        "benchmark": "agentmf-suite",
+        "adapter": {
+            "kind": "host-execution",
+            "execution": "external",
+            "agentmakefile_role": "harness_selection_layer",
+            "opt_in": True,
+        },
+        "input_contract": {
+            "format": "jsonl",
+            "record_mode": "agentmf_harness_export",
+            "required_fields": [
+                "task.id",
+                "task.request",
+                "agentmf.selected_targets",
+                "agentmf.selected_pipeline",
+                "prompt.stable_prefix.content",
+                "trace_bundle.stable_prefix_hash",
+            ],
+            "optional_fields": [
+                "task.expected_targets",
+                "task.expected_skills",
+                "task.tags",
+                "run.model",
+                "run.host",
+                "prompt.volatile_context",
+                "agentmf.selected_skills",
+                "agentmf.selection_trace",
+                "trace_bundle.guard_ops",
+                "trace_bundle.permission_ops",
+                "trace_bundle.fallback_ops",
+                "trace_bundle.output_contracts",
+            ],
+        },
+        "output_contract": {
+            "format": "jsonl",
+            "record_mode": "agentmf_external_runner_result",
+            "required_fields": [
+                "task_id",
+                "pass",
+            ],
+            "optional_fields": [
+                "fail_reason",
+                "reward_lenient",
+                "reward_strict",
+                "cost_usd",
+                "wall_time_ms",
+                "prompt_tokens",
+                "completion_tokens",
+                "tool_calls",
+                "denied_tool_calls",
+                "selected_target_actual",
+                "trace_path",
+                "agentmf.stable_prefix_hash",
+            ],
+        },
+        "safety": {
+            "destructive_tools": "must default to deny",
+            "verifier_commands": "must be explicit in the suite file",
+            "artifact_retention": "include enough trace data for post-run audit",
+        },
+    }
+
+
 def render_suite_markdown(payload: Dict[str, Any]) -> str:
     suite = payload.get("suite", {})
     summary = payload.get("summary", {})

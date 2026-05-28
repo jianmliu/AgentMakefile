@@ -1765,7 +1765,9 @@ Acceptance:
 
 ### AMF-PAD-015 Benchmark CLI First Slice
 
-Status: partially implemented.
+Status: implemented (later-slice extensions delivered via AMF-BENCH-002..005;
+`agentmf benchmark skills` deliberately collapsed into `agentmf benchmark
+suite` rather than a separate command).
 
 Goal: make AgentMakefile's prompt-size, cache-stability, pipeline-selection,
 and skill-selection benefits measurable through deterministic benchmark
@@ -1783,6 +1785,19 @@ Implementation:
 - Support inline cases, JSON output, Markdown output, report writing, and
   fail-on-mismatch diagnostics for expected labels in later slices.
 
+Implemented scope:
+
+- `agentmf benchmark harness` ships with `--case` (repeatable inline),
+  six baseline kinds, and text/json/markdown output formats.
+- The "later slices" inline-cases / fail-on-mismatch / report extensions
+  ship as `agentmf benchmark suite` (BENCH-002..005). `agentmf benchmark
+  suite --fail-on-mismatch` exits non-zero when any task fails, so CI
+  can gate on the suite report directly.
+- `agentmf benchmark skills` was deliberately not added: any "skill-set
+  comparison" benchmark is now a suite with a `baselines:` entry that
+  references the alternative skill set, which is more composable than a
+  separate command.
+
 Acceptance:
 
 - A benchmark case can report selected targets, selected skills, selected
@@ -1793,6 +1808,35 @@ Acceptance:
 - JSON output is suitable for CI and future benchmark suites.
 
 Plan: `docs/superpowers/plans/2026-05-26-agentmf-benchmark-cli.md`.
+
+### AMF-BENCH-006 Execution Adapter Contract
+
+Status: implemented (contract-only; no provider-specific runner).
+
+Goal: define the schema a hosted-agent execution adapter must accept (one
+harness bundle per task) and emit (one result per task), so external
+runners can be wired without core AgentMakefile changes.
+
+Implementation:
+
+- `agentmf benchmark adapter-contract --kind host-execution` emits the
+  JSON contract via `agentmf.benchmark_suite.create_host_execution_adapter_contract`.
+- Input contract: required `task.id`, `task.request`,
+  `agentmf.selected_targets`, `agentmf.selected_pipeline`,
+  `prompt.stable_prefix.content`, `trace_bundle.stable_prefix_hash`;
+  optional task expectations, selected_skills, selection_trace, op
+  bundles, host/model metadata, volatile context.
+- Output contract: required `task_id`, `pass`; optional reward, cost,
+  wall_time, tokens, tool_calls, denied_tool_calls,
+  selected_target_actual, trace_path, stable_prefix_hash.
+- Safety notes: destructive tools deny-by-default, explicit verifier
+  commands, trace retention for audit.
+
+Acceptance:
+
+- A host runner team can read the contract JSON and build an external
+  adapter without changing AgentMakefile.
+- AMF-BENCH-007 (first opt-in host adapter) inherits this contract.
 
 ### AMF-BENCH-001 Harness Benchmark Suite Spec
 

@@ -4189,6 +4189,99 @@ def test_benchmark_suite_demo_file_parses(tmp_path: Path) -> None:
     assert len(result.suite.tasks) >= 3
 
 
+def test_cli_benchmark_suite_fail_on_mismatch_returns_nonzero(tmp_path: Path, capsys) -> None:
+    """`--fail-on-mismatch` flips exit code to 1 when any task fails so CI
+    can gate promotion / merge on suite results."""
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.x:
+    priority: 70
+    match:
+      user_intent:
+        - alpha
+    steps:
+      - action: a
+""",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: fail-on-mismatch
+  title: fail check
+agentmakefile: {module_path}
+tasks:
+  - id: t-ok
+    request: alpha please
+    expected_targets:
+      - skill.x
+  - id: t-bad
+    request: unrelated zebra request
+    expected_targets:
+      - skill.x
+"""
+    )
+
+    # Without --fail-on-mismatch the CLI still returns 0 (parse/run ok).
+    exit_clean = main(
+        [
+            "benchmark", "suite",
+            "--suite", str(suite_path),
+            "--adapter", "deterministic-selection",
+            "--format", "json",
+        ]
+    )
+    capsys.readouterr()
+    assert exit_clean == 0
+
+    # With the flag, a failing task flips exit to 1.
+    exit_strict = main(
+        [
+            "benchmark", "suite",
+            "--suite", str(suite_path),
+            "--adapter", "deterministic-selection",
+            "--format", "json",
+            "--fail-on-mismatch",
+        ]
+    )
+    capsys.readouterr()
+    assert exit_strict == 1
+
+
+def test_cli_benchmark_adapter_contract_emits_host_execution_schema(capsys) -> None:
+    """BENCH-006: `agentmf benchmark adapter-contract --kind host-execution`
+    emits a JSON contract describing the input + output schema a hosted
+    agent runner must produce — without invoking a provider."""
+    exit_code = main(
+        [
+            "benchmark", "adapter-contract",
+            "--kind", "host-execution",
+            "--format", "json",
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    contract = payload["benchmark_adapter_contract"]
+
+    assert exit_code == 0
+    assert contract["mode"] == "host_execution_adapter_contract"
+    assert contract["adapter"]["kind"] == "host-execution"
+    assert "input_contract" in contract and "output_contract" in contract
+    # Selection-layer assumptions cross the boundary.
+    assert "agentmf.selected_targets" in contract["input_contract"]["required_fields"]
+    assert "prompt.stable_prefix.content" in contract["input_contract"]["required_fields"]
+    # Output must at minimum tell us whether the task passed.
+    assert "task_id" in contract["output_contract"]["required_fields"]
+    assert "pass" in contract["output_contract"]["required_fields"]
+    # Optional cost/wall-time fields available for budgeting.
+    assert "cost_usd" in contract["output_contract"]["optional_fields"]
+    assert "wall_time_ms" in contract["output_contract"]["optional_fields"]
+
+
 def test_cli_benchmark_suite_runs_and_emits_json(tmp_path: Path, capsys) -> None:
     module_path = write_agentmakefile(
         tmp_path,

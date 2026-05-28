@@ -313,6 +313,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="deterministic-selection",
     )
     benchmark_suite_cmd.add_argument("--format", choices=["text", "json", "markdown"], default="json")
+    benchmark_suite_cmd.add_argument(
+        "--fail-on-mismatch",
+        action="store_true",
+        help="exit with status 1 when any task fails (default is to surface failures via the report only)",
+    )
+
+    benchmark_adapter_contract_cmd = benchmark_subcommands.add_parser(
+        "adapter-contract",
+        help="emit a JSON contract describing a benchmark adapter's input/output schema",
+    )
+    benchmark_adapter_contract_cmd.add_argument(
+        "--kind",
+        choices=["host-execution"],
+        default="host-execution",
+    )
+    benchmark_adapter_contract_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
     clawbench_cmd = subparsers.add_parser("clawbench", help="ClawBench compatibility commands")
     clawbench_subcommands = clawbench_cmd.add_subparsers(dest="clawbench_command", required=True)
@@ -868,7 +884,31 @@ def _benchmark(args: argparse.Namespace) -> int:
         return _benchmark_harness(args)
     if args.benchmark_command == "suite":
         return _benchmark_suite(args)
+    if args.benchmark_command == "adapter-contract":
+        return _benchmark_adapter_contract(args)
     return 2
+
+
+def _benchmark_adapter_contract(args: argparse.Namespace) -> int:
+    from agentmf.benchmark_suite import create_host_execution_adapter_contract
+
+    result = create_host_execution_adapter_contract()
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "benchmark_adapter_contract": result,
+                    "diagnostics": [],
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(f"benchmark adapter contract (kind={args.kind}):")
+        print(f"  input_contract.required: {', '.join(result['input_contract']['required_fields'])}")
+        print(f"  output_contract.required: {', '.join(result['output_contract']['required_fields'])}")
+    return 0
 
 
 def _benchmark_suite(args: argparse.Namespace) -> int:
@@ -907,7 +947,11 @@ def _benchmark_suite(args: argparse.Namespace) -> int:
                 f"  total={summary.get('total', 0)} passed={summary.get('passed', 0)} "
                 f"failed={summary.get('failed', 0)} skipped={summary.get('skipped', 0)}"
             )
-    return 0 if result.ok else 1
+    if not result.ok:
+        return 1
+    if getattr(args, "fail_on_mismatch", False) and result.payload.get("summary", {}).get("failed", 0) > 0:
+        return 1
+    return 0
 
 
 def _clawbench(args: argparse.Namespace) -> int:
