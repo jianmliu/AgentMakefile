@@ -1,0 +1,26 @@
+{
+  "name": "@agentmf/opencode-plugin",
+  "version": "0.0.1",
+  "description": "AgentMakefile routing/curation bridge for OpenCode. Prepends agentmf-selected guidance to each session and ships traces back as evolution evidence.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "agentmakefile",
+    "agentmf"
+  ],
+  "scripts": {
+    "smoke": "node tests/smoke.mjs"
+  }
+}
