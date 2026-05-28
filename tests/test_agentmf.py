@@ -1736,6 +1736,109 @@ def test_user_feedback_evidence_drops_unrelated_payload_fields(tmp_path: Path) -
     assert "secret-token-value" not in serialized
 
 
+def test_plugin_payload_evidence_surfaces_diff_metadata(tmp_path: Path) -> None:
+    """The OpenCode plugin attaches a `diff: [{file, additions, deletions,
+    before, after}]` array plus `diff_files`/`diff_source` to its payload.
+    The dream loop needs file-level metadata (paths + add/del counts) in
+    the surface record so it can filter "this routing actually produced
+    changes" without rehydrating the full payload. Full diff content
+    stays inside payload_hash to keep records compact.
+    """
+    from agentmf.evolution import create_evolution_evidence_payload
+
+    plugin_payload = {
+        "plugin": "@agentmf/opencode-plugin",
+        "event_type": "session.idle",
+        "session_id": "ses_smoketest",
+        "captured_at": "2026-05-28T00:00:00Z",
+        "selected_targets": ["code.change"],
+        "selected_skills": ["superpowers:test-driven-development"],
+        "diff_files": 2,
+        "diff_source": "git diff",
+        "diff": [
+            {
+                "file": "src/foo.py",
+                "additions": 3,
+                "deletions": 1,
+                "before": "def foo(): pass\n",
+                "after": "def foo():\n    return 1\n",
+            },
+            {
+                "file": "tests/test_foo.py",
+                "additions": 5,
+                "deletions": 0,
+                "before": "",
+                "after": "def test_foo():\n    assert foo() == 1\n",
+            },
+        ],
+    }
+
+    result = create_evolution_evidence_payload(
+        source="plugin_payload",
+        payload=plugin_payload,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
+        timestamp="2026-05-28T00:00:00Z",
+        write=False,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    record = result.payload["record"]
+    summary = record["summary"]
+
+    # Existing surface fields keep working.
+    assert summary["selected_targets"] == ["code.change"]
+    assert summary["selected_skills"] == ["superpowers:test-driven-development"]
+    assert record["selected_target"] == "code.change"
+
+    # New surface fields the dream loop can filter / cluster on.
+    assert summary["diff_files"] == 2
+    assert summary["diff_source"] == "git diff"
+    assert summary["diff_paths"] == ["src/foo.py", "tests/test_foo.py"]
+    assert summary["diff_additions"] == 8
+    assert summary["diff_deletions"] == 1
+    assert summary["event_type"] == "session.idle"
+    assert summary["captured_at"] == "2026-05-28T00:00:00Z"
+
+    # Full before/after content stays out of the surface record (it's
+    # hashed into payload_hash for deterministic comparison instead).
+    serialized = json.dumps(record, sort_keys=True)
+    assert "def foo(): pass" not in serialized
+    assert "assert foo() == 1" not in serialized
+
+
+def test_plugin_payload_evidence_handles_empty_diff(tmp_path: Path) -> None:
+    """Plugin sessions that didn't touch any files still get a record —
+    the diff_files field is 0, diff_paths is empty, and counts are 0.
+    Important so the dream loop can distinguish "session ran but no
+    files changed" from "evidence missing entirely."
+    """
+    from agentmf.evolution import create_evolution_evidence_payload
+
+    result = create_evolution_evidence_payload(
+        source="plugin_payload",
+        payload={
+            "plugin": "@agentmf/opencode-plugin",
+            "event_type": "session.idle",
+            "session_id": "ses_noop",
+            "selected_targets": [],
+            "selected_skills": [],
+            "diff_files": 0,
+            "diff_source": "session.diff bucket",
+            "diff": [],
+        },
+        out_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
+        timestamp="2026-05-28T00:00:00Z",
+        write=False,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    summary = result.payload["record"]["summary"]
+    assert summary["diff_files"] == 0
+    assert summary["diff_paths"] == []
+    assert summary["diff_additions"] == 0
+    assert summary["diff_deletions"] == 0
+
+
 def test_cli_evo_evidence_add_writes_openclaw_import_record(tmp_path: Path, capsys) -> None:
     payload_file = tmp_path / "openclaw-import.json"
     payload_file.write_text(

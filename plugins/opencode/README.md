@@ -120,12 +120,38 @@ Each captured `FileDiff` keeps `{file, additions, deletions}` plus
 truncation-aware `before`/`after` content (capped at
 `AGENTMF_MAX_DIFF_BYTES` bytes per file, default 16 KiB).
 
-> **Note on the on-disk record.** `agentmf evo evidence add` hashes
-> the full payload (including the diff) into `record.payload_hash`,
-> but does not yet surface diff content in the record's top-level
-> fields. The diff is preserved deterministically (rehash a future
-> payload to compare) and will be exposed in a future `agentmf`
-> change that extends `_summary_for_source("plugin_payload", …)`.
+### What the evidence record looks like
+
+`agentmf evo evidence add` hashes the full payload (including the
+unredacted diff content) into `record.payload_hash` and surfaces a
+compact projection for the dream loop:
+
+```jsonc
+{
+  "source": "plugin_payload",
+  "selected_target": "code.change",       // dream loop counts target hits
+  "request_fingerprint": "sha256:a919…",  // clusters routing-gap repeats
+  "selected_skills": [],
+  "summary": {
+    "selected_targets": ["code.change"],
+    "diff_files": 1,
+    "diff_source": "session.diff bucket", // or "git diff"
+    "diff_paths": ["hello.py"],
+    "diff_additions": 2,
+    "diff_deletions": 0,
+    "event_type": "session.idle",
+    "captured_at": "2026-05-28T05:36:17.236Z"
+  },
+  "payload_hash": "sha256:…"              // full diff content lives in here
+}
+```
+
+That's enough surface area for the existing dream-loop detectors:
+`_benchmark_case_suggester` counts records by `selected_target` and
+suggests an `add_benchmark_case` change when a target keeps recurring;
+`_recurring_failure_proposals` clusters routing gaps by
+`request_fingerprint`; future detectors can filter
+`summary.diff_files > 0` to ignore no-op sessions.
 
 ## Smoke tests
 

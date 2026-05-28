@@ -1568,11 +1568,43 @@ def _summary_for_source(source: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 "module_paths": evidence.get("module_paths", []),
             }
     if source == "plugin_payload":
-        return {
+        diff = payload.get("diff")
+        diff_list = diff if isinstance(diff, list) else []
+        diff_paths: list[str] = []
+        additions_total = 0
+        deletions_total = 0
+        for entry in diff_list:
+            if not isinstance(entry, dict):
+                continue
+            file_path = entry.get("file")
+            if isinstance(file_path, str) and file_path:
+                diff_paths.append(file_path)
+            additions = entry.get("additions")
+            if isinstance(additions, int):
+                additions_total += additions
+            deletions = entry.get("deletions")
+            if isinstance(deletions, int):
+                deletions_total += deletions
+        summary: Dict[str, Any] = {
             "selected_targets": payload.get("selected_targets", []),
             "selected_skills": payload.get("selected_skills", []),
             "selected_pipeline": payload.get("selected_pipeline", {}),
+            # Diff metadata for the dream loop. Full before/after content
+            # stays in payload_hash; we only surface file paths + counts
+            # here so records remain compact and don't leak source text.
+            "diff_files": payload.get("diff_files", len(diff_paths)),
+            "diff_source": payload.get("diff_source"),
+            "diff_paths": diff_paths,
+            "diff_additions": additions_total,
+            "diff_deletions": deletions_total,
         }
+        event_type = payload.get("event_type")
+        if isinstance(event_type, str) and event_type:
+            summary["event_type"] = event_type
+        captured_at = payload.get("captured_at")
+        if isinstance(captured_at, str) and captured_at:
+            summary["captured_at"] = captured_at
+        return summary
     if source == "benchmark":
         return {
             "cases": payload.get("cases", []),

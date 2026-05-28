@@ -84,7 +84,22 @@ async function fetchRoutedPrefix(requestText, cwd) {
   const header = targetName
     ? `${PREFIX_HEADER}\n\n> Routed target: \`${targetName}\` (chars=${chars})\n\n`
     : `${PREFIX_HEADER}\n\n`;
-  return { content: header + prefix, routing };
+  const selectedTargets = [];
+  if (typeof targetName === "string" && targetName) selectedTargets.push(targetName);
+  // closure[] carries the dependency chain we'd also count as "selected"
+  if (Array.isArray(routing?.closure)) {
+    for (const node of routing.closure) {
+      if (node && typeof node.target === "string" && !selectedTargets.includes(node.target)) {
+        selectedTargets.push(node.target);
+      }
+    }
+  }
+  return {
+    content: header + prefix,
+    routing,
+    selected_targets: selectedTargets,
+    request_text: requestText,
+  };
 }
 
 function redactDiff(diffs) {
@@ -158,7 +173,7 @@ function snapshotGitDiff(cwd) {
   }
 }
 
-function shipTraceEvidence({ event, cwd, diffs, diffSource }) {
+function shipTraceEvidence({ event, cwd, diffs, diffSource, routing }) {
   // OpenCode's `run` mode does NOT wait for the event-hook promise to
   // resolve before disposing the instance and exiting the process. So
   // we must:
@@ -176,6 +191,11 @@ function shipTraceEvidence({ event, cwd, diffs, diffSource }) {
     diff: redactDiff(diffs),
     diff_files: Array.isArray(diffs) ? diffs.length : 0,
     diff_source: diffSource || null,
+    // Routing decision pulled from chat.message cache. Surface so the
+    // dream loop can attribute the diff to the agentmf target that
+    // actually steered the session (and not count it as a routing gap).
+    selected_targets: routing?.selected_targets || [],
+    request: routing?.request_text || null,
   };
   try {
     const tmp = mkdtempSync(path.join(tmpdir(), "agentmf-plugin-"));
@@ -243,9 +263,10 @@ export const AgentmfPlugin = async ({ directory } = {}) => {
   const projectCwd = typeof directory === "string" && directory ? directory : undefined;
   dbg("init", `directory=${projectCwd || "(none)"}`, `bin=${AGENTMF_BIN}`,
       `slash=/${SLASH_COMMAND}`);
-  // sessionID -> cached routed prefix (populated by chat.message, consumed by
-  // experimental.chat.system.transform). Bounded LRU isn't worth it for a
-  // single-session terminal; a Map is fine.
+  // sessionID -> { content, selected_targets, request_text }. Populated by
+  // chat.message; the prefix is consumed by experimental.chat.system.transform
+  // and the routing metadata is folded into the session.idle evidence payload.
+  // Bounded LRU isn't worth it for a single-session terminal.
   const cacheBySession = new Map();
   // sessionID -> Map<file, FileDiff>. We dedupe by file so the latest
   // session.diff for a file overwrites earlier ones (session.diff is
@@ -294,7 +315,11 @@ export const AgentmfPlugin = async ({ directory } = {}) => {
       dbg("chat.message: calling agentmf", `sessionID=${sessionID}`, `chars=${text.length}`);
       const routed = await fetchRoutedPrefix(text, projectCwd);
       if (!routed) { dbg("chat.message: agentmf produced no prefix"); return; }
-      cacheBySession.set(sessionID, routed.content);
+      cacheBySession.set(sessionID, {
+        content: routed.content,
+        selected_targets: routed.selected_targets,
+        request_text: routed.request_text,
+      });
       dbg("chat.message: cached prefix",
           `target=${routed.routing?.primary?.target || "?"}`,
           `bytes=${routed.content.length}`);
@@ -314,8 +339,8 @@ export const AgentmfPlugin = async ({ directory } = {}) => {
       if (output.system.some((entry) => typeof entry === "string" && entry.startsWith(PREFIX_HEADER))) {
         dbg("system.transform: already injected, skip"); return;
       }
-      output.system.push(cached);
-      dbg("system.transform: injected", `bytes=${cached.length}`, `system_count=${output.system.length}`);
+      output.system.push(cached.content);
+      dbg("system.transform: injected", `bytes=${cached.content.length}`, `system_count=${output.system.length}`);
     },
 
     "command.execute.before": async (input, output) => {
@@ -362,9 +387,12 @@ export const AgentmfPlugin = async ({ directory } = {}) => {
           diffSource = "git diff";
         }
       }
+      const routing = sessionID ? cacheBySession.get(sessionID) : null;
+      if (sessionID) cacheBySession.delete(sessionID);
       dbg("event: shipping evidence", `type=${event.type}`,
-          `diff_files=${diffs.length}`, `source=${diffSource}`);
-      shipTraceEvidence({ event, cwd: projectCwd, diffs, diffSource });
+          `diff_files=${diffs.length}`, `source=${diffSource}`,
+          `targets=${(routing?.selected_targets || []).join(",") || "(none)"}`);
+      shipTraceEvidence({ event, cwd: projectCwd, diffs, diffSource, routing });
       dbg("event: ship spawn returned", `type=${event.type}`);
     },
   };
