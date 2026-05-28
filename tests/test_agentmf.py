@@ -4178,6 +4178,139 @@ tasks:
     assert "skill.x" in md
 
 
+def test_benchmark_suite_validates_expected_skills(tmp_path: Path) -> None:
+    """The deterministic runner must compare each task's `expected_skills`
+    against the skills bound by the selected target's pipeline. A
+    matching skill keeps `passed`; a wrong/non-existent expected skill
+    flips status to `failed` even when expected_targets matches.
+    """
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  coding.review:
+    namespace: smoke
+    description: review skill.
+    implementation:
+      source: skills/review/SKILL.md
+    match:
+      user_intent:
+        - review
+targets:
+  skill.review:
+    priority: 70
+    match:
+      user_intent:
+        - review the diff
+    skills:
+      - smoke:coding.review
+    steps:
+      - use_skill: smoke:coding.review
+""",
+    )
+    suite_path = tmp_path / "skills.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: skills-check
+  title: Skill hit-rate check
+agentmakefile: {module_path}
+tasks:
+  - id: t-skill-hit
+    request: review the diff carefully
+    expected_targets:
+      - skill.review
+    expected_skills:
+      - smoke:coding.review
+  - id: t-skill-miss
+    request: review the diff carefully
+    expected_targets:
+      - skill.review
+    expected_skills:
+      - smoke:nonexistent.skill
+  - id: t-target-only
+    request: review the diff carefully
+    expected_targets:
+      - skill.review
+"""
+    )
+
+    from agentmf.benchmark_suite import create_suite_payload
+
+    result = create_suite_payload(suite_file=suite_path, agentmakefile=None, adapter="deterministic-selection")
+
+    assert result.ok, result.diagnostics.format()
+    by_id = {task["task_id"]: task for task in result.payload["tasks"]}
+    assert by_id["t-skill-hit"]["status"] == "passed"
+    assert by_id["t-skill-hit"]["actual_skills"] == ["smoke:coding.review"]
+    assert by_id["t-skill-hit"]["expected_skills"] == ["smoke:coding.review"]
+    assert by_id["t-skill-miss"]["status"] == "failed"
+    assert by_id["t-skill-miss"]["actual_skills"] == ["smoke:coding.review"]
+    # A task without expected_skills still passes purely on target match.
+    assert by_id["t-target-only"]["status"] == "passed"
+    assert by_id["t-target-only"]["expected_skills"] == []
+    # The aggregate summary reflects the skill check.
+    assert result.payload["summary"] == {"total": 3, "passed": 2, "failed": 1, "skipped": 0}
+
+
+def test_benchmark_suite_markdown_includes_skills_column_when_used(tmp_path: Path) -> None:
+    """Markdown report grows a Skills column only when at least one task
+    declares expected_skills. Suites without skill expectations keep the
+    compact 4-column layout."""
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  coding.review:
+    namespace: smoke
+    description: review.
+    implementation:
+      source: skills/review/SKILL.md
+    match:
+      user_intent:
+        - review
+targets:
+  skill.review:
+    priority: 70
+    match:
+      user_intent:
+        - review the diff
+    skills:
+      - smoke:coding.review
+    steps:
+      - use_skill: smoke:coding.review
+""",
+    )
+    suite_path = tmp_path / "with-skills.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: with-skills
+  title: with skills
+agentmakefile: {module_path}
+tasks:
+  - id: a
+    request: review the diff
+    expected_targets:
+      - skill.review
+    expected_skills:
+      - smoke:coding.review
+"""
+    )
+
+    from agentmf.benchmark_suite import create_suite_payload, render_suite_markdown
+
+    result = create_suite_payload(suite_file=suite_path, agentmakefile=None, adapter="deterministic-selection")
+    md = render_suite_markdown(result.payload)
+
+    assert "| Skills |" in md
+    assert "smoke:coding.review" in md
+
+
 def test_benchmark_suite_demo_file_parses(tmp_path: Path) -> None:
     """BENCH-005 demo suite file exists in benchmarks/ and parses."""
     from agentmf.benchmark_suite import parse_suite_file

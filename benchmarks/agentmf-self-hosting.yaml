@@ -28,12 +28,19 @@ tasks:
     request: implement this feature
     expected_targets:
       - methodology.code_change
+    # Locks the routing AND the bound skill set: code changes must
+    # surface TDD as one of the in-pipeline skills, not just land on
+    # the methodology target.
+    expected_skills:
+      - superpowers:test-driven-development
     tags: [methodology]
 
   - id: debug
     request: debug failing pytest in tests/test_auth.py
     expected_targets:
       - methodology.debug
+    expected_skills:
+      - superpowers:systematic-debugging
     tags: [methodology]
 
   - id: plan
@@ -53,6 +60,8 @@ tasks:
     request: review the diff before merging this PR
     expected_targets:
       - methodology.review
+    expected_skills:
+      - superpowers:receiving-code-review
     tags: [methodology]
 
 adapters:

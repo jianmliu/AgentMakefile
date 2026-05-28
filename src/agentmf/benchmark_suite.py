@@ -219,23 +219,58 @@ def _run_deterministic(suite: SuiteSpec, agentmakefile: Path) -> List[Dict[str, 
 
     records: List[Dict[str, Any]] = []
     for task in suite.tasks:
-        plan = create_link_plan(agentmakefile, request=task.request)
-        actual_targets = list((plan.plan or {}).get("selected_targets") or []) if plan.plan else []
-        if task.expected_targets:
-            status = "passed" if actual_targets and actual_targets[0] in task.expected_targets else "failed"
-        else:
+        plan_result = create_link_plan(agentmakefile, request=task.request)
+        plan_dict = plan_result.plan or {}
+        actual_targets = list(plan_dict.get("selected_targets") or [])
+        actual_skills = _selected_skills_from_plan(plan_dict, actual_targets)
+
+        target_pass = (
+            not task.expected_targets
+            or (bool(actual_targets) and actual_targets[0] in task.expected_targets)
+        )
+        skill_pass = (
+            not task.expected_skills
+            or any(skill in task.expected_skills for skill in actual_skills)
+        )
+
+        if not task.expected_targets and not task.expected_skills:
             status = "skipped"
+        elif target_pass and skill_pass:
+            status = "passed"
+        else:
+            status = "failed"
+
         records.append(
             {
                 "task_id": task.task_id,
                 "request": task.request,
                 "expected_targets": list(task.expected_targets),
                 "actual_targets": actual_targets,
+                "expected_skills": list(task.expected_skills),
+                "actual_skills": actual_skills,
                 "status": status,
-                "diagnostics": plan.diagnostics.to_list(),
+                "diagnostics": plan_result.diagnostics.to_list(),
             }
         )
     return records
+
+
+def _selected_skills_from_plan(plan: Dict[str, Any], selected_targets: List[str]) -> List[str]:
+    """Return the union of qualified skill names bound by the selected
+    target's pipeline, in pipeline order, preserving deterministic
+    de-duplication."""
+    pipelines = plan.get("target_pipelines") or []
+    selected_set = set(selected_targets)
+    skills: List[str] = []
+    for pipeline in pipelines:
+        if not isinstance(pipeline, dict):
+            continue
+        if pipeline.get("target") not in selected_set:
+            continue
+        for skill in pipeline.get("skills") or []:
+            if isinstance(skill, str) and skill not in skills:
+                skills.append(skill)
+    return skills
 
 
 def create_host_execution_adapter_contract() -> Dict[str, Any]:
@@ -338,10 +373,29 @@ def render_suite_markdown(payload: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("## Tasks")
     lines.append("")
-    lines.append("| Task | Status | Expected | Actual |")
-    lines.append("| --- | --- | --- | --- |")
+    show_skills = any(task.get("expected_skills") for task in payload.get("tasks", []))
+    if show_skills:
+        lines.append("| Task | Status | Expected | Actual | Skills |")
+        lines.append("| --- | --- | --- | --- | --- |")
+    else:
+        lines.append("| Task | Status | Expected | Actual |")
+        lines.append("| --- | --- | --- | --- |")
     for task in payload.get("tasks", []):
         expected = ", ".join(f"`{t}`" for t in task.get("expected_targets") or []) or "—"
         actual = ", ".join(f"`{t}`" for t in task.get("actual_targets") or []) or "—"
-        lines.append(f"| `{task.get('task_id', '?')}` | {task.get('status', '?')} | {expected} | {actual} |")
+        if show_skills:
+            expected_skills = task.get("expected_skills") or []
+            actual_skills = task.get("actual_skills") or []
+            if expected_skills:
+                skills_cell = (
+                    "expected="
+                    + ", ".join(f"`{s}`" for s in expected_skills)
+                    + " actual="
+                    + (", ".join(f"`{s}`" for s in actual_skills) or "—")
+                )
+            else:
+                skills_cell = "(no expectation; actual=" + (", ".join(f"`{s}`" for s in actual_skills) or "—") + ")"
+            lines.append(f"| `{task.get('task_id', '?')}` | {task.get('status', '?')} | {expected} | {actual} | {skills_cell} |")
+        else:
+            lines.append(f"| `{task.get('task_id', '?')}` | {task.get('status', '?')} | {expected} | {actual} |")
     return "\n".join(lines) + "\n"
