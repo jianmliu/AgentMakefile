@@ -389,6 +389,11 @@ targets:
         - fix bug
         - refactor
         - behavior change
+        - test driven development
+        - TDD
+        - red green refactor
+        - write a failing test first
+        - write the test first
     policies:
       - use_relevant_skill
       - test_driven_development
