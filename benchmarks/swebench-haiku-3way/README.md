@@ -82,8 +82,19 @@ python3 benchmarks/swebench-haiku-3way/evaluate.py
 ```
 
 `evaluate.py` invokes `python -m swebench.harness.run_evaluation`
-sequentially per condition, then writes a 3-way Markdown comparison to
-`out/REPORT.md`.
+sequentially per condition with `--cache_level instance --clean false`
+so the per-instance images and workspaces survive the run; subsequent
+re-evaluations reuse them.
+
+> Why this matters: the previous cross-repo-20 run used the harness's
+> default `--cache_level env`, which discards instance images after
+> use. Result: the 20 cross-repo evaluator images had to be re-pulled
+> every time. The current settings keep them on disk so a re-run
+> against a fresh predictions JSONL skips the pull. **Don't run
+> `docker system prune` or `docker image prune` between runs** — that
+> defeats the cache.
+
+The script writes a 3-way Markdown comparison to `out/REPORT.md`.
 
 ## Guard-rails
 

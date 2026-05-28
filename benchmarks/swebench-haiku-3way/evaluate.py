@@ -61,6 +61,13 @@ def run_evaluator(condition: str, out_dir: Path, max_workers: int) -> Path:
         "--predictions_path", str(predictions),
         "--max_workers", str(max_workers),
         "--run_id", run_id,
+        # Keep per-instance images on disk after the run so subsequent re-
+        # runs reuse them; the previous codex-gpt-5.5 cross-repo-20 run
+        # used `--cache_level env` and lost the instance images, so we
+        # had to re-pull. Combined with `--clean false`, evaluator
+        # workspaces and images survive for re-execution / inspection.
+        "--cache_level", "instance",
+        "--clean", "false",
     ]
     print(f"\n--- evaluator: {condition} ---")
     print("$ " + " ".join(cmd))
