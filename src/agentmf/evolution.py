@@ -2146,6 +2146,26 @@ def _apply_prune_match_terms_change(
         return
     remove_set = {str(term) for term in terms}
     match["user_intent"] = [term for term in user_intent if str(term) not in remove_set]
+    # OpenClaw-style imports keep a parallel `skills.<name>.match.user_intent`
+    # alongside each `skill.<name>` target. The selector matches against
+    # BOTH lists at runtime, so pruning only the target side leaves the
+    # noise active. When the target is named `skill.<X>` and a mirror
+    # `skills.<X>` entry exists, scrub the same terms there too.
+    if target_name.startswith("skill."):
+        mirror_skill_name = target_name[len("skill."):]
+        skills = data.get("skills")
+        if isinstance(skills, dict):
+            mirror = skills.get(mirror_skill_name)
+            if isinstance(mirror, dict):
+                mirror_match = mirror.get("match") if isinstance(mirror.get("match"), dict) else None
+                if mirror_match is not None:
+                    mirror_intent = mirror_match.get("user_intent")
+                    if isinstance(mirror_intent, str):
+                        mirror_intent = [mirror_intent]
+                    if isinstance(mirror_intent, list):
+                        mirror_match["user_intent"] = [
+                            term for term in mirror_intent if str(term) not in remove_set
+                        ]
 
 
 def _apply_add_target_change(

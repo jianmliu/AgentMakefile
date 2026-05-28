@@ -4060,6 +4060,96 @@ targets:
     assert patch_result.payload["patch_status"] == "generated"
 
 
+def test_prune_match_terms_also_cleans_mirror_skill_user_intent(tmp_path: Path) -> None:
+    """The selector matches a target on BOTH `target.match.user_intent`
+    AND every bound `skills.<name>.match.user_intent`. If
+    prune_match_terms only touches the target side, the same noisy
+    term still wins routing via the skill side — regression observed
+    in the openclaw curated corpus where bucket-suffix terms like
+    `brainstorming skills` survived pruning because they live on the
+    skill, not the target. When the change targets `skill.<X>` and a
+    mirror `skills.<X>` skill exists, the apply must remove the same
+    terms from both files' user_intent lists.
+    """
+    module_path = tmp_path / "skills" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  skills.brainstorming:
+    namespace: openclaw
+    description: Brainstorming skill.
+    implementation:
+      source: /Users/x/.codex/skills/brainstorming/SKILL.md
+      relative_source: skills/brainstorming/SKILL.md
+    match:
+      user_intent:
+        - brainstorm
+        - brainstorming session
+        - brainstorming .tmp
+        - You MUST use this
+targets:
+  skill.skills.brainstorming:
+    match:
+      user_intent:
+        - brainstorm
+        - brainstorming session
+        - brainstorming .tmp
+        - You MUST use this
+    skills:
+      - openclaw:skills.brainstorming
+    steps:
+      - use_skill: openclaw:skills.brainstorming
+"""
+    )
+    proposal_path = tmp_path / "prune.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-mirror-prune",
+                "title": "Prune noise from brainstorming",
+                "scope": {"modules": [str(module_path)], "targets": ["skill.skills.brainstorming"]},
+                "evidence": [],
+                "changes": [
+                    {
+                        "type": "prune_match_terms",
+                        "module": str(module_path),
+                        "target": "skill.skills.brainstorming",
+                        "remove_terms": ["brainstorming .tmp", "You MUST use this"],
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+    assert result.ok, result.diagnostics.format()
+
+    candidate = load_source(Path(result.payload["candidate_files"][0]["path"]))
+    target_terms = candidate.targets["skill.skills.brainstorming"].match["user_intent"]
+    skill_terms = candidate.skills["skills.brainstorming"].match["user_intent"]
+    # Both target AND mirror skill MUST have the noise gone.
+    assert "brainstorming .tmp" not in target_terms
+    assert "You MUST use this" not in target_terms
+    assert "brainstorming .tmp" not in skill_terms, (
+        f"mirror skill still has the noise term: {skill_terms}"
+    )
+    assert "You MUST use this" not in skill_terms
+    # Genuine intents stay on both sides.
+    assert "brainstorm" in target_terms and "brainstorm" in skill_terms
+    assert "brainstorming session" in target_terms and "brainstorming session" in skill_terms
+
+
 def test_dream_mode_low_signal_terms_prunes_bucket_suffix_and_boilerplate(tmp_path: Path) -> None:
     """Proactive noise detector: scans modules listed in openclaw_import
     evidence and proposes prune_match_terms for clearly low-signal
