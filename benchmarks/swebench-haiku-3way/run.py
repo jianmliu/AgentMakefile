@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TASKS_FILE = REPO_ROOT / "benchmarks" / "swebench-lite-haiku-30.jsonl"
+DEFAULT_TASKS_FILE = REPO_ROOT / "benchmarks" / "swebench-lite-haiku-30.jsonl"
 MODEL_DEFAULT = "claude-haiku-4-5"
 MAX_TOKENS = 8192
 
@@ -46,9 +46,9 @@ SYSTEM_PROMPT = (
 )
 
 
-def load_tasks() -> List[Dict[str, Any]]:
+def load_tasks(path: Path = DEFAULT_TASKS_FILE) -> List[Dict[str, Any]]:
     tasks = []
-    for line in TASKS_FILE.read_text().splitlines():
+    for line in path.read_text().splitlines():
         line = line.strip()
         if not line:
             continue
@@ -165,6 +165,8 @@ def write_predictions(condition: str, model: str, results: List[Dict[str, Any]],
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", default=str(REPO_ROOT / "benchmarks" / "swebench-haiku-3way" / "out"))
+    ap.add_argument("--tasks-file", default=str(DEFAULT_TASKS_FILE),
+                    help=f"JSONL task list (default: {DEFAULT_TASKS_FILE.name})")
     ap.add_argument("--conditions", default="none,baseline-agentmf,curated-agentmf",
                     help="comma-separated condition list")
     ap.add_argument("--limit", type=int, default=None, help="cap tasks per condition for pilot")
@@ -175,7 +177,7 @@ def main() -> int:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    tasks = load_tasks()
+    tasks = load_tasks(Path(args.tasks_file))
     if args.limit is not None:
         tasks = tasks[: args.limit]
     conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]

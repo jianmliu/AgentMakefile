@@ -36,7 +36,7 @@ DEFAULT_OUT_DIR = REPO_ROOT / "benchmarks" / "swebench-haiku-3way" / "out"
 DATASET = "princeton-nlp/SWE-bench_Lite"
 
 
-def preflight(out_dir: Path) -> List[str]:
+def preflight(out_dir: Path, tasks_file: Path) -> List[str]:
     problems: List[str] = []
     try:
         import swebench  # noqa: F401
@@ -44,8 +44,8 @@ def preflight(out_dir: Path) -> List[str]:
         problems.append("missing `swebench` package — `pip install swebench`")
     if shutil.which("docker") is None:
         problems.append("missing `docker` binary on PATH")
-    if not (REPO_ROOT / "benchmarks" / "swebench-lite-haiku-30.jsonl").exists():
-        problems.append("missing benchmarks/swebench-lite-haiku-30.jsonl")
+    if not tasks_file.exists():
+        problems.append(f"missing tasks file: {tasks_file}")
     for condition in ("none", "baseline-agentmf", "curated-agentmf"):
         if not (out_dir / condition / f"predictions-{condition}.jsonl").exists():
             problems.append(f"missing predictions for {condition}; run.py first")
@@ -122,6 +122,11 @@ def aggregate(out_dir: Path, condition_reports: Dict[str, Path]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
+    ap.add_argument(
+        "--tasks-file",
+        default=str(REPO_ROOT / "benchmarks" / "swebench-lite-haiku-30.jsonl"),
+        help="JSONL task list used to build the predictions; preflight checks this exists",
+    )
     ap.add_argument("--max-workers", type=int, default=4)
     ap.add_argument("--check", action="store_true", help="preflight only")
     ap.add_argument(
@@ -131,7 +136,7 @@ def main() -> int:
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
-    problems = preflight(out_dir)
+    problems = preflight(out_dir, Path(args.tasks_file))
     if problems:
         print("preflight problems:")
         for problem in problems:
