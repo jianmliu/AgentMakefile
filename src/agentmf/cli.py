@@ -301,6 +301,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     benchmark_harness_cmd.add_argument("--baseline-skills-dir", action="append", dest="baseline_skills_dirs")
     benchmark_harness_cmd.add_argument("--format", choices=["text", "json", "markdown"], default="markdown")
 
+    benchmark_suite_cmd = benchmark_subcommands.add_parser(
+        "suite",
+        help="run a benchmark suite YAML through the deterministic adapter",
+    )
+    benchmark_suite_cmd.add_argument("--suite", required=True)
+    benchmark_suite_cmd.add_argument("--file", help="AgentMakefile path; overrides suite.agentmakefile")
+    benchmark_suite_cmd.add_argument(
+        "--adapter",
+        choices=["deterministic-selection"],
+        default="deterministic-selection",
+    )
+    benchmark_suite_cmd.add_argument("--format", choices=["text", "json", "markdown"], default="json")
+
     clawbench_cmd = subparsers.add_parser("clawbench", help="ClawBench compatibility commands")
     clawbench_subcommands = clawbench_cmd.add_subparsers(dest="clawbench_command", required=True)
     clawbench_export_cmd = clawbench_subcommands.add_parser(
@@ -853,7 +866,48 @@ def _evo(args: argparse.Namespace) -> int:
 def _benchmark(args: argparse.Namespace) -> int:
     if args.benchmark_command == "harness":
         return _benchmark_harness(args)
+    if args.benchmark_command == "suite":
+        return _benchmark_suite(args)
     return 2
+
+
+def _benchmark_suite(args: argparse.Namespace) -> int:
+    from agentmf.benchmark_suite import create_suite_payload, render_suite_markdown
+
+    result = create_suite_payload(
+        suite_file=Path(args.suite),
+        agentmakefile=Path(args.file) if args.file else None,
+        adapter=args.adapter,
+    )
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "benchmark_suite": result.payload,
+                    "diagnostics": result.diagnostics.to_list(),
+                },
+                indent=2,
+            )
+        )
+    elif args.format == "markdown":
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            print(render_suite_markdown(result.payload), end="")
+    else:
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+        if result.payload:
+            summary = result.payload.get("summary", {})
+            print(f"Benchmark suite: {result.payload.get('suite', {}).get('id')}")
+            print(
+                f"  total={summary.get('total', 0)} passed={summary.get('passed', 0)} "
+                f"failed={summary.get('failed', 0)} skipped={summary.get('skipped', 0)}"
+            )
+    return 0 if result.ok else 1
 
 
 def _clawbench(args: argparse.Namespace) -> int:

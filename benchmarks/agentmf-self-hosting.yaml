@@ -1,0 +1,66 @@
+# BENCH-005 demo suite: AgentMakefile self-hosting deterministic checks.
+#
+# Routes typical methodology requests through the root AgentMakefile and
+# asserts each one lands on its expected methodology target. Use with:
+#
+#     agentmf benchmark suite \
+#       --suite benchmarks/agentmf-self-hosting.yaml \
+#       --adapter deterministic-selection \
+#       --format markdown
+#
+# The suite only exercises the deterministic-selection adapter — no
+# model providers are called and no tools execute.
+
+version: 1
+suite:
+  id: agentmf-self-hosting
+  title: AgentMakefile self-hosting routing benchmark
+  description: |
+    Confirms the root AgentMakefile's methodology routing for the
+    five most common Superpowers workflows. A failed task means the
+    selector picked the wrong target for a methodology phrase that
+    used to route cleanly.
+
+agentmakefile: AgentMakefile
+
+tasks:
+  - id: code-change
+    request: implement this feature
+    expected_targets:
+      - methodology.code_change
+    tags: [methodology]
+
+  - id: debug
+    request: debug failing pytest in tests/test_auth.py
+    expected_targets:
+      - methodology.debug
+    tags: [methodology]
+
+  - id: plan
+    request: write an implementation plan for adding password reset
+    expected_targets:
+      - methodology.execute_plan
+      - methodology.plan
+    tags: [methodology]
+
+  - id: finish
+    request: finish the development branch and open a pull request
+    expected_targets:
+      - methodology.finish
+    tags: [methodology]
+
+  - id: review
+    request: review the diff before merging this PR
+    expected_targets:
+      - methodology.review
+    tags: [methodology]
+
+adapters:
+  - id: deterministic-selection
+    kind: agentmf-management
+
+scoring:
+  primary:
+    - pass_rate
+  secondary:
+    - selection_trace_quality

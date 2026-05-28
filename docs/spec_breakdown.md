@@ -2531,9 +2531,9 @@ Completed:
 Next:
 
 - AMF-PAD-014 Multi-Source Guidance Ingestion (`agentmf guidance scan` ships SKILL.md / AGENTS.md / CLAUDE.md / markdown readers; skill-dir stays in `agentmf skills scan`. `agentmf plugin install --source` extension still pending).
-- AMF-BENCH-002 Suite File Parser.
-- AMF-BENCH-003 Deterministic Suite Runner.
-- AMF-BENCH-004 Report Writer.
-- AMF-BENCH-005 Demo Suite.
+- AMF-BENCH-002 Suite File Parser (`agentmf.benchmark_suite.parse_suite_file`; structured AMF250 diagnostics).
+- AMF-BENCH-003 Deterministic Suite Runner (`agentmf benchmark suite --adapter deterministic-selection` drives each task through `create_link_plan`).
+- AMF-BENCH-004 Report Writer (`render_suite_markdown` + JSON / text CLI formats).
+- AMF-BENCH-005 Demo Suite (`benchmarks/agentmf-self-hosting.yaml`, 5/5 passed against root AgentMakefile).
 
 This order has reconciled the implemented compiler roadmap tasks and introduced the first runtime planning/linking tasks through the current `agentmf exec` contract. The next step should be a new milestone decision: either deepen provider-backed execution, package host adapters, or prepare the project for release.

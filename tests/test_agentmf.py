@@ -4027,6 +4027,219 @@ def test_cli_guidance_scan_imports_agents_and_claude_md(tmp_path: Path, capsys) 
     assert any("planning-guidance" in name for name in target_names)
 
 
+def test_benchmark_suite_parses_valid_yaml(tmp_path: Path) -> None:
+    """BENCH-002: parse a suite YAML with required top-level fields and
+    surface diagnostics for missing/invalid task ids."""
+    suite_path = tmp_path / "ok.yaml"
+    suite_path.write_text(
+        """\
+version: 1
+suite:
+  id: example
+  title: Example deterministic suite
+  description: Self-hosting routing checks.
+tasks:
+  - id: implement-feature
+    request: please implement this feature
+    expected_targets:
+      - methodology.code_change
+  - id: write-plan
+    request: write an implementation plan
+    expected_targets:
+      - methodology.plan
+"""
+    )
+
+    from agentmf.benchmark_suite import parse_suite_file
+
+    result = parse_suite_file(suite_path)
+
+    assert result.ok, result.diagnostics.format()
+    assert result.suite.suite_id == "example"
+    assert result.suite.title == "Example deterministic suite"
+    assert [task.task_id for task in result.suite.tasks] == ["implement-feature", "write-plan"]
+    assert result.suite.tasks[0].expected_targets == ["methodology.code_change"]
+
+
+def test_benchmark_suite_parser_diagnoses_missing_fields(tmp_path: Path) -> None:
+    suite_path = tmp_path / "bad.yaml"
+    suite_path.write_text(
+        """\
+version: 1
+suite:
+  id: bad
+tasks:
+  - request: missing task id here
+  - id: ok
+    request: ok task
+    expected_targets:
+      - target.ok
+"""
+    )
+
+    from agentmf.benchmark_suite import parse_suite_file
+
+    result = parse_suite_file(suite_path)
+
+    assert not result.ok
+    codes = [item.code for item in result.diagnostics.items]
+    assert "AMF250" in codes  # missing task id
+
+
+def test_benchmark_suite_run_deterministic_pass_and_fail(tmp_path: Path) -> None:
+    """BENCH-003 + BENCH-004: deterministic-selection adapter routes each
+    task through the AgentMakefile and reports pass/fail per task."""
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.review:
+    priority: 70
+    match:
+      user_intent:
+        - review this diff
+    steps:
+      - action: inspect
+""",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: routing
+  title: routing
+agentmakefile: {module_path}
+tasks:
+  - id: t-hits
+    request: review this diff carefully
+    expected_targets:
+      - skill.review
+  - id: t-miss
+    request: totally unrelated zebra request
+    expected_targets:
+      - skill.review
+"""
+    )
+
+    from agentmf.benchmark_suite import create_suite_payload
+
+    result = create_suite_payload(suite_file=suite_path, agentmakefile=None, adapter="deterministic-selection")
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["summary"] == {"total": 2, "passed": 1, "failed": 1, "skipped": 0}
+    by_id = {task["task_id"]: task for task in payload["tasks"]}
+    assert by_id["t-hits"]["status"] == "passed"
+    assert by_id["t-hits"]["actual_targets"] == ["skill.review"]
+    assert by_id["t-miss"]["status"] == "failed"
+
+
+def test_benchmark_suite_markdown_report_renders_summary(tmp_path: Path) -> None:
+    """BENCH-004 markdown emitter includes title + summary + per-task table."""
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.x:
+    priority: 70
+    match:
+      user_intent:
+        - alpha
+    steps:
+      - action: a
+""",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: small
+  title: Small suite
+agentmakefile: {module_path}
+tasks:
+  - id: a
+    request: alpha please
+    expected_targets:
+      - skill.x
+"""
+    )
+
+    from agentmf.benchmark_suite import create_suite_payload, render_suite_markdown
+
+    result = create_suite_payload(suite_file=suite_path, agentmakefile=None, adapter="deterministic-selection")
+    md = render_suite_markdown(result.payload)
+
+    assert "# Small suite" in md
+    assert "passed=1" in md
+    assert "skill.x" in md
+
+
+def test_benchmark_suite_demo_file_parses(tmp_path: Path) -> None:
+    """BENCH-005 demo suite file exists in benchmarks/ and parses."""
+    from agentmf.benchmark_suite import parse_suite_file
+
+    demo_path = Path(__file__).resolve().parent.parent / "benchmarks" / "agentmf-self-hosting.yaml"
+    assert demo_path.exists(), f"demo suite missing: {demo_path}"
+    result = parse_suite_file(demo_path)
+    assert result.ok, result.diagnostics.format()
+    assert len(result.suite.tasks) >= 3
+
+
+def test_cli_benchmark_suite_runs_and_emits_json(tmp_path: Path, capsys) -> None:
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  skill.x:
+    priority: 70
+    match:
+      user_intent:
+        - alpha
+    steps:
+      - action: a
+""",
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: cli
+  title: cli
+agentmakefile: {module_path}
+tasks:
+  - id: a
+    request: alpha please
+    expected_targets:
+      - skill.x
+"""
+    )
+
+    exit_code = main(
+        [
+            "benchmark",
+            "suite",
+            "--suite",
+            str(suite_path),
+            "--adapter",
+            "deterministic-selection",
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["benchmark_suite"]["summary"]["passed"] == 1
+
+
 def test_openclaw_curator_creates_duplicate_skill_proposal(tmp_path: Path) -> None:
     evidence_file = tmp_path / "openclaw_import.jsonl"
     evidence_file.write_text(
