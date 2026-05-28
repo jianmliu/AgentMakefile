@@ -9,3 +9,9 @@ build/
 # Per-machine promoted OpenClaw curation output (paths reference local
 # Codex/Claude installs; regenerate on demand via agentmf evo promote).
 modules/openclaw-curated/
+
+# Per-machine SWE-bench-haiku-3way experiment outputs (predictions,
+# raw model text, evaluator reports). Predictions can leak repo state
+# in patch text and depend on the user's API key + runs; regenerate via
+# benchmarks/swebench-haiku-3way/run.py.
+benchmarks/swebench-haiku-3way/out/
