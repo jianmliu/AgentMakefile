@@ -4060,6 +4060,258 @@ targets:
     assert patch_result.payload["patch_status"] == "generated"
 
 
+def test_hash_embedder_is_deterministic_and_unit_norm() -> None:
+    from agentmf.embedder import HashEmbedder
+    import numpy as np
+
+    emb = HashEmbedder(dim=128)
+    a = emb.embed("write a failing test first")
+    b = emb.embed("write a failing test first")
+    c = emb.embed("brainstorm a new product feature")
+
+    # Determinism: same input → same vector (bit-exact float32).
+    np.testing.assert_array_equal(a, b)
+    # Unit length (allowing tiny float32 slop).
+    assert abs(float(np.linalg.norm(a)) - 1.0) < 1e-5
+    # Different inputs produce different vectors.
+    assert not np.array_equal(a, c)
+    # Shape and dtype are explicit.
+    assert a.shape == (128,)
+    assert a.dtype == np.float32
+
+
+def test_hash_embedder_token_overlap_drives_similarity() -> None:
+    """HashEmbedder is feature-hashing, so two strings sharing many
+    tokens MUST produce a higher cosine than two strings sharing none.
+    This is a sanity check on the embedding-as-recall path, not a
+    semantic claim.
+    """
+    from agentmf.embedder import HashEmbedder
+    import numpy as np
+
+    emb = HashEmbedder(dim=512)
+    a = emb.embed("send a slack message")
+    b = emb.embed("post on slack")  # shares 'slack'
+    c = emb.embed("write a quarterly business plan")  # shares nothing
+
+    assert float(a @ b) > float(a @ c), (
+        f"shared-token cosine ({float(a @ b):.4f}) must beat "
+        f"no-overlap cosine ({float(a @ c):.4f})"
+    )
+
+
+def test_embedder_batch_returns_normalised_matrix() -> None:
+    from agentmf.embedder import HashEmbedder
+    import numpy as np
+
+    emb = HashEmbedder(dim=64)
+    texts = ["alpha beta", "gamma delta", "alpha gamma"]
+    matrix = emb.embed_batch(texts)
+    assert matrix.shape == (3, 64)
+    assert matrix.dtype == np.float32
+    norms = np.linalg.norm(matrix, axis=1)
+    np.testing.assert_allclose(norms, np.ones(3), atol=1e-5)
+
+
+def test_embedder_batch_handles_empty_text() -> None:
+    """Empty / whitespace input must produce a zero vector (no tokens
+    found) and not raise. The downstream SkillIndex handles zero rows
+    via its score-0 path.
+    """
+    from agentmf.embedder import HashEmbedder
+    import numpy as np
+
+    emb = HashEmbedder(dim=32)
+    matrix = emb.embed_batch(["alpha", "", "  "])
+    assert matrix.shape == (3, 32)
+    # Row 0 is normal, rows 1 + 2 are zero vectors.
+    assert float(np.linalg.norm(matrix[0])) > 0.5
+    assert float(np.linalg.norm(matrix[1])) == 0.0
+    assert float(np.linalg.norm(matrix[2])) == 0.0
+
+
+def test_sentence_transformer_embedder_raises_clearly_when_dep_missing() -> None:
+    """sentence_transformers is an optional extra. If it isn't installed
+    and someone constructs the embedder, the first method call must
+    raise an ImportError naming the install command.
+    """
+    import sys
+    from agentmf.embedder import SentenceTransformerEmbedder
+
+    # Skip cleanly if sentence-transformers IS installed locally (the
+    # error path isn't reachable then).
+    try:
+        import sentence_transformers  # noqa: F401
+        import pytest
+        pytest.skip("sentence-transformers is installed; can't exercise missing-dep path")
+    except ImportError:
+        pass
+
+    emb = SentenceTransformerEmbedder()
+    try:
+        emb.embed("anything")
+    except ImportError as exc:
+        msg = str(exc)
+        assert "sentence-transformers" in msg
+        assert "agentmf[embedding]" in msg
+        return
+    raise AssertionError("expected ImportError when sentence-transformers missing")
+
+
+def _write_skill_index_test_module(tmp_path: Path) -> Path:
+    path = tmp_path / "skills" / "AgentMakefile"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """\
+version: "0.1"
+skills:
+  skills.brainstorming:
+    namespace: openclaw
+    description: Brainstorming explores user intent and clarifies design before any implementation.
+    implementation:
+      source: /Users/x/.codex/skills/brainstorming/SKILL.md
+      relative_source: skills/brainstorming/SKILL.md
+    match:
+      user_intent:
+        - brainstorm
+        - brainstorming session
+        - brainstorming skills
+  skills.test-driven-development:
+    namespace: openclaw
+    description: Test-driven development with red-green-refactor for every behavior change.
+    implementation:
+      source: /Users/x/.codex/skills/tdd/SKILL.md
+      relative_source: skills/tdd/SKILL.md
+    match:
+      user_intent:
+        - implement feature
+        - write a failing test first
+        - TDD
+  skills.slack-send:
+    namespace: openclaw
+    description: Send a message to a Slack channel or user.
+    implementation:
+      source: /Users/x/.codex/skills/slack-send/SKILL.md
+      relative_source: skills/slack-send/SKILL.md
+    match:
+      user_intent:
+        - send slack message
+        - post on slack
+targets:
+  skill.skills.brainstorming:
+    match:
+      user_intent: [brainstorm]
+    skills: [openclaw:skills.brainstorming]
+    steps:
+      - use_skill: openclaw:skills.brainstorming
+  skill.skills.test-driven-development:
+    match:
+      user_intent: [TDD]
+    skills: [openclaw:skills.test-driven-development]
+    steps:
+      - use_skill: openclaw:skills.test-driven-development
+  skill.skills.slack-send:
+    match:
+      user_intent: [slack]
+    skills: [openclaw:skills.slack-send]
+    steps:
+      - use_skill: openclaw:skills.slack-send
+"""
+    )
+    return path
+
+
+def test_skill_index_from_source_builds_one_vector_per_skill(tmp_path: Path) -> None:
+    from agentmf.embedder import HashEmbedder
+    from agentmf.skill_index import SkillIndex
+    from agentmf.loader import load_source
+
+    module_path = _write_skill_index_test_module(tmp_path)
+    source = load_source(module_path)
+    emb = HashEmbedder(dim=128)
+    index = SkillIndex.from_source(source, embedder=emb)
+
+    assert {s.skill_name for s in index.skills} == {
+        "skills.brainstorming",
+        "skills.test-driven-development",
+        "skills.slack-send",
+    }
+    assert index.matrix.shape == (3, 128)
+    # All rows must be unit length so cosine == dot product.
+    import numpy as np
+    norms = np.linalg.norm(index.matrix, axis=1)
+    np.testing.assert_allclose(norms, np.ones(3), atol=1e-5)
+
+
+def test_skill_index_query_ranks_by_cosine_descending(tmp_path: Path) -> None:
+    from agentmf.embedder import HashEmbedder
+    from agentmf.skill_index import SkillIndex
+    from agentmf.loader import load_source
+
+    module_path = _write_skill_index_test_module(tmp_path)
+    index = SkillIndex.from_source(
+        load_source(module_path), embedder=HashEmbedder(dim=512)
+    )
+
+    # Query with strong token overlap to TDD skill description.
+    results = index.query("test driven development implement feature", top_k=3)
+    assert len(results) == 3
+    assert results[0].rank == 1
+    assert results[0].skill_name == "skills.test-driven-development"
+    assert results[0].target_name == "skill.skills.test-driven-development"
+    # Scores are monotonically non-increasing.
+    assert results[0].score >= results[1].score >= results[2].score
+
+    # Slack query gets the slack skill on top.
+    slack_results = index.query("send a slack message to the team", top_k=2)
+    assert slack_results[0].skill_name == "skills.slack-send"
+
+
+def test_skill_index_query_handles_empty_source(tmp_path: Path) -> None:
+    from agentmf.embedder import HashEmbedder
+    from agentmf.skill_index import SkillIndex
+    from agentmf.loader import load_source
+
+    path = tmp_path / "empty" / "AgentMakefile"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "version: '0.1'\nskills: {}\ntargets:\n  noop:\n    description: x\n    priority: 50\n    phony: true\n"
+    )
+    index = SkillIndex.from_source(load_source(path), embedder=HashEmbedder(dim=16))
+    assert index.matrix.shape == (0, 16)
+    assert index.query("anything", top_k=5) == []
+
+
+def test_skill_index_filters_bucket_suffix_terms_from_corpus(tmp_path: Path) -> None:
+    """The corpus text builder must drop bucket-suffix artifacts like
+    'brainstorming skills' / 'brainstorm .tmp' so the embedding isn't
+    polluted by importer-internal disambiguators. Genuine multi-word
+    intents stay.
+    """
+    from agentmf.skill_index import _corpus_text_for_skill
+    from agentmf.models import SkillSpec
+
+    skill_spec = SkillSpec(
+        namespace="openclaw",
+        description="Brainstorming explores user intent.",
+        match={"user_intent": [
+            "brainstorm",
+            "brainstorming session",
+            "brainstorming skills",
+            "brainstorming .tmp",
+            "brainstorm plugins",
+        ]},
+        implementation={"source": "x", "relative_source": "x"},
+    )
+    text = _corpus_text_for_skill("skills.brainstorming", skill_spec)
+    assert "brainstorming session" in text
+    assert "brainstorming skills" not in text
+    assert "brainstorming .tmp" not in text
+    assert "brainstorm plugins" not in text
+    # Description is included.
+    assert "Brainstorming explores user intent." in text
+
+
 def test_prune_match_terms_also_cleans_mirror_skill_user_intent(tmp_path: Path) -> None:
     """The selector matches a target on BOTH `target.match.user_intent`
     AND every bound `skills.<name>.match.user_intent`. If

@@ -16,6 +16,8 @@ from agentmf.clawbench import (
 )
 from agentmf.compiler import compile_agentmakefile
 from agentmf.configure import CONFIGURE_ACTIONS, create_configure_payload
+from agentmf.embedder import HashEmbedder, SentenceTransformerEmbedder, get_default_embedder
+from agentmf.skill_index import SkillIndex
 from agentmf.evolution import (
     EVIDENCE_SOURCES,
     PROMOTION_STATUSES,
@@ -89,6 +91,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     configure_cmd.add_argument("--write", action="store_true",
                                help="persist --add / --remove edits back to the AgentMakefile (else dry-run)")
     configure_cmd.add_argument("--format", choices=["text", "json"], default="text")
+
+    embed_cmd = subparsers.add_parser(
+        "embed",
+        help="explore embedding-based skill matching (semantic top-K query)",
+    )
+    embed_sub = embed_cmd.add_subparsers(dest="embed_command", required=True)
+    embed_query = embed_sub.add_parser("query", help="rank a module's skills by semantic similarity to a request")
+    embed_query.add_argument("--file", default="AgentMakefile")
+    embed_query.add_argument("--request", required=True)
+    embed_query.add_argument("--top-k", type=int, default=5)
+    embed_query.add_argument(
+        "--embedder",
+        choices=["auto", "hash", "sentence-transformer"],
+        default="auto",
+        help="`auto` uses sentence-transformers when installed, else HashEmbedder",
+    )
+    embed_query.add_argument("--model", default=None, help="model id for --embedder sentence-transformer")
+    embed_query.add_argument("--dim", type=int, default=384, help="dim for --embedder hash")
+    embed_query.add_argument("--format", choices=["text", "json"], default="text")
 
     select_cmd = subparsers.add_parser("select", help="select AgentMakefile prompt fragments for a request")
     select_cmd.add_argument("--file", default="AgentMakefile")
@@ -514,6 +535,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _compile(args)
     if args.command == "configure":
         return _configure(args)
+    if args.command == "embed":
+        return _embed(args)
     if args.command == "select":
         return _select(args)
     if args.command == "run":
@@ -638,6 +661,57 @@ def _configure(args: argparse.Namespace) -> int:
             stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
             print(result.diagnostics.format(), file=stream)
     return 1 if not result.ok else 0
+
+
+def _embed(args: argparse.Namespace) -> int:
+    if args.embed_command != "query":
+        return 2
+    if args.embedder == "hash":
+        embedder = HashEmbedder(dim=args.dim)
+    elif args.embedder == "sentence-transformer":
+        embedder = SentenceTransformerEmbedder(model=args.model)
+    else:
+        embedder = get_default_embedder(dim=args.dim)
+    try:
+        index = SkillIndex.from_path(Path(args.file), embedder=embedder)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    matches = index.query(args.request, top_k=args.top_k)
+    if args.format == "json":
+        print(json.dumps({
+            "ok": True,
+            "file": args.file,
+            "request": args.request,
+            "embedder": embedder.name,
+            "embedded_skills": len(index.skills),
+            "matches": [
+                {
+                    "rank": m.rank,
+                    "skill": m.skill_name,
+                    "target": m.target_name,
+                    "score": m.score,
+                    "description": m.description,
+                }
+                for m in matches
+            ],
+        }, indent=2))
+    else:
+        print(f"AgentMakefile: {args.file}")
+        print(f"Request: {args.request!r}")
+        print(f"Embedder: {embedder.name}  (corpus size: {len(index.skills)} skills)")
+        if not matches:
+            print("(no skills indexed)")
+        else:
+            print(f"\nTop {len(matches)} matches:")
+            for m in matches:
+                desc = m.description.splitlines()[0] if m.description else ""
+                if len(desc) > 80:
+                    desc = desc[:77] + "..."
+                print(f"  [{m.rank}] {m.score:0.4f}  {m.target_name}")
+                if desc:
+                    print(f"        {desc}")
+    return 0
 
 
 def _render_configure_text(action: str, payload: dict) -> None:
