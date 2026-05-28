@@ -1,5 +1,29 @@
 # AgentMakefile
 
+> A declarative compiler for agent harnesses, plus an evidence-driven
+> dream loop that proposes patches to the makefile from real session
+> traces. Think of it as the **autoconf / configure / make / make
+> install** pattern applied to AI agent guidance: the `AgentMakefile`
+> stays the human-readable single source of truth, and tooling around
+> it follows the familiar four-step lineage.
+>
+> | GNU Autotools | AgentMakefile |
+> | --- | --- |
+> | `autoconf` (regenerate the makefile from observed project facts) | **Dream loop** — `agentmf evo dream run` proposes patches to the AgentMakefile from accumulated session traces. |
+> | `./configure` (decide which platform formats / features compile in) | **Backend selection** — the AgentMakefile's `compile.targets` list (and `agentmf compile --target …`) picks which skill formats to emit: `claude-skill`, `codex-skill`, `cursor-rule`, `agents-md`, `claude-md`, `opencode`, target fragments, etc. |
+> | `make` (build artefacts from the configured set) | **`agentmf compile`** — actually emits the selected skill packages and host configs (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/`, `.codex/skills/…`, `.claude/skills/…`, `opencode.json`, fragments). |
+> | `make install` (copy artefacts into the host's install locations) | **`agentmf skills sync`** — install generated skills into `~/.codex/skills/`, `~/.claude/skills/`, and other platform-specific roots with a dry-run-first workflow. |
+>
+> One declarative source, many host-native install targets, and a
+> review-gated feedback loop that improves the source over time.
+>
+> Runtime per-request routing (`agentmf select` / `agentmf prompt` /
+> the OpenCode plugin's `chat.message` hook) is a **separate axis**
+> from this build pipeline — it's closer to feature detection at
+> *runtime* than to `configure` at build time. The same compiled
+> install set still gets filtered down to the smallest useful target
+> closure on every chat turn.
+
 AgentMakefile is a build system and routing layer for agent harnesses. It
 turns scattered `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, framework rules, policies,
 permissions, and workflow targets into a structured, dependency-aware harness

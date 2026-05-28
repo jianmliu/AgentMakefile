@@ -15,6 +15,7 @@ from agentmf.clawbench import (
     create_clawbench_result_summary,
 )
 from agentmf.compiler import compile_agentmakefile
+from agentmf.configure import CONFIGURE_ACTIONS, create_configure_payload
 from agentmf.evolution import (
     EVIDENCE_SOURCES,
     PROMOTION_STATUSES,
@@ -70,6 +71,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     compile_cmd.add_argument("--dry-run", action="store_true")
     compile_cmd.add_argument("--format", choices=["text", "json"], default="text")
     compile_cmd.add_argument("--trace", action="store_true")
+
+    configure_cmd = subparsers.add_parser(
+        "configure",
+        help="show or edit which compile backends are active (compile.targets)",
+    )
+    configure_cmd.add_argument("--file", default="AgentMakefile")
+    configure_action = configure_cmd.add_mutually_exclusive_group()
+    configure_action.add_argument("--list", dest="configure_action", action="store_const", const="list",
+                                  help="list every supported backend with its default output path")
+    configure_action.add_argument("--validate", dest="configure_action", action="store_const", const="validate",
+                                  help="check that every entry in compile.targets is a known backend")
+    configure_action.add_argument("--add", dest="configure_add", metavar="BACKEND",
+                                  help="add a backend to compile.targets (use --write to persist)")
+    configure_action.add_argument("--remove", dest="configure_remove", metavar="BACKEND",
+                                  help="remove a backend from compile.targets (use --write to persist)")
+    configure_cmd.add_argument("--write", action="store_true",
+                               help="persist --add / --remove edits back to the AgentMakefile (else dry-run)")
+    configure_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
     select_cmd = subparsers.add_parser("select", help="select AgentMakefile prompt fragments for a request")
     select_cmd.add_argument("--file", default="AgentMakefile")
@@ -493,6 +512,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _validate(args)
     if args.command == "compile":
         return _compile(args)
+    if args.command == "configure":
+        return _configure(args)
     if args.command == "select":
         return _select(args)
     if args.command == "run":
@@ -580,6 +601,88 @@ def _compile(args: argparse.Namespace) -> int:
             for event in result.trace:
                 print(f"  {event.format()}")
     return 1 if not result.ok else 0
+
+
+def _configure(args: argparse.Namespace) -> int:
+    add_backend = getattr(args, "configure_add", None)
+    remove_backend = getattr(args, "configure_remove", None)
+    explicit_action = getattr(args, "configure_action", None)
+    if add_backend is not None:
+        action = "add"
+        backend = add_backend
+    elif remove_backend is not None:
+        action = "remove"
+        backend = remove_backend
+    elif explicit_action is not None:
+        action = explicit_action
+        backend = None
+    else:
+        action = "status"
+        backend = None
+
+    result = create_configure_payload(
+        path=Path(args.file),
+        action=action,
+        backend=backend,
+        write=args.write,
+    )
+    payload = dict(result.payload)
+    payload["ok"] = result.ok
+    payload["diagnostics"] = result.diagnostics.to_list()
+
+    if args.format == "json":
+        print(json.dumps(payload, indent=2))
+    else:
+        _render_configure_text(action, payload)
+        if result.diagnostics.items:
+            stream = sys.stderr if result.diagnostics.has_errors else sys.stdout
+            print(result.diagnostics.format(), file=stream)
+    return 1 if not result.ok else 0
+
+
+def _render_configure_text(action: str, payload: dict) -> None:
+    file_path = payload.get("file")
+    if action == "list":
+        backends = payload.get("backends", [])
+        print(f"Supported backends ({len(backends)}):")
+        for entry in backends:
+            print(f"  - {entry['backend']:<18} {entry.get('description', '')}")
+            print(f"      default output: {entry.get('default_output', '')}")
+        return
+    if action == "status":
+        marker = " (default — compile.targets not set)" if payload.get("is_default") else ""
+        active = payload.get("active_backends", [])
+        available = payload.get("available_backends", [])
+        print(f"AgentMakefile: {file_path}")
+        print(f"Active backends ({len(active)}){marker}:")
+        for entry in active:
+            print(f"  - {entry['backend']:<18} -> {entry.get('path', '')}")
+        if available:
+            print(f"\nAvailable but not selected ({len(available)}):")
+            print("  " + ", ".join(available))
+            print("\nUse `agentmf configure --add <backend> --write` to enable one,")
+            print("or `agentmf configure --list` for descriptions of each.")
+        return
+    if action == "validate":
+        if payload.get("ok"):
+            targets = payload.get("compile_targets", [])
+            print(f"OK: {len(targets)} backend(s) configured: {', '.join(targets)}")
+        else:
+            print("FAIL: configure.validate found problems (see diagnostics).")
+        return
+    if action in ("add", "remove"):
+        verb = "Added" if action == "add" else "Removed"
+        backend = payload.get("backend")
+        if payload.get("wrote"):
+            print(f"{verb} backend `{backend}` and wrote {file_path}.")
+        elif payload.get("ok"):
+            print(
+                f"No change: backend `{backend}` is already "
+                + ("present" if action == "add" else "absent")
+                + " in compile.targets."
+            )
+        print(f"Current compile.targets: {payload.get('compile_targets', [])}")
+        return
 
 
 def _select(args: argparse.Namespace) -> int:
