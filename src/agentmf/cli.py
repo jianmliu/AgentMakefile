@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agentmf.skill_index import SkillIndex  # noqa: F401
@@ -56,6 +56,61 @@ from agentmf.swebench import (
     render_swebench_pass_rate_markdown,
 )
 from agentmf.tool_loop import create_exec_payload
+
+
+def _add_matcher_args(parser: argparse.ArgumentParser) -> None:
+    """Common matcher flags for select/prompt (and the read-only callers
+    that wrap them). `--matcher keyword` is the default and matches the
+    historical substring-keyword path. `embedding` / `hybrid` opt into
+    cosine-based recall via SkillIndex; `hybrid` then rerank-picks the
+    keyword winner inside the embedding top-K pool.
+    """
+    parser.add_argument(
+        "--matcher",
+        choices=["keyword", "embedding", "hybrid"],
+        default="keyword",
+        help="routing matcher: `keyword` (default), `embedding`, or `hybrid` (embedding top-K -> keyword rerank)",
+    )
+    parser.add_argument(
+        "--matcher-embedder",
+        choices=["auto", "hash", "sentence-transformer"],
+        default="auto",
+        help="embedder family for --matcher embedding/hybrid (default: auto - prefers sentence-transformers when installed)",
+    )
+    parser.add_argument("--matcher-model", default=None,
+                        help="model id for --matcher-embedder sentence-transformer")
+    parser.add_argument("--matcher-dim", type=int, default=384,
+                        help="dim for --matcher-embedder hash")
+    parser.add_argument("--matcher-top-k", type=int, default=10,
+                        help="top-K passed to the SkillIndex; for hybrid this also bounds the keyword rerank pool")
+    parser.add_argument(
+        "--matcher-cache", default=None,
+        help="optional cached SkillIndex path (built by `agentmf embed compile`); skips corpus re-embed",
+    )
+
+
+def _matcher_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
+    """Translate the common --matcher* flags into create_link_plan/
+    create_prompt_payload kwargs. Construct the embedder up-front so
+    the called function gets a ready instance (avoids passing flag
+    strings around).
+    """
+    matcher = getattr(args, "matcher", "keyword")
+    if matcher == "keyword":
+        return {"matcher": "keyword"}
+    choice = getattr(args, "matcher_embedder", "auto")
+    if choice == "hash":
+        embedder = HashEmbedder(dim=getattr(args, "matcher_dim", 384))
+    elif choice == "sentence-transformer":
+        embedder = SentenceTransformerEmbedder(model=getattr(args, "matcher_model", None))
+    else:
+        embedder = get_default_embedder(dim=getattr(args, "matcher_dim", 384))
+    return {
+        "matcher": matcher,
+        "embedder": embedder,
+        "embedder_cache_path": getattr(args, "matcher_cache", None),
+        "embedder_top_k": getattr(args, "matcher_top_k", 10),
+    }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -146,6 +201,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     select_cmd.add_argument("--target", action="append", dest="targets")
     select_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
     select_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    _add_matcher_args(select_cmd)
 
     run_cmd = subparsers.add_parser("run", help="dry-run an AgentMakefile runtime plan")
     run_cmd.add_argument("--file", default="AgentMakefile")
@@ -168,6 +224,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     prompt_cmd.add_argument("--include-git-diff", action="store_true")
     prompt_cmd.add_argument("--context-file", action="append", dest="context_files")
     prompt_cmd.add_argument("--format", choices=["text", "json"], default="text")
+    _add_matcher_args(prompt_cmd)
 
     ask_cmd = subparsers.add_parser("ask", help="run a one-shot provider call")
     ask_cmd.add_argument("request_positional", nargs="?")
@@ -391,7 +448,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     benchmark_suite_cmd.add_argument("--file", help="AgentMakefile path; overrides suite.agentmakefile")
     benchmark_suite_cmd.add_argument(
         "--adapter",
-        choices=["deterministic-selection", "subprocess-execution", "embedding-selection"],
+        choices=["deterministic-selection", "subprocess-execution", "embedding-selection", "hybrid-selection"],
         default="deterministic-selection",
     )
     benchmark_suite_cmd.add_argument(
@@ -861,6 +918,7 @@ def _select(args: argparse.Namespace) -> int:
         request=args.request,
         target_names=args.targets,
         backend=args.backend,
+        **_matcher_kwargs(args),
     )
     if args.format == "json":
         print(
@@ -1013,6 +1071,7 @@ def _prompt(args: argparse.Namespace) -> int:
         context_files=[Path(path) for path in args.context_files or []],
         include_git_status=args.include_git_status,
         include_git_diff=args.include_git_diff,
+        **_matcher_kwargs(args),
     )
     if args.format == "json":
         print(

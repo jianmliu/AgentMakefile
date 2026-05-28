@@ -27,6 +27,8 @@ class LinkPlanResult:
 
 
 DEFAULT_N_BEST = 3
+DEFAULT_HYBRID_TOP_K = 10
+SUPPORTED_MATCHERS = ("keyword", "embedding", "hybrid")
 
 
 def create_link_plan(
@@ -35,6 +37,11 @@ def create_link_plan(
     target_names: Optional[List[str]] = None,
     backend: str = "agents-fragments",
     n_best: int = DEFAULT_N_BEST,
+    *,
+    matcher: str = "keyword",
+    embedder: Optional[Any] = None,
+    embedder_cache_path: Optional[Union[Path, str]] = None,
+    embedder_top_k: int = DEFAULT_HYBRID_TOP_K,
 ) -> LinkPlanResult:
     diagnostics = Diagnostics()
     if backend not in FRAGMENT_BACKEND_DIRS:
@@ -43,6 +50,14 @@ def create_link_plan(
             f"unsupported fragment backend {backend}",
             "backend",
             f"choose one of: {', '.join(sorted(FRAGMENT_BACKEND_DIRS))}",
+        )
+        return LinkPlanResult(diagnostics)
+    if matcher not in SUPPORTED_MATCHERS:
+        diagnostics.error(
+            "AMF117",
+            f"unsupported matcher {matcher}",
+            "matcher",
+            f"choose one of: {', '.join(SUPPORTED_MATCHERS)}",
         )
         return LinkPlanResult(diagnostics)
 
@@ -63,7 +78,24 @@ def create_link_plan(
         selection_mode = "explicit_target"
         selection_trace = _explicit_selection_trace(selected_targets, requested_targets)
     elif request:
-        selected_targets, selection_trace = _targets_for_request(request, ir.targets, diagnostics)
+        if matcher == "keyword":
+            selected_targets, selection_trace = _targets_for_request(request, ir.targets, diagnostics)
+        elif matcher == "embedding":
+            selected_targets, selection_trace = _targets_for_request_embedding(
+                request, source, ir.targets,
+                embedder=embedder,
+                cache_path=Path(embedder_cache_path) if embedder_cache_path else None,
+                top_k=embedder_top_k,
+                diagnostics=diagnostics,
+            )
+        else:  # hybrid
+            selected_targets, selection_trace = _targets_for_request_hybrid(
+                request, source, ir.targets,
+                embedder=embedder,
+                cache_path=Path(embedder_cache_path) if embedder_cache_path else None,
+                top_k=embedder_top_k,
+                diagnostics=diagnostics,
+            )
         selection_mode = "request"
     else:
         diagnostics.error("AMF116", "select requires a request or at least one explicit target", "select")
@@ -310,6 +342,309 @@ def _targets_for_request(
         "candidates": candidates,
     }
     return [selected_target], trace
+
+
+def _targets_for_request_embedding(
+    request: str,
+    source: Any,
+    targets: List[IRTarget],
+    *,
+    embedder: Optional[Any],
+    cache_path: Optional[Path],
+    top_k: int,
+    diagnostics: Diagnostics,
+) -> tuple[List[IRTarget], Dict[str, Any]]:
+    """Pure embedding selector. Builds (or loads) a `SkillIndex` over
+    the source's skills, ranks by cosine, and returns the IRTarget whose
+    name matches the rank-1 skill's `skill.<name>` target.
+
+    Fails closed: if no skill has a matching target in the IR (e.g. the
+    source has skills but no auto-generated `skill.<name>` targets) the
+    request is reported as AMF118 — same code the keyword selector uses
+    for misses — so callers can detect uniformly.
+    """
+    index, embedder_meta = _load_routing_index(source, embedder, cache_path, diagnostics)
+    if index is None:
+        return [], {}
+    matches = index.query(request, top_k=max(int(top_k), 1))
+    if not matches:
+        diagnostics.error("AMF118", "no skill matched request via embedding", "request")
+        return [], {}
+    targets_by_name = {target.name: target for target in targets}
+    selected_target = None
+    for match in matches:
+        candidate = targets_by_name.get(match.target_name)
+        if candidate is not None:
+            selected_target = candidate
+            break
+    if selected_target is None:
+        diagnostics.error(
+            "AMF118",
+            f"embedding rank-1 skill {matches[0].skill_name!r} has no bound target in the IR",
+            "request",
+        )
+        return [], {}
+    trace = {
+        "mode": "embedding",
+        "algorithm": "embedding_cosine_top_k",
+        "request": request,
+        "embedder": embedder_meta,
+        "selected": {
+            "target": selected_target.name,
+            "priority": selected_target.priority,
+            "matched_terms": [],
+            "match_details": [],
+            "match_score": matches[0].score,
+            "dependency_closure": [],
+        },
+        "candidates": [
+            {
+                "rank": m.rank,
+                "target": m.target_name,
+                "priority": targets_by_name[m.target_name].priority if m.target_name in targets_by_name else None,
+                "matched_terms": [],
+                "match_details": [{"term": m.skill_name, "source": "embedding", "score": m.score}],
+                "match_score": m.score,
+                "selected": m.target_name == selected_target.name,
+                "reason": f"embedding cosine={m.score:.4f}",
+            }
+            for m in matches
+        ],
+    }
+    return [selected_target], trace
+
+
+HYBRID_EMBEDDING_WEIGHT = 0.7
+HYBRID_KEYWORD_WEIGHT = 0.3
+
+
+def _targets_for_request_hybrid(
+    request: str,
+    source: Any,
+    targets: List[IRTarget],
+    *,
+    embedder: Optional[Any],
+    cache_path: Optional[Path],
+    top_k: int,
+    diagnostics: Diagnostics,
+) -> tuple[List[IRTarget], Dict[str, Any]]:
+    """Hybrid recall + precision via a **blended score** rather than a
+    hard keyword tiebreak (the latter was worse than pure embedding on
+    bench because it amplified keyword-precision regressions whenever
+    the user_intent layer was over-pruned).
+
+    Algorithm:
+      1. Embed the request, take top-K skill matches → candidate target pool.
+      2. For each candidate target compute keyword match details against
+         the request (may be empty).
+      3. Final score = HYBRID_EMBEDDING_WEIGHT * cosine
+                     + HYBRID_KEYWORD_WEIGHT * (keyword_score / 100)
+         Targets without any keyword match get only the cosine
+         contribution; targets with strong keyword overlap get boosted.
+      4. Rank by (priority desc, blended desc, cosine desc, name asc).
+         Priority is respected so user-declared important targets win
+         when both embedding and keyword judgements are close.
+
+    Graceful fallbacks (unchanged):
+      - No skills in source → pure keyword on the full target pool.
+      - Index unbuildable → pure keyword on the full target pool.
+      - Embedding produced matches but no candidate target exists →
+        pure keyword on the full target pool.
+
+    The trace records `winner_source` so consumers can tell which
+    signal dominated:
+      - `blended_keyword_boost`: winner has non-zero keyword score AND
+        keyword_norm contribution flipped the order vs cosine-only.
+      - `embedding_rank_1`: winner is the cosine rank-1 target.
+      - `blended_keyword_only`: winner has keyword overlap; embedding
+        rank-1 had no keyword overlap and got demoted by the blend.
+      - `keyword_fallback_*`: one of the three fallback paths.
+    """
+    if not source.skills:
+        selected, trace = _targets_for_request(request, targets, diagnostics)
+        if trace:
+            trace["mode"] = "hybrid"
+            trace["hybrid"] = {
+                "embedding_top_k": [],
+                "rerank_pool": [t.name for t in targets],
+                "winner_source": "keyword_fallback_no_skills",
+                "embedding_weight": HYBRID_EMBEDDING_WEIGHT,
+                "keyword_weight": HYBRID_KEYWORD_WEIGHT,
+            }
+        return selected, trace
+
+    sub_diagnostics = Diagnostics()
+    index, embedder_meta = _load_routing_index(source, embedder, cache_path, sub_diagnostics)
+    if index is None:
+        diagnostics.extend(sub_diagnostics.items)
+        selected, trace = _targets_for_request(request, targets, diagnostics)
+        if trace:
+            trace["mode"] = "hybrid"
+            trace["hybrid"] = {
+                "embedding_top_k": [],
+                "rerank_pool": [t.name for t in targets],
+                "winner_source": "keyword_fallback_index_unavailable",
+                "embedding_weight": HYBRID_EMBEDDING_WEIGHT,
+                "keyword_weight": HYBRID_KEYWORD_WEIGHT,
+            }
+        return selected, trace
+
+    matches = index.query(request, top_k=max(int(top_k), 1))
+    targets_by_name = {target.name: target for target in targets}
+    profile = build_request_profile(request)
+    embedding_top_k_payload = [
+        {"rank": m.rank, "skill": m.skill_name, "target": m.target_name, "score": m.score}
+        for m in matches
+    ]
+
+    pool: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in matches:
+        target = targets_by_name.get(match.target_name)
+        if target is None or target.name in seen:
+            continue
+        seen.add(target.name)
+        keyword_details = _match_details(target, profile)
+        keyword_score = _match_score(keyword_details) if keyword_details else 0
+        keyword_norm = min(float(keyword_score) / 100.0, 1.0)
+        blended = HYBRID_EMBEDDING_WEIGHT * float(match.score) + HYBRID_KEYWORD_WEIGHT * keyword_norm
+        pool.append(
+            {
+                "target": target,
+                "embedding_rank": match.rank,
+                "embedding_score": float(match.score),
+                "keyword_details": keyword_details,
+                "keyword_score": int(keyword_score),
+                "blended": blended,
+            }
+        )
+
+    if not pool:
+        selected, trace = _targets_for_request(request, targets, diagnostics)
+        if trace:
+            trace["mode"] = "hybrid"
+            trace["hybrid"] = {
+                "embedder": embedder_meta,
+                "embedding_top_k": embedding_top_k_payload,
+                "rerank_pool": [],
+                "winner_source": "keyword_fallback_no_pool",
+                "embedding_weight": HYBRID_EMBEDDING_WEIGHT,
+                "keyword_weight": HYBRID_KEYWORD_WEIGHT,
+            }
+        return selected, trace
+
+    pool.sort(key=lambda entry: (-entry["target"].priority, -entry["blended"], -entry["embedding_score"], entry["target"].name))
+    winner = pool[0]
+    winner_target: IRTarget = winner["target"]
+    # winner_source classification.
+    if winner["embedding_rank"] == 1 and winner["keyword_score"] == 0:
+        winner_source = "embedding_rank_1"
+    elif winner["embedding_rank"] == 1 and winner["keyword_score"] > 0:
+        winner_source = "blended_agree"
+    elif winner["keyword_score"] == 0:
+        winner_source = "embedding_promoted"  # not rank-1 but no keyword help
+    else:
+        winner_source = "blended_keyword_boost"
+
+    trace = {
+        "mode": "hybrid",
+        "algorithm": "embedding_cosine_top_k+blended_keyword_score",
+        "request": request,
+        "normalized_request": profile.normalized,
+        "expanded_request_terms": profile.expanded_terms,
+        "selected": {
+            "target": winner_target.name,
+            "priority": winner_target.priority,
+            "matched_terms": [detail["term"] for detail in winner["keyword_details"]],
+            "match_details": winner["keyword_details"],
+            "match_score": winner["blended"],
+            "dependency_closure": [],
+        },
+        "candidates": [
+            {
+                "rank": idx + 1,
+                "target": entry["target"].name,
+                "priority": entry["target"].priority,
+                "matched_terms": [d["term"] for d in entry["keyword_details"]],
+                "match_details": entry["keyword_details"],
+                "match_score": entry["blended"],
+                "embedding_score": entry["embedding_score"],
+                "embedding_rank": entry["embedding_rank"],
+                "keyword_score": entry["keyword_score"],
+                "selected": entry["target"].name == winner_target.name,
+                "reason": (
+                    f"blended={entry['blended']:.4f} "
+                    f"(cos={entry['embedding_score']:.4f}, kw={entry['keyword_score']})"
+                ),
+            }
+            for idx, entry in enumerate(pool)
+        ],
+        "hybrid": {
+            "embedder": embedder_meta,
+            "embedding_top_k": embedding_top_k_payload,
+            "rerank_pool": [entry["target"].name for entry in pool],
+            "winner_source": winner_source,
+            "embedding_weight": HYBRID_EMBEDDING_WEIGHT,
+            "keyword_weight": HYBRID_KEYWORD_WEIGHT,
+        },
+    }
+    return [winner_target], trace
+
+
+def _load_routing_index(
+    source: Any,
+    embedder: Optional[Any],
+    cache_path: Optional[Path],
+    diagnostics: Diagnostics,
+) -> tuple[Optional[Any], Dict[str, Any]]:
+    """Build (or cache-load) a SkillIndex for the source. Returns
+    (None, {}) and reports an AMF124 diagnostic when the index cannot
+    be constructed (e.g. embedder dep missing). Otherwise returns
+    (index, {name, dim, cache_status}) so callers can surface the
+    embedder metadata in their trace.
+    """
+    try:
+        from agentmf.embedder import get_default_embedder
+        from agentmf.skill_index import SkillIndex
+    except ImportError as exc:  # pragma: no cover - numpy is a hard dep
+        diagnostics.error(
+            "AMF124",
+            f"embedding matcher dependencies missing: {exc}",
+            "matcher.embedding",
+        )
+        return None, {}
+
+    emb = embedder or get_default_embedder()
+    cache_status = "skipped"
+    if cache_path is not None and cache_path.exists():
+        try:
+            index = SkillIndex.load(cache_path, embedder=emb)
+            cache_status = "hit"
+        except ValueError as exc:
+            cache_status = f"miss ({exc})"
+            index = None
+        if index is not None:
+            return index, {
+                "name": emb.name,
+                "dim": emb.dim,
+                "cache_status": cache_status,
+                "cache_path": str(cache_path),
+            }
+    try:
+        index = SkillIndex.from_source(source, embedder=emb)
+    except Exception as exc:  # pragma: no cover - defensive
+        diagnostics.error(
+            "AMF124",
+            f"could not build SkillIndex: {exc}",
+            "matcher.embedding",
+        )
+        return None, {}
+    return index, {
+        "name": emb.name,
+        "dim": emb.dim,
+        "cache_status": cache_status if cache_path else "skipped",
+        "cache_path": str(cache_path) if cache_path else None,
+    }
 
 
 def _target_matches_request(target: IRTarget, request: str) -> bool:

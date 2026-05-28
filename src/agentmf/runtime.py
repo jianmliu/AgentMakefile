@@ -54,6 +54,11 @@ def create_run_plan(
     dry_run: bool = False,
     proposed_tool_calls: Optional[List[Dict[str, str]]] = None,
     proposed_output: Optional[Dict[str, Any]] = None,
+    *,
+    matcher: str = "keyword",
+    embedder: Optional[Any] = None,
+    embedder_cache_path: Optional[Union[Path, str]] = None,
+    embedder_top_k: int = 10,
 ) -> RunPlanResult:
     diagnostics = Diagnostics()
     if not dry_run:
@@ -65,7 +70,11 @@ def create_run_plan(
         )
         return RunPlanResult(diagnostics)
 
-    link_result = create_link_plan(path, request=request, target_names=target_names, backend=backend)
+    link_result = create_link_plan(
+        path, request=request, target_names=target_names, backend=backend,
+        matcher=matcher, embedder=embedder,
+        embedder_cache_path=embedder_cache_path, embedder_top_k=embedder_top_k,
+    )
     diagnostics.extend(link_result.diagnostics.items)
     if diagnostics.has_errors:
         return RunPlanResult(diagnostics)

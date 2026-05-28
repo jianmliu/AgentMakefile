@@ -31,6 +31,11 @@ def create_prompt_payload(
     context_files: Optional[List[Union[Path, str]]] = None,
     include_git_status: bool = False,
     include_git_diff: bool = False,
+    *,
+    matcher: str = "keyword",
+    embedder: Optional[Any] = None,
+    embedder_cache_path: Optional[Union[Path, str]] = None,
+    embedder_top_k: int = 10,
 ) -> PromptPayloadResult:
     diagnostics = Diagnostics()
     agentmakefile_path = Path(path)
@@ -55,6 +60,10 @@ def create_prompt_payload(
         target_names=target_names,
         backend=backend,
         dry_run=True,
+        matcher=matcher,
+        embedder=embedder,
+        embedder_cache_path=embedder_cache_path,
+        embedder_top_k=embedder_top_k,
     )
     diagnostics.extend(run_result.diagnostics.items)
     if diagnostics.has_errors:

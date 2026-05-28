@@ -29,7 +29,12 @@ from agentmf.diagnostics import Diagnostics
 
 KNOWN_TOP_LEVEL_KEYS = {"version", "suite", "tasks", "baselines", "adapters", "scoring", "agentmakefile"}
 KNOWN_TASK_KEYS = {"id", "request", "repo", "expected_targets", "expected_skills", "verifier", "tags"}
-SUPPORTED_ADAPTERS = {"deterministic-selection", "subprocess-execution", "embedding-selection"}
+SUPPORTED_ADAPTERS = {
+    "deterministic-selection",
+    "subprocess-execution",
+    "embedding-selection",
+    "hybrid-selection",
+}
 SUBPROCESS_RUNNER_TIMEOUT_SECONDS = 60
 
 
@@ -220,6 +225,19 @@ def create_suite_payload(
         )
         if diagnostics.has_errors:
             return SuiteRunResult(diagnostics)
+    elif adapter == "hybrid-selection":
+        task_records, adapter_extra = _run_hybrid(
+            suite,
+            target_agentmakefile,
+            embedder_choice=embedder_choice,
+            embedder_model=embedder_model,
+            embedder_dim=embedder_dim,
+            top_k=embedder_top_k,
+            cache_path=Path(embedder_cache) if embedder_cache else None,
+            diagnostics=diagnostics,
+        )
+        if diagnostics.has_errors:
+            return SuiteRunResult(diagnostics)
     else:  # pragma: no cover - guarded above
         task_records = []
 
@@ -398,6 +416,109 @@ def _run_embedding(
             "cache_path": str(cache_path) if cache_path else None,
             "cache_status": cache_status,
             "top_k": int(top_k),
+        }
+    }
+    return records, extra
+
+
+def _run_hybrid(
+    suite: SuiteSpec,
+    agentmakefile: Path,
+    *,
+    embedder_choice: str,
+    embedder_model: Optional[str],
+    embedder_dim: int,
+    top_k: int,
+    cache_path: Optional[Path],
+    diagnostics: Diagnostics,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Hybrid-selection adapter: routes each task via `create_link_plan(
+    matcher="hybrid")`. The selector handles embedding top-K + keyword
+    rerank + graceful fallbacks; this adapter just compares the rank-1
+    target to expected_targets and surfaces the hybrid trace per task.
+    """
+    try:
+        from agentmf.embedder import HashEmbedder, SentenceTransformerEmbedder, get_default_embedder
+        from agentmf.selector import create_link_plan
+    except ImportError as exc:  # pragma: no cover
+        diagnostics.error(
+            "AMF254",
+            f"hybrid-selection adapter dependencies missing: {exc}",
+            "benchmark.suite.adapter",
+        )
+        return [], {}
+
+    if embedder_choice == "hash":
+        embedder = HashEmbedder(dim=embedder_dim)
+    elif embedder_choice == "sentence-transformer":
+        embedder = SentenceTransformerEmbedder(model=embedder_model)
+    else:
+        embedder = get_default_embedder(dim=embedder_dim)
+
+    records: List[Dict[str, Any]] = []
+    winner_sources: Dict[str, int] = {}
+    for task in suite.tasks:
+        plan_result = create_link_plan(
+            agentmakefile,
+            request=task.request,
+            matcher="hybrid",
+            embedder=embedder,
+            embedder_cache_path=cache_path,
+            embedder_top_k=top_k,
+        )
+        plan = plan_result.plan or {}
+        actual_targets = list(plan.get("selected_targets") or [])
+        actual_skills = _selected_skills_from_plan(plan, actual_targets)
+
+        target_pass = (
+            not task.expected_targets
+            or (bool(actual_targets) and actual_targets[0] in task.expected_targets)
+        )
+        skill_pass = (
+            not task.expected_skills
+            or any(skill in task.expected_skills for skill in actual_skills)
+        )
+        if not task.expected_targets and not task.expected_skills:
+            status = "skipped"
+        elif target_pass and skill_pass:
+            status = "passed"
+        else:
+            status = "failed"
+
+        trace = plan.get("selection_trace") or {}
+        hybrid_meta = trace.get("hybrid") or {}
+        winner_source = hybrid_meta.get("winner_source", "unknown")
+        winner_sources[winner_source] = winner_sources.get(winner_source, 0) + 1
+
+        records.append(
+            {
+                "task_id": task.task_id,
+                "request": task.request,
+                "expected_targets": list(task.expected_targets),
+                "actual_targets": actual_targets,
+                "expected_skills": list(task.expected_skills),
+                "actual_skills": actual_skills,
+                "status": status,
+                "winner_source": winner_source,
+                "alternatives": [
+                    {
+                        "rank": entry.get("rank"),
+                        "target": entry.get("target"),
+                        "score": entry.get("match_score"),
+                    }
+                    for entry in (trace.get("candidates") or [])
+                ],
+                "diagnostics": plan_result.diagnostics.to_list(),
+            }
+        )
+
+    extra = {
+        "embedder": {
+            "name": embedder.name,
+            "dim": embedder.dim,
+            "cache_path": str(cache_path) if cache_path else None,
+            "top_k": int(top_k),
+            "winner_sources": winner_sources,
         }
     }
     return records, extra

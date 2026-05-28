@@ -5280,6 +5280,282 @@ tasks:
     assert by_id["t-miss"]["status"] == "failed"
 
 
+def test_selector_hybrid_matcher_reranks_embedding_top_k_via_keyword(tmp_path: Path) -> None:
+    """Hybrid restricts the keyword selector to the embedding top-K
+    pool, then runs the keyword priority/score algorithm inside that
+    pool. The trace records winner_source=keyword_rerank.
+    """
+    module_path = tmp_path / "AgentMakefile"
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  tdd:
+    namespace: smoke
+    description: Test-driven development. Red-green-refactor for behavior changes.
+    implementation: {source: skills/tdd/SKILL.md, relative_source: tdd/SKILL.md}
+    match: {user_intent: [TDD]}
+  brainstorm:
+    namespace: smoke
+    description: Brainstorming explores user intent before implementation.
+    implementation: {source: skills/brainstorm/SKILL.md, relative_source: brainstorm/SKILL.md}
+    match: {user_intent: [brainstorm]}
+  slack:
+    namespace: smoke
+    description: Send a Slack message to a channel or user.
+    implementation: {source: skills/slack/SKILL.md, relative_source: slack/SKILL.md}
+    match: {user_intent: [slack message]}
+targets:
+  skill.tdd:
+    priority: 70
+    match: {user_intent: [TDD, write a failing test first, test driven development]}
+    skills: [smoke:tdd]
+    steps: [{use_skill: smoke:tdd}]
+  skill.brainstorm:
+    priority: 70
+    match: {user_intent: [brainstorm, brainstorming session]}
+    skills: [smoke:brainstorm]
+    steps: [{use_skill: smoke:brainstorm}]
+  skill.slack:
+    priority: 70
+    match: {user_intent: [slack message, send slack]}
+    skills: [smoke:slack]
+    steps: [{use_skill: smoke:slack}]
+"""
+    )
+
+    from agentmf.embedder import HashEmbedder
+    from agentmf.selector import create_link_plan
+
+    result = create_link_plan(
+        path=module_path,
+        request="write a failing test first",
+        matcher="hybrid",
+        embedder=HashEmbedder(dim=512),
+        embedder_top_k=3,
+    )
+    assert result.ok, result.diagnostics.format()
+    selected = result.plan["selected_targets"]
+    assert selected == ["skill.tdd"]
+    trace = result.plan["selection_trace"]
+    assert trace["mode"] == "hybrid"
+    hybrid_meta = trace["hybrid"]
+    # When embedding rank-1 and keyword both agree on the same target,
+    # winner_source is `blended_agree` (the strongest signal — both
+    # axes point to the same answer).
+    assert hybrid_meta["winner_source"] in {"blended_agree", "blended_keyword_boost", "embedding_rank_1"}
+    assert "skill.tdd" in hybrid_meta["rerank_pool"]
+    top_k_targets = [entry["target"] for entry in hybrid_meta["embedding_top_k"]]
+    assert "skill.tdd" in top_k_targets
+    # Blended weights are exposed so a reader can interpret the score.
+    assert 0.0 < hybrid_meta["embedding_weight"] < 1.0
+    assert 0.0 < hybrid_meta["keyword_weight"] < 1.0
+
+
+def test_selector_hybrid_falls_back_to_embedding_rank_1_when_keyword_pool_empty(tmp_path: Path) -> None:
+    """When the embedding top-K targets exist in the IR but none of them
+    have any keyword match against the request, the hybrid matcher must
+    NOT fail closed — it returns the embedding rank-1 target with
+    winner_source=embedding_rank_1.
+    """
+    module_path = tmp_path / "AgentMakefile"
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  tdd:
+    namespace: smoke
+    description: Test-driven development. Red-green-refactor for behavior changes.
+    implementation: {source: skills/tdd/SKILL.md, relative_source: tdd/SKILL.md}
+    match: {user_intent: [TDD]}
+targets:
+  skill.tdd:
+    priority: 70
+    # Intentionally narrow user_intent so the request doesn't keyword-match.
+    match: {user_intent: [exact phrase that the request will not contain]}
+    skills: [smoke:tdd]
+    steps: [{use_skill: smoke:tdd}]
+"""
+    )
+
+    from agentmf.embedder import HashEmbedder
+    from agentmf.selector import create_link_plan
+
+    result = create_link_plan(
+        path=module_path,
+        request="test driven development with red green refactor",
+        matcher="hybrid",
+        embedder=HashEmbedder(dim=512),
+        embedder_top_k=3,
+    )
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.tdd"]
+    assert result.plan["selection_trace"]["hybrid"]["winner_source"] == "embedding_rank_1"
+
+
+def test_selector_hybrid_falls_back_to_keyword_when_no_skills_indexable(tmp_path: Path) -> None:
+    """Hand-written AgentMakefiles often have targets but no skills
+    (or skills that don't auto-generate `skill.<name>` targets). Hybrid
+    must degrade to pure keyword instead of failing with AMF118, and
+    record winner_source=keyword_fallback_no_skills.
+    """
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  methodology.code_change:
+    priority: 90
+    match:
+      user_intent:
+        - implement feature
+        - fix bug
+    steps: [{action: do_something}]
+""",
+    )
+    from agentmf.embedder import HashEmbedder
+    from agentmf.selector import create_link_plan
+
+    result = create_link_plan(
+        path=module_path,
+        request="implement feature with TDD",
+        matcher="hybrid",
+        embedder=HashEmbedder(dim=128),
+    )
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["methodology.code_change"]
+    trace = result.plan["selection_trace"]
+    assert trace["mode"] == "hybrid"
+    assert trace["hybrid"]["winner_source"] == "keyword_fallback_no_skills"
+
+
+def test_selector_embedding_matcher_uses_rank_1_skill_target(tmp_path: Path) -> None:
+    """Pure embedding mode returns the rank-1 cosine match's `skill.<name>`
+    target. Trace mode="embedding".
+    """
+    module_path = tmp_path / "AgentMakefile"
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  brainstorm:
+    namespace: smoke
+    description: Brainstorming explores user intent before implementation.
+    implementation: {source: skills/brainstorm/SKILL.md, relative_source: brainstorm/SKILL.md}
+    match: {user_intent: [brainstorm]}
+  slack:
+    namespace: smoke
+    description: Send a Slack message.
+    implementation: {source: skills/slack/SKILL.md, relative_source: slack/SKILL.md}
+    match: {user_intent: [slack]}
+targets:
+  skill.brainstorm:
+    priority: 70
+    match: {user_intent: [brainstorm]}
+    skills: [smoke:brainstorm]
+    steps: [{use_skill: smoke:brainstorm}]
+  skill.slack:
+    priority: 70
+    match: {user_intent: [slack]}
+    skills: [smoke:slack]
+    steps: [{use_skill: smoke:slack}]
+"""
+    )
+
+    from agentmf.embedder import HashEmbedder
+    from agentmf.selector import create_link_plan
+
+    result = create_link_plan(
+        path=module_path,
+        request="brainstorm a product feature",
+        matcher="embedding",
+        embedder=HashEmbedder(dim=512),
+    )
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["skill.brainstorm"]
+    assert result.plan["selection_trace"]["mode"] == "embedding"
+
+
+def test_benchmark_suite_hybrid_adapter_runs_link_plan_in_hybrid_mode(tmp_path: Path) -> None:
+    """hybrid-selection adapter wraps create_link_plan(matcher="hybrid")
+    and surfaces per-task winner_source in records + adapter-level
+    winner_sources counter for at-a-glance "is hybrid earning its
+    cosine cost or always falling back?".
+    """
+    module_path = tmp_path / "AgentMakefile"
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  tdd:
+    namespace: smoke
+    description: Test-driven development with red-green-refactor.
+    implementation: {source: skills/tdd/SKILL.md, relative_source: tdd/SKILL.md}
+    match: {user_intent: [TDD]}
+  slack:
+    namespace: smoke
+    description: Send a Slack message to a channel.
+    implementation: {source: skills/slack/SKILL.md, relative_source: slack/SKILL.md}
+    match: {user_intent: [slack message]}
+targets:
+  skill.tdd:
+    priority: 70
+    match: {user_intent: [TDD, write a failing test first]}
+    skills: [smoke:tdd]
+    steps: [{use_skill: smoke:tdd}]
+  skill.slack:
+    priority: 70
+    match: {user_intent: [slack message, send slack]}
+    skills: [smoke:slack]
+    steps: [{use_skill: smoke:slack}]
+"""
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite: {{id: hybrid-test, title: hybrid}}
+agentmakefile: {module_path}
+tasks:
+  - id: t-tdd
+    request: write a failing test first
+    expected_targets: [skill.tdd]
+  - id: t-slack
+    request: send a slack message to the team
+    expected_targets: [skill.slack]
+"""
+    )
+
+    from agentmf.benchmark_suite import create_suite_payload
+
+    result = create_suite_payload(
+        suite_file=suite_path,
+        adapter="hybrid-selection",
+        embedder_choice="hash",
+        embedder_dim=512,
+        embedder_top_k=3,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["adapter"] == "hybrid-selection"
+    assert payload["summary"]["total"] == 2
+    assert payload["summary"]["passed"] == 2
+    # Each task carries its hybrid winner_source. Any of the post-blend
+    # success classifications are acceptable (the test asserts the bench
+    # plumbs them through, not which exact path won).
+    valid_sources = {
+        "blended_agree", "blended_keyword_boost",
+        "embedding_rank_1", "embedding_promoted",
+    }
+    sources = {task["task_id"]: task["winner_source"] for task in payload["tasks"]}
+    assert sources["t-tdd"] in valid_sources
+    assert sources["t-slack"] in valid_sources
+    # Adapter-level aggregate.
+    counts = payload["embedder"]["winner_sources"]
+    assert sum(counts.values()) == 2
+
+
 def test_benchmark_suite_embedding_adapter_routes_via_skill_index(tmp_path: Path) -> None:
     """embedding-selection adapter builds a SkillIndex (HashEmbedder for
     determinism) and uses rank-1 cosine to pick the routed target.
