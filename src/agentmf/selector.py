@@ -414,8 +414,16 @@ def _targets_for_request_embedding(
     return [selected_target], trace
 
 
-HYBRID_EMBEDDING_WEIGHT = 0.7
-HYBRID_KEYWORD_WEIGHT = 0.3
+# Picked via parameter sweep against benchmarks/routing/openclaw-skills.yaml:
+# at α=0.85 hybrid ties pure embedding (7/8) while still using keyword as a
+# tiebreaker on close cosine calls. α=0.7 (the initial default) gave 30% of
+# its vote to a noisy keyword layer and lost 1 case to a 2-char acronym
+# spuriously matching at score=100. The 15% keyword share is small enough
+# that a single false-positive keyword hit can't flip a confident cosine
+# decision, but large enough that `blended_agree` (both signals concur)
+# still wins ties.
+HYBRID_EMBEDDING_WEIGHT = 0.85
+HYBRID_KEYWORD_WEIGHT = 0.15
 
 
 def _targets_for_request_hybrid(
