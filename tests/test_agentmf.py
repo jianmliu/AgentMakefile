@@ -2738,6 +2738,194 @@ targets:
     assert "cat-b.shared" in load_source(module_b).skills
 
 
+def _write_dup_modules_for_canonical_test(tmp_path: Path) -> tuple[Path, Path]:
+    """Two modules with one shared skill (same `original_name=brainstorming`):
+    a `.tmp/` cache copy and a clean `skills/` copy. Used by the
+    canonical-selection regression tests.
+    """
+    tmp_module = tmp_path / ".tmp" / "AgentMakefile"
+    skills_module = tmp_path / "skills" / "AgentMakefile"
+    tmp_module.parent.mkdir(parents=True)
+    skills_module.parent.mkdir(parents=True)
+    tmp_module.write_text(
+        """\
+version: "0.1"
+metadata:
+  skill_count: 1
+skills:
+  .tmp.brainstorming:
+    namespace: openclaw
+    description: brainstorming via cache copy.
+    implementation:
+      source: /Users/x/.codex/.tmp/plugins/plugins/superpowers/skills/brainstorming/SKILL.md
+      relative_source: .tmp/plugins/plugins/superpowers/skills/brainstorming/SKILL.md
+      original_name: brainstorming
+    match:
+      user_intent:
+        - cache term
+targets:
+  skill..tmp.brainstorming:
+    match:
+      user_intent:
+        - cache term
+    skills:
+      - openclaw:.tmp.brainstorming
+    steps:
+      - use_skill: openclaw:.tmp.brainstorming
+"""
+    )
+    skills_module.write_text(
+        """\
+version: "0.1"
+metadata:
+  skill_count: 1
+skills:
+  skills.brainstorming:
+    namespace: openclaw
+    description: brainstorming via clean install.
+    implementation:
+      source: /Users/x/.codex/skills/brainstorming/SKILL.md
+      relative_source: skills/brainstorming/SKILL.md
+      original_name: brainstorming
+    match:
+      user_intent:
+        - clean term
+targets:
+  skill.skills.brainstorming:
+    match:
+      user_intent:
+        - clean term
+    skills:
+      - openclaw:skills.brainstorming
+    steps:
+      - use_skill: openclaw:skills.brainstorming
+"""
+    )
+    return tmp_module, skills_module
+
+
+def _make_canonical_test_proposal(
+    tmp_path: Path,
+    modules: list[Path],
+    duplicate_paths_order: list[str],
+) -> Path:
+    """Build a minimal merge_duplicate_targets proposal where the dup
+    group lists paths in `duplicate_paths_order` (we want the merger to
+    not depend on this order — clean `skills/...` paths must always
+    win over `.tmp/...` cache paths).
+    """
+    proposal_path = tmp_path / "canonical.proposal.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "proposal_id": "amf-evo-canonical",
+                "title": "Merge duplicate skills (canonical-selection regression)",
+                "scope": {"modules": [str(m) for m in modules], "targets": []},
+                "evidence": [{"event_id": "sha256:canonical", "reason": "tmp vs clean dup"}],
+                "changes": [
+                    {
+                        "type": "merge_duplicate_targets",
+                        "duplicate_original_names": {"brainstorming": duplicate_paths_order},
+                    }
+                ],
+                "evaluation": {"commands": [], "status": "not_run"},
+                "promotion": {"status": "candidate", "requires_review": True},
+            }
+        )
+    )
+    return proposal_path
+
+
+def test_merge_duplicate_targets_picks_non_tmp_path_as_canonical(tmp_path: Path) -> None:
+    """Regression: when one duplicate lives under `.tmp/` (plugin cache
+    extraction noise) and another lives under `skills/` (clean install),
+    the clean path must survive as the primary even when it's listed
+    *second* in `duplicate_original_names`. Previously the merger used
+    `paths[0]` blindly, which corrupted real routing entries with
+    cache-only paths that get GC'd later.
+    """
+    tmp_module, skills_module = _write_dup_modules_for_canonical_test(tmp_path)
+    proposal_path = _make_canonical_test_proposal(
+        tmp_path,
+        modules=[tmp_module, skills_module],
+        # Put .tmp/ first to trigger the old bug — clean path should
+        # still win.
+        duplicate_paths_order=[
+            ".tmp/plugins/plugins/superpowers/skills/brainstorming/SKILL.md",
+            "skills/brainstorming/SKILL.md",
+        ],
+    )
+
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    result = create_compile_evaluate_payload(
+        proposal_file=proposal_path,
+        workspace_dir=tmp_path / "ws",
+        write=True,
+    )
+    assert result.ok, result.diagnostics.format()
+
+    candidate_paths = {Path(entry["source"]): Path(entry["path"]) for entry in result.payload["candidate_files"]}
+    skills_candidate = load_source(candidate_paths[skills_module])
+    tmp_candidate = load_source(candidate_paths[tmp_module])
+
+    # Clean install copy survives as primary, with user_intent merged from the cache copy.
+    assert "skills.brainstorming" in skills_candidate.skills, (
+        "clean `skills/...` entry must survive merge as primary; was dropped"
+    )
+    assert sorted(skills_candidate.skills["skills.brainstorming"].match["user_intent"]) == [
+        "cache term", "clean term",
+    ]
+    # Cache copy is removed.
+    assert ".tmp.brainstorming" not in tmp_candidate.skills
+    assert "skill..tmp.brainstorming" not in tmp_candidate.targets
+
+
+def test_merge_duplicate_targets_canonical_is_input_order_independent(tmp_path: Path) -> None:
+    """Swapping the order of paths in `duplicate_original_names` must
+    not change which copy survives — canonical selection is a function
+    of the path content (penalty for .tmp/cache), not list order.
+    """
+    from agentmf.evolution import create_compile_evaluate_payload
+
+    def run(order: list[str]) -> set[str]:
+        # Fresh tmp_path subdir per run so workspaces don't collide.
+        subdir = tmp_path / ("order_" + "_".join(p.split("/")[0] for p in order))
+        subdir.mkdir()
+        tmp_module, skills_module = _write_dup_modules_for_canonical_test(subdir)
+        proposal_path = _make_canonical_test_proposal(
+            subdir,
+            modules=[tmp_module, skills_module],
+            duplicate_paths_order=order,
+        )
+        result = create_compile_evaluate_payload(
+            proposal_file=proposal_path,
+            workspace_dir=subdir / "ws",
+            write=True,
+        )
+        assert result.ok, result.diagnostics.format()
+        candidate_paths = {Path(e["source"]): Path(e["path"]) for e in result.payload["candidate_files"]}
+        surviving = set()
+        for cp in candidate_paths.values():
+            surviving.update(load_source(cp).skills.keys())
+        return surviving
+
+    tmp_first = run([
+        ".tmp/plugins/plugins/superpowers/skills/brainstorming/SKILL.md",
+        "skills/brainstorming/SKILL.md",
+    ])
+    skills_first = run([
+        "skills/brainstorming/SKILL.md",
+        ".tmp/plugins/plugins/superpowers/skills/brainstorming/SKILL.md",
+    ])
+
+    assert tmp_first == skills_first, f"order-dependent: tmp_first={tmp_first} skills_first={skills_first}"
+    # The clean copy is the one that survives in both orderings.
+    assert "skills.brainstorming" in tmp_first
+    assert ".tmp.brainstorming" not in tmp_first
+
+
 def test_evo_promote_copies_candidates_and_accepts_proposal(tmp_path: Path) -> None:
     """Promote a cross-module merge proposal: candidate modules land under
     target_dir mirroring their parent dirs, the proposal flips to

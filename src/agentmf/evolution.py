@@ -2342,9 +2342,20 @@ def _merge_duplicates_across_modules(
     for original_name, paths in duplicate_names.items():
         if not isinstance(paths, list) or len(paths) < 2:
             continue
-        primary_entry = rel_to_entry.get(str(paths[0]))
+        # Pick the canonical primary deterministically rather than trusting
+        # input order: .tmp/ extraction caches and plugins/cache/ paths
+        # are version-pinned and GC'd, so keeping them as primary risks
+        # routing dead symlinks. Prefer clean install locations (~/.codex/
+        # skills, .system, direct marketplace plugins).
+        ranked_paths = sorted(paths, key=_canonical_path_rank)
+        primary_path = ranked_paths[0]
+        primary_entry = rel_to_entry.get(str(primary_path))
         if primary_entry is None:
             continue
+        # Duplicate-merge logic below expects everything past the primary
+        # to be a "duplicate to drop", and the order must match the
+        # ranked list (not the input paths list).
+        rest_paths = ranked_paths[1:]
         primary_data, primary_skill_name = primary_entry
         primary_skills = primary_data.get("skills") if isinstance(primary_data.get("skills"), dict) else {}
         primary_skill = primary_skills.get(primary_skill_name)
@@ -2354,7 +2365,7 @@ def _merge_duplicates_across_modules(
         primary_target_name = f"skill.{primary_skill_name}"
         primary_target = primary_targets.get(primary_target_name) if isinstance(primary_targets.get(primary_target_name), dict) else None
 
-        for duplicate_path in paths[1:]:
+        for duplicate_path in rest_paths:
             duplicate_entry = rel_to_entry.get(str(duplicate_path))
             if duplicate_entry is None:
                 continue
@@ -2380,6 +2391,42 @@ def _merge_duplicates_across_modules(
                 count = duplicate_metadata.get("skill_count")
                 if isinstance(count, int):
                     duplicate_metadata["skill_count"] = max(0, count - 1)
+
+
+def _canonical_path_rank(rel_path: str) -> tuple:
+    """Sort key for picking a canonical copy when several `SKILL.md` paths
+    name the same `original_name`. Lower rank = preferred as primary.
+
+    Penalises paths that are known to be ephemeral / mirror copies:
+      - `.tmp/...` (plugin extraction cache, GC'd between runs)
+      - segments containing `cache` (plugins/cache/<plugin>/<version>/...)
+      - segments containing `marketplaces` (mirror; the direct plugin
+        install dir is more canonical)
+    Rewards canonical install locations:
+      - `.system/` (built-in Codex/Claude skills)
+      - `vendor_imports/` (publisher-curated catalog)
+
+    Tiebreaks by path length (shorter == cleaner) then lex order so the
+    selection is fully deterministic regardless of input list order.
+    """
+    text = str(rel_path)
+    parts = [part.lower() for part in text.split("/") if part]
+    penalty = 0
+    for part in parts:
+        if part == ".tmp" or part.startswith(".tmp"):
+            penalty += 1000
+            break
+    for part in parts:
+        if "cache" in part:
+            penalty += 100
+            break
+    if any(part == "marketplaces" for part in parts):
+        penalty += 10
+    if any(part == ".system" for part in parts):
+        penalty -= 5
+    if any(part == "vendor_imports" for part in parts):
+        penalty -= 2
+    return (penalty, len(text), text)
 
 
 def _merge_user_intent(primary: Dict[str, Any], duplicate: Dict[str, Any]) -> None:
