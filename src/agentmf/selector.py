@@ -358,24 +358,57 @@ def _targets_for_request_embedding(
     the source's skills, ranks by cosine, and returns the IRTarget whose
     name matches the rank-1 skill's `skill.<name>` target.
 
-    Fails closed: if no skill has a matching target in the IR (e.g. the
-    source has skills but no auto-generated `skill.<name>` targets) the
-    request is reported as AMF118 — same code the keyword selector uses
-    for misses — so callers can detect uniformly.
+    Gracefully degrades to the keyword selector when the source has no
+    skills to index (hand-written makefiles with only targets, like
+    most superpowers / oh-my-openagent modules). Trace records
+    `mode="embedding"` with `winner_source="keyword_fallback_no_skills"`
+    so the caller can tell the embedding path was a no-op.
     """
+    if not source.skills:
+        selected, trace = _targets_for_request(request, targets, diagnostics)
+        if trace:
+            trace["mode"] = "embedding"
+            trace["embedding_fallback"] = "keyword_fallback_no_skills"
+        return selected, trace
+
     index, embedder_meta = _load_routing_index(source, embedder, cache_path, diagnostics)
     if index is None:
-        return [], {}
+        # Embedder dep missing or load failure — degrade to keyword too.
+        selected, trace = _targets_for_request(request, targets, Diagnostics())
+        if trace:
+            trace["mode"] = "embedding"
+            trace["embedding_fallback"] = "keyword_fallback_index_unavailable"
+        return selected, trace
     matches = index.query(request, top_k=max(int(top_k), 1))
     if not matches:
         diagnostics.error("AMF118", "no skill matched request via embedding", "request")
         return [], {}
     targets_by_name = {target.name: target for target in targets}
+    # For openclaw-style auto-generated modules each skill has an
+    # auto-created `skill.<name>` target. Hand-written modules (e.g.
+    # superpowers) bundle skills under higher-level targets like
+    # `methodology.code_change` instead. Build a skill → owning-targets
+    # map so the matcher works in both shapes.
+    skill_to_targets: Dict[str, List[IRTarget]] = {}
+    for target in targets:
+        for skill in target.skills:
+            for key in (skill.name, skill.qualified_name):
+                if key:
+                    skill_to_targets.setdefault(key, []).append(target)
     selected_target = None
     for match in matches:
+        # First try the SkillIndex's auto-generated `skill.<name>` target.
         candidate = targets_by_name.get(match.target_name)
         if candidate is not None:
             selected_target = candidate
+            break
+        # Fall back: any target that explicitly binds this skill.
+        binding_targets = (
+            skill_to_targets.get(match.skill_name)
+            or skill_to_targets.get(match.skill_name.split(".")[-1])
+        )
+        if binding_targets:
+            selected_target = max(binding_targets, key=lambda t: t.priority)
             break
     if selected_target is None:
         diagnostics.error(

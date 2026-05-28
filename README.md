@@ -23,6 +23,18 @@
 > *runtime* than to `configure` at build time. The same compiled
 > install set still gets filtered down to the smallest useful target
 > closure on every chat turn.
+>
+> **Routing matcher (MVP path):** `agentmf select`/`prompt` default to
+> `--matcher embedding` — semantic SkillIndex cosine via
+> [sentence-transformers](https://www.sbert.net/) when installed via
+> `pip install agentmf[embedding]`, with a deterministic HashEmbedder
+> fallback. On the openclaw-skills benchmark (8 cases) embedding
+> routes 7/8 correctly vs 1/8 for the substring-keyword baseline.
+> `--matcher keyword` keeps the historical deterministic substring
+> path for modules where you want `matched_terms` explainability or
+> can't take an ML dependency. `--matcher hybrid` blends both signals
+> (α=0.85 cosine + 0.15 keyword) and ties pure embedding on the
+> bench; it's available for experimentation but not the default.
 
 AgentMakefile is a build system and routing layer for agent harnesses. It
 turns scattered `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, framework rules, policies,

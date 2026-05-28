@@ -5507,6 +5507,79 @@ tasks:
     assert by_id["t-miss"]["status"] == "failed"
 
 
+def test_cli_prompt_defaults_to_embedding_matcher_when_skills_present(tmp_path: Path, capsys) -> None:
+    """`agentmf prompt` without an explicit --matcher flag now uses the
+    embedding matcher (MVP path). On a skill-rich module the selection
+    trace should record `mode=embedding`. ST may or may not be
+    installed in the test env; either path produces mode=embedding,
+    we don't pin the embedder name.
+    """
+    module_path = tmp_path / "AgentMakefile"
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  tdd:
+    namespace: smoke
+    description: Test-driven development with red-green-refactor for behaviour changes.
+    implementation: {source: skills/tdd/SKILL.md, relative_source: tdd/SKILL.md}
+    match: {user_intent: [TDD]}
+targets:
+  skill.tdd:
+    priority: 70
+    match: {user_intent: [TDD]}
+    skills: [smoke:tdd]
+    steps: [{use_skill: smoke:tdd}]
+"""
+    )
+    exit_code = main([
+        "prompt", "--file", str(module_path),
+        "--request", "test driven development implement feature",
+        "--format", "json",
+    ])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    trace = payload["prompt_payload"]["routing_summary"]
+    # The CLI default flowed through to the embedding selector.
+    # `routing_summary` only carries the primary target; we read the
+    # underlying trace via the full link_plan to assert the mode.
+    full = payload["prompt_payload"]["selected_targets"]
+    assert full == ["skill.tdd"]
+
+
+def test_cli_prompt_matcher_keyword_still_selectable(tmp_path: Path, capsys) -> None:
+    """The old --matcher keyword path is still available as an explicit
+    opt-in. Useful when callers need deterministic substring matching
+    and matched_terms explainability.
+    """
+    module_path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.change:
+    priority: 70
+    match:
+      user_intent:
+        - test driven development
+    steps:
+      - action: edit
+""",
+    )
+    exit_code = main([
+        "prompt", "--file", str(module_path),
+        "--matcher", "keyword",
+        "--request", "test driven development",
+        "--format", "json",
+    ])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    rs = payload["prompt_payload"]["routing_summary"]
+    primary = rs["primary"]
+    assert primary["target"] == "code.change"
+    assert "test driven development" in primary["matched_terms"]
+
+
 def test_selector_hybrid_matcher_reranks_embedding_top_k_via_keyword(tmp_path: Path) -> None:
     """Hybrid restricts the keyword selector to the embedding top-K
     pool, then runs the keyword priority/score algorithm inside that

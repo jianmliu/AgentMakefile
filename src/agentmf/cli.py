@@ -60,16 +60,22 @@ from agentmf.tool_loop import create_exec_payload
 
 def _add_matcher_args(parser: argparse.ArgumentParser) -> None:
     """Common matcher flags for select/prompt (and the read-only callers
-    that wrap them). `--matcher keyword` is the default and matches the
-    historical substring-keyword path. `embedding` / `hybrid` opt into
-    cosine-based recall via SkillIndex; `hybrid` then rerank-picks the
-    keyword winner inside the embedding top-K pool.
+    that wrap them). `--matcher embedding` is the default — cosine-based
+    recall via SkillIndex through sentence-transformers when installed
+    (`pip install agentmf[embedding]`), or HashEmbedder as a zero-deps
+    fallback. `--matcher keyword` keeps the historical substring path
+    (best when you need deterministic compile-time routing without ML
+    deps, or `matched_terms` explainability). `--matcher hybrid` blends
+    cosine + keyword score; kept around for experimentation but on the
+    openclaw-skills bench it ties `embedding` (7/8) at the cost of two
+    tuning knobs, so it's no longer the default story.
     """
     parser.add_argument(
         "--matcher",
         choices=["keyword", "embedding", "hybrid"],
-        default="keyword",
-        help="routing matcher: `keyword` (default), `embedding`, or `hybrid` (embedding top-K -> keyword rerank)",
+        default="embedding",
+        help="routing matcher: `embedding` (default — semantic recall via SkillIndex), "
+             "`keyword` (deterministic substring), `hybrid` (blended cosine+keyword)",
     )
     parser.add_argument(
         "--matcher-embedder",
