@@ -5280,6 +5280,155 @@ tasks:
     assert by_id["t-miss"]["status"] == "failed"
 
 
+def test_benchmark_suite_embedding_adapter_routes_via_skill_index(tmp_path: Path) -> None:
+    """embedding-selection adapter builds a SkillIndex (HashEmbedder for
+    determinism) and uses rank-1 cosine to pick the routed target.
+    Pass/fail mirrors the deterministic-selection contract, plus each
+    record carries the top-K alternatives + score.
+    """
+    module_path = tmp_path / "AgentMakefile"
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  tdd:
+    namespace: smoke
+    description: Test-driven development with red-green-refactor for every behavior change.
+    implementation: {source: skills/tdd/SKILL.md, relative_source: tdd/SKILL.md}
+    match: {user_intent: [TDD, write failing test first]}
+  slack:
+    namespace: smoke
+    description: Send a message to a Slack channel or user.
+    implementation: {source: skills/slack/SKILL.md, relative_source: slack/SKILL.md}
+    match: {user_intent: [send slack message]}
+targets:
+  skill.tdd:
+    match: {user_intent: [TDD]}
+    skills: [smoke:tdd]
+    steps: [{use_skill: smoke:tdd}]
+  skill.slack:
+    match: {user_intent: [slack]}
+    skills: [smoke:slack]
+    steps: [{use_skill: smoke:slack}]
+"""
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite:
+  id: emb-routing
+  title: emb routing
+agentmakefile: {module_path}
+tasks:
+  - id: t-tdd
+    request: test driven development implement feature
+    expected_targets: [skill.tdd]
+  - id: t-slack
+    request: send a slack message to the team
+    expected_targets: [skill.slack]
+  - id: t-miss
+    request: zebra unicorn ostrich
+    expected_targets: [skill.tdd]
+"""
+    )
+
+    from agentmf.benchmark_suite import create_suite_payload
+
+    result = create_suite_payload(
+        suite_file=suite_path,
+        agentmakefile=None,
+        adapter="embedding-selection",
+        embedder_choice="hash",
+        embedder_dim=512,
+        embedder_top_k=2,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    payload = result.payload
+    assert payload["adapter"] == "embedding-selection"
+    assert payload["embedder"]["name"] == "hash:512"
+    assert payload["embedder"]["top_k"] == 2
+    assert payload["summary"]["total"] == 3
+    # Concrete pass/fail: 2 token-overlap cases should pass, the
+    # zebra/unicorn one falls outside the corpus.
+    by_id = {task["task_id"]: task for task in payload["tasks"]}
+    assert by_id["t-tdd"]["status"] == "passed"
+    assert by_id["t-tdd"]["actual_targets"] == ["skill.tdd"]
+    assert by_id["t-slack"]["status"] == "passed"
+    assert by_id["t-slack"]["actual_targets"] == ["skill.slack"]
+    assert by_id["t-miss"]["status"] == "failed"
+
+    # Alternatives surface for explainability + diagnostics.
+    tdd = by_id["t-tdd"]
+    assert len(tdd["alternatives"]) == 2
+    assert tdd["alternatives"][0]["target"] == "skill.tdd"
+    assert tdd["alternatives"][0]["rank"] == 1
+    assert tdd["alternatives"][0]["score"] > tdd["alternatives"][1]["score"]
+
+
+def test_benchmark_suite_embedding_adapter_uses_cache_when_available(tmp_path: Path) -> None:
+    """When --embedder-cache is set and points at a SkillIndex.save()
+    output that matches the chosen embedder, the adapter loads the
+    matrix from disk instead of rebuilding it. cache_status flips to
+    'hit' in the payload's embedder envelope.
+    """
+    module_path = tmp_path / "AgentMakefile"
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  tdd:
+    namespace: smoke
+    description: TDD.
+    implementation: {source: skills/tdd/SKILL.md, relative_source: tdd/SKILL.md}
+    match: {user_intent: [TDD]}
+targets:
+  skill.tdd:
+    match: {user_intent: [TDD]}
+    skills: [smoke:tdd]
+    steps: [{use_skill: smoke:tdd}]
+"""
+    )
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(
+        f"""\
+version: 1
+suite: {{id: cache-test, title: cache}}
+agentmakefile: {module_path}
+tasks:
+  - id: t1
+    request: test driven development
+    expected_targets: [skill.tdd]
+"""
+    )
+    cache_path = tmp_path / "skills.embed.json"
+
+    # Build the cache once.
+    from agentmf.embedder import HashEmbedder
+    from agentmf.skill_index import SkillIndex
+    from agentmf.loader import load_source
+
+    SkillIndex.from_source(load_source(module_path), embedder=HashEmbedder(dim=256)).save(cache_path)
+
+    from agentmf.benchmark_suite import create_suite_payload
+
+    result = create_suite_payload(
+        suite_file=suite_path,
+        adapter="embedding-selection",
+        embedder_choice="hash",
+        embedder_dim=256,
+        embedder_cache=cache_path,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    env = result.payload["embedder"]
+    assert env["cache_status"] == "hit"
+    assert env["cache_path"] == str(cache_path)
+    # Sanity: TDD task still passes when matrix comes from disk.
+    assert result.payload["tasks"][0]["status"] == "passed"
+
+
 def test_benchmark_suite_markdown_report_renders_summary(tmp_path: Path) -> None:
     """BENCH-004 markdown emitter includes title + summary + per-task table."""
     module_path = write_agentmakefile(

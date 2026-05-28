@@ -1,0 +1,69 @@
+version: 1
+suite:
+  id: openclaw-skills-routing
+  title: OpenClaw skills routing precision
+  description: |
+    Per-request routing precision against modules/openclaw-curated/skills/AgentMakefile
+    (19 skills). The same 8 cases the manual MiniLM-vs-keyword A/B used. Built
+    to be re-run after any change to the selector or noise detectors:
+
+      # baseline keyword matcher
+      agentmf benchmark suite \
+        --suite benchmarks/routing/openclaw-skills.yaml \
+        --adapter deterministic-selection --format text
+
+      # MiniLM via sentence-transformers (~3.5s)
+      agentmf benchmark suite \
+        --suite benchmarks/routing/openclaw-skills.yaml \
+        --adapter embedding-selection \
+        --embedder sentence-transformer --format text
+
+      # MiniLM with a precomputed cache
+      agentmf embed compile \
+        --file modules/openclaw-curated/skills/AgentMakefile \
+        --out .agentmf/skills.embed.json \
+        --embedder sentence-transformer
+      agentmf benchmark suite \
+        --suite benchmarks/routing/openclaw-skills.yaml \
+        --adapter embedding-selection \
+        --embedder sentence-transformer \
+        --embedder-cache .agentmf/skills.embed.json
+agentmakefile: modules/openclaw-curated/skills/AgentMakefile
+tasks:
+  - id: tdd-direct
+    request: test driven development
+    expected_targets: [skill.skills.test-driven-development]
+    tags: [tdd, direct]
+  - id: brainstorming-session
+    request: brainstorming session
+    expected_targets: [skill.skills.brainstorming]
+    tags: [brainstorming, semantic]
+  - id: subagent-driven
+    request: subagent driven implementation
+    expected_targets: [skill.skills.subagent-driven-development]
+    tags: [subagent]
+  - id: slack-out-of-corpus
+    # No slack skill lives in skills/AgentMakefile (it's in uncategorized/).
+    # Listed here so we can verify low-confidence falls back to "MISS" or a
+    # generic skill rather than confidently picking the wrong one.
+    request: send a slack message
+    expected_targets: [skill.skills.using-superpowers]
+    tags: [out-of-corpus]
+  - id: github-comments
+    # The actual gh-address-comments skill lives in vendor_imports/; the
+    # closest skill in this module is receiving-code-review.
+    request: review github comments
+    expected_targets: [skill.skills.receiving-code-review]
+    tags: [code-review, semantic]
+  - id: pr-feedback
+    request: address pr feedback
+    expected_targets: [skill.skills.receiving-code-review]
+    tags: [code-review, semantic]
+  - id: failing-test-first
+    request: write a failing test first
+    expected_targets: [skill.skills.test-driven-development]
+    tags: [tdd, semantic]
+  - id: ship-code-review
+    request: ship a code review
+    expected_targets: [skill.skills.receiving-code-review]
+    tags: [code-review, semantic]

@@ -29,7 +29,7 @@ from agentmf.diagnostics import Diagnostics
 
 KNOWN_TOP_LEVEL_KEYS = {"version", "suite", "tasks", "baselines", "adapters", "scoring", "agentmakefile"}
 KNOWN_TASK_KEYS = {"id", "request", "repo", "expected_targets", "expected_skills", "verifier", "tags"}
-SUPPORTED_ADAPTERS = {"deterministic-selection", "subprocess-execution"}
+SUPPORTED_ADAPTERS = {"deterministic-selection", "subprocess-execution", "embedding-selection"}
 SUBPROCESS_RUNNER_TIMEOUT_SECONDS = 60
 
 
@@ -157,6 +157,11 @@ def create_suite_payload(
     agentmakefile: Optional[Union[Path, str]] = None,
     adapter: str = "deterministic-selection",
     runner_command: Optional[str] = None,
+    embedder_choice: str = "auto",
+    embedder_model: Optional[str] = None,
+    embedder_dim: int = 384,
+    embedder_top_k: int = 5,
+    embedder_cache: Optional[Union[Path, str]] = None,
 ) -> SuiteRunResult:
     diagnostics = Diagnostics()
     if adapter not in SUPPORTED_ADAPTERS:
@@ -190,6 +195,7 @@ def create_suite_payload(
         )
         return SuiteRunResult(diagnostics)
 
+    adapter_extra: Dict[str, Any] = {}
     if adapter == "deterministic-selection":
         task_records = _run_deterministic(suite, target_agentmakefile)
     elif adapter == "subprocess-execution":
@@ -201,6 +207,19 @@ def create_suite_payload(
             )
             return SuiteRunResult(diagnostics)
         task_records = _run_subprocess(suite, target_agentmakefile, runner_command, diagnostics)
+    elif adapter == "embedding-selection":
+        task_records, adapter_extra = _run_embedding(
+            suite,
+            target_agentmakefile,
+            embedder_choice=embedder_choice,
+            embedder_model=embedder_model,
+            embedder_dim=embedder_dim,
+            top_k=embedder_top_k,
+            cache_path=Path(embedder_cache) if embedder_cache else None,
+            diagnostics=diagnostics,
+        )
+        if diagnostics.has_errors:
+            return SuiteRunResult(diagnostics)
     else:  # pragma: no cover - guarded above
         task_records = []
 
@@ -225,6 +244,8 @@ def create_suite_payload(
         "tasks": task_records,
         "summary": summary,
     }
+    if adapter_extra:
+        payload.update(adapter_extra)
     return SuiteRunResult(diagnostics, payload)
 
 
@@ -267,6 +288,119 @@ def _run_deterministic(suite: SuiteSpec, agentmakefile: Path) -> List[Dict[str, 
             }
         )
     return records
+
+
+def _run_embedding(
+    suite: SuiteSpec,
+    agentmakefile: Path,
+    *,
+    embedder_choice: str,
+    embedder_model: Optional[str],
+    embedder_dim: int,
+    top_k: int,
+    cache_path: Optional[Path],
+    diagnostics: Diagnostics,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Embedding-selection adapter (step #3 of the keyword→embedding
+    migration). Builds (or loads from `cache_path`) a `SkillIndex`
+    once per suite, then issues a top-K cosine query per task and
+    treats rank-1 as the routed target. Pass/fail uses the same
+    expected_targets / expected_skills comparison the deterministic
+    adapter does.
+
+    The full top-K is preserved under `record["alternatives"]` so
+    routing-quality reports can show "how close did we come" when the
+    rank-1 misses but the expected target is at rank-2 / rank-3.
+    """
+    try:
+        from agentmf.embedder import HashEmbedder, SentenceTransformerEmbedder, get_default_embedder
+        from agentmf.skill_index import SkillIndex
+    except ImportError as exc:  # pragma: no cover - numpy is a hard dep now
+        diagnostics.error(
+            "AMF254",
+            f"embedding-selection adapter dependencies missing: {exc}",
+            "benchmark.suite.adapter",
+        )
+        return [], {}
+
+    if embedder_choice == "hash":
+        embedder = HashEmbedder(dim=embedder_dim)
+    elif embedder_choice == "sentence-transformer":
+        embedder = SentenceTransformerEmbedder(model=embedder_model)
+    else:
+        embedder = get_default_embedder(dim=embedder_dim)
+
+    index: Optional[SkillIndex] = None
+    cache_status = "skipped"
+    if cache_path is not None and cache_path.exists():
+        try:
+            index = SkillIndex.load(cache_path, embedder=embedder)
+            cache_status = "hit"
+        except ValueError as exc:
+            cache_status = f"miss ({exc})"
+            index = None
+    if index is None:
+        try:
+            index = SkillIndex.from_path(agentmakefile, embedder=embedder)
+            cache_status = "miss" if cache_path is not None else "skipped"
+        except ValueError as exc:
+            diagnostics.error(
+                "AMF255",
+                f"could not build SkillIndex for {agentmakefile}: {exc}",
+                "benchmark.suite.embedding",
+            )
+            return [], {}
+
+    records: List[Dict[str, Any]] = []
+    for task in suite.tasks:
+        matches = index.query(task.request, top_k=max(int(top_k), 1))
+        actual_targets = [matches[0].target_name] if matches else []
+        actual_skills = [matches[0].skill_name] if matches else []
+
+        target_pass = (
+            not task.expected_targets
+            or (bool(actual_targets) and actual_targets[0] in task.expected_targets)
+        )
+        skill_pass = (
+            not task.expected_skills
+            or any(skill in task.expected_skills for skill in actual_skills)
+        )
+
+        if not task.expected_targets and not task.expected_skills:
+            status = "skipped"
+        elif target_pass and skill_pass:
+            status = "passed"
+        else:
+            status = "failed"
+
+        records.append(
+            {
+                "task_id": task.task_id,
+                "request": task.request,
+                "expected_targets": list(task.expected_targets),
+                "actual_targets": actual_targets,
+                "expected_skills": list(task.expected_skills),
+                "actual_skills": actual_skills,
+                "status": status,
+                "alternatives": [
+                    {"rank": m.rank, "target": m.target_name, "skill": m.skill_name, "score": m.score}
+                    for m in matches
+                ],
+                "score": matches[0].score if matches else 0.0,
+                "diagnostics": [],
+            }
+        )
+
+    extra = {
+        "embedder": {
+            "name": embedder.name,
+            "dim": embedder.dim,
+            "cache_path": str(cache_path) if cache_path else None,
+            "cache_status": cache_status,
+            "top_k": int(top_k),
+        }
+    }
+    return records, extra
 
 
 def _run_subprocess(

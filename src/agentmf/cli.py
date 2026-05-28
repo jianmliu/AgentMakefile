@@ -391,7 +391,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     benchmark_suite_cmd.add_argument("--file", help="AgentMakefile path; overrides suite.agentmakefile")
     benchmark_suite_cmd.add_argument(
         "--adapter",
-        choices=["deterministic-selection", "subprocess-execution"],
+        choices=["deterministic-selection", "subprocess-execution", "embedding-selection"],
         default="deterministic-selection",
     )
     benchmark_suite_cmd.add_argument(
@@ -404,6 +404,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--fail-on-mismatch",
         action="store_true",
         help="exit with status 1 when any task fails (default is to surface failures via the report only)",
+    )
+    # embedding-selection adapter flags. Ignored by other adapters.
+    benchmark_suite_cmd.add_argument(
+        "--embedder",
+        choices=["auto", "hash", "sentence-transformer"],
+        default="auto",
+        help="embedding-selection: which embedder family to use",
+    )
+    benchmark_suite_cmd.add_argument("--embedder-model", default=None)
+    benchmark_suite_cmd.add_argument("--embedder-dim", type=int, default=384)
+    benchmark_suite_cmd.add_argument(
+        "--embedder-top-k", type=int, default=5,
+        help="embedding-selection: keep this many top-K alternatives per task in the report",
+    )
+    benchmark_suite_cmd.add_argument(
+        "--embedder-cache", default=None,
+        help="embedding-selection: load a pre-built SkillIndex from this path (built by `agentmf embed compile`)",
     )
 
     benchmark_adapter_contract_cmd = benchmark_subcommands.add_parser(
@@ -1193,6 +1210,11 @@ def _benchmark_suite(args: argparse.Namespace) -> int:
         agentmakefile=Path(args.file) if args.file else None,
         adapter=args.adapter,
         runner_command=getattr(args, "runner_command", None),
+        embedder_choice=getattr(args, "embedder", "auto"),
+        embedder_model=getattr(args, "embedder_model", None),
+        embedder_dim=getattr(args, "embedder_dim", 384),
+        embedder_top_k=getattr(args, "embedder_top_k", 5),
+        embedder_cache=getattr(args, "embedder_cache", None),
     )
     if args.format == "json":
         print(
