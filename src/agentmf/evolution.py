@@ -882,6 +882,9 @@ def create_dream_mode_payload(
     proposals.extend(
         _dream_low_signal_terms(evidence_files, out_dir, timestamp, write, diagnostics)
     )
+    proposals.extend(
+        _dream_corpus_wide_low_signal_terms(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
     if diagnostics.has_errors:
         return DreamModeResult(diagnostics)
     return DreamModeResult(
@@ -1645,6 +1648,226 @@ def _is_bucket_suffix_term(text: str) -> bool:
 def _has_boilerplate_substring(text: str) -> bool:
     lowered = text.lower()
     return any(needle in lowered for needle in _LOW_SIGNAL_BOILERPLATE_SUBSTRINGS)
+
+
+# A term appearing in N+ DIFFERENT targets within the same module is
+# definitionally low signal — it can't disambiguate. 3 is conservative
+# (catches systemic noise like "implementation plan" while leaving
+# author-curated 2-target shared phrases alone).
+DREAM_CORPUS_WIDE_TARGET_THRESHOLD = 3
+
+
+def _dream_corpus_wide_low_signal_terms(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """Second-round noise detector. Scans modules listed in
+    openclaw_import evidence and emits `prune_match_terms` proposals
+    for user_intent entries that fail a corpus-wide test of utility:
+
+      - Cross-target frequency: a term that appears in
+        DREAM_CORPUS_WIDE_TARGET_THRESHOLD+ different targets of the
+        same module is broad by definition — pruning it from every
+        target it appears on is safe (no routing decision was riding
+        on it anyway).
+
+    Includes a **name-preservation guard**: if all of a target's
+    `match.user_intent` entries are pruning candidates AND none of the
+    survivors would still contain a token from the target's name, the
+    guard keeps the most name-bearing candidate. This avoids the
+    "brainstorming target with 0 name-bearing terms after cleanup"
+    regression observed after step #1 pruning.
+    """
+    module_paths_seen: set[Path] = set()
+    for evidence_file in evidence_files:
+        for record in _load_evidence_records([evidence_file], diagnostics):
+            if record.get("source") != "openclaw_import":
+                continue
+            refs = record.get("artifact_refs") or {}
+            root = refs.get("root_agentmakefile")
+            module_relpaths = refs.get("module_paths") or []
+            if not isinstance(root, str) or not isinstance(module_relpaths, list):
+                continue
+            root_dir = Path(root).parent
+            for rel in module_relpaths:
+                if not isinstance(rel, str):
+                    continue
+                module_paths_seen.add((root_dir / rel).resolve())
+
+    proposals: list[Dict[str, Any]] = []
+    for module_path in sorted(module_paths_seen, key=lambda p: str(p)):
+        if not module_path.exists():
+            continue
+        try:
+            data = yaml.safe_load(module_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        changes = _corpus_wide_prune_changes(module_path, data)
+        if not changes:
+            continue
+        result = create_skill_workshop_proposal_payload(
+            title=f"Prune corpus-wide low-signal terms in {module_path.name}",
+            evidence_records=[],
+            scope={"modules": [str(module_path)], "targets": []},
+            changes=changes,
+            evaluation_commands=[],
+            out_dir=out_dir,
+            timestamp=timestamp,
+            write=write,
+        )
+        diagnostics.extend(result.diagnostics.items)
+        if result.payload:
+            proposals.append(
+                {
+                    **result.payload,
+                    "patch_status": _dream_patch_status(result.payload),
+                }
+            )
+    return proposals
+
+
+def _corpus_wide_prune_changes(
+    module_path: Path, data: Dict[str, Any]
+) -> list[Dict[str, Any]]:
+    targets = data.get("targets")
+    if not isinstance(targets, dict):
+        return []
+
+    # Pass 1: count cross-target term frequency.
+    freq: Dict[str, int] = {}
+    target_terms: Dict[str, list[str]] = {}
+    for target_name, target_body in targets.items():
+        if not isinstance(target_body, dict):
+            continue
+        match = target_body.get("match") if isinstance(target_body.get("match"), dict) else None
+        if match is None:
+            continue
+        user_intent = match.get("user_intent")
+        if isinstance(user_intent, str):
+            user_intent = [user_intent]
+        if not isinstance(user_intent, list):
+            continue
+        seen_in_this_target: set[str] = set()
+        for term in user_intent:
+            text = str(term).strip()
+            if not text:
+                continue
+            seen_in_this_target.add(text)
+        target_terms[target_name] = list(user_intent)
+        for term in seen_in_this_target:
+            freq[term] = freq.get(term, 0) + 1
+
+    broad_terms = {
+        term for term, count in freq.items()
+        if count >= DREAM_CORPUS_WIDE_TARGET_THRESHOLD
+    }
+    if not broad_terms:
+        return []
+
+    # Pass 2: per-target prune list, with preservation guard.
+    changes: list[Dict[str, Any]] = []
+    for target_name in sorted(target_terms):
+        terms = target_terms[target_name]
+        candidate_removes = [
+            str(term) for term in terms if str(term).strip() in broad_terms
+        ]
+        if not candidate_removes:
+            continue
+        preserved = _apply_name_preservation_guard(target_name, terms, candidate_removes)
+        if not preserved:
+            continue
+        changes.append(
+            {
+                "type": "prune_match_terms",
+                "module": str(module_path),
+                "target": target_name,
+                "remove_terms": preserved,
+            }
+        )
+    return changes
+
+
+def _name_tokens_for_target(target_name: str) -> set[str]:
+    """Extract a set of lowercased name tokens from the target name.
+    For openclaw-style `skill.<bucket>.<skill-name>` targets, this
+    yields `{bucket, skill, name, components}` so the preservation
+    guard can detect "this term carries the skill's identifier".
+    """
+    base = target_name
+    if base.startswith("skill."):
+        base = base[len("skill."):]
+    raw = base.replace(".", " ").replace("-", " ").replace("_", " ").lower()
+    return {token for token in raw.split() if token}
+
+
+def _term_carries_name(term: str, name_tokens: set[str]) -> bool:
+    """True when `term` contains a word that shares a 4+ char common
+    prefix with a name token (or matches exactly for shorter
+    acronyms). Catches morphological variants like plan/planning,
+    brainstorm/brainstorming without pulling in an external stemmer.
+    """
+    if not name_tokens:
+        return False
+    words = [
+        word.lower()
+        for word in str(term).replace("-", " ").replace(".", " ").split()
+        if len(word) >= 3
+    ]
+    for word in words:
+        for token in name_tokens:
+            if len(token) < 3:
+                continue
+            if word == token:
+                return True
+            common = 0
+            for a, b in zip(word, token):
+                if a == b:
+                    common += 1
+                else:
+                    break
+            if common >= 4:
+                return True
+    return False
+
+
+def _apply_name_preservation_guard(
+    target_name: str,
+    all_terms: list[str],
+    candidate_removes: list[str],
+) -> list[str]:
+    """If applying `candidate_removes` would strip every name-bearing
+    term from `all_terms`, keep the single most name-bearing candidate
+    (longest such term) so the target stays routable on its own name.
+
+    Returns the final remove list (possibly shorter than the input).
+    """
+    if not candidate_removes:
+        return []
+    name_tokens = _name_tokens_for_target(target_name)
+    if not name_tokens:
+        return list(candidate_removes)
+    remove_set = set(candidate_removes)
+    surviving = [t for t in all_terms if str(t) not in remove_set]
+    has_name_in_survivors = any(_term_carries_name(str(t), name_tokens) for t in surviving)
+    if has_name_in_survivors:
+        return list(candidate_removes)
+    name_bearing_candidates = sorted(
+        (term for term in candidate_removes if _term_carries_name(term, name_tokens)),
+        key=lambda term: (-len(term), term),
+    )
+    if not name_bearing_candidates:
+        # Nothing in the prune list carries a name token either — pull
+        # back the longest candidate as a generic survivor so the target
+        # is never left with an empty user_intent.
+        longest = max(candidate_removes, key=len)
+        return [term for term in candidate_removes if term != longest]
+    keep = name_bearing_candidates[0]
+    return [term for term in candidate_removes if term != keep]
 
 
 DREAM_CATEGORY_RESPLIT_THRESHOLD = 10

@@ -4526,6 +4526,233 @@ targets:
     assert "brainstorming session" in target_terms and "brainstorming session" in skill_terms
 
 
+def test_dream_mode_corpus_wide_terms_prunes_terms_appearing_in_multiple_targets(tmp_path: Path) -> None:
+    """Second-round noise cleanup: a term that appears in N+ different
+    targets' `match.user_intent` within the same module isn't a routing
+    signal — by definition it can't disambiguate. Detector counts term
+    frequency across the module's targets and emits prune_match_terms
+    for every target carrying a corpus-wide-broad term.
+    """
+    root_dir = tmp_path / "modules" / "openclaw"
+    root_dir.mkdir(parents=True)
+    (root_dir / "AgentMakefile").write_text("version: \"0.1\"\n")
+    module_path = root_dir / "skills" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  skills.tdd:
+    namespace: openclaw
+    description: TDD.
+    implementation: {source: /tmp/SKILL.md, relative_source: skills/tdd/SKILL.md}
+    match: {user_intent: [tdd, implementation plan]}
+  skills.brainstorming:
+    namespace: openclaw
+    description: Brainstorm.
+    implementation: {source: /tmp/SKILL.md, relative_source: skills/brainstorming/SKILL.md}
+    match: {user_intent: [brainstorm, implementation plan, write plan]}
+  skills.subagent:
+    namespace: openclaw
+    description: Subagent.
+    implementation: {source: /tmp/SKILL.md, relative_source: skills/subagent/SKILL.md}
+    match: {user_intent: [subagent, implementation plan, write plan]}
+  skills.planning:
+    namespace: openclaw
+    description: Planning.
+    implementation: {source: /tmp/SKILL.md, relative_source: skills/planning/SKILL.md}
+    match: {user_intent: [plan, implementation plan, write plan]}
+targets:
+  skill.skills.tdd:
+    match: {user_intent: [tdd, implementation plan]}
+    skills: [openclaw:skills.tdd]
+    steps: [{use_skill: openclaw:skills.tdd}]
+  skill.skills.brainstorming:
+    match: {user_intent: [brainstorm, implementation plan, write plan]}
+    skills: [openclaw:skills.brainstorming]
+    steps: [{use_skill: openclaw:skills.brainstorming}]
+  skill.skills.subagent:
+    match: {user_intent: [subagent, implementation plan, write plan]}
+    skills: [openclaw:skills.subagent]
+    steps: [{use_skill: openclaw:skills.subagent}]
+  skill.skills.planning:
+    match: {user_intent: [plan, implementation plan, write plan]}
+    skills: [openclaw:skills.planning]
+    steps: [{use_skill: openclaw:skills.planning}]
+"""
+    )
+    evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
+    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+
+    create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload={
+            "version": 1,
+            "openclaw_import": {
+                "root_path": str(root_dir / "AgentMakefile"),
+                "curator_evidence": {
+                    "skill_count": 4, "category_count": 1, "categories": {"skills": 4},
+                    "duplicate_original_names": {}, "module_paths": ["skills/AgentMakefile"],
+                },
+            },
+        },
+        out_dir=evidence_root, timestamp="2026-05-28T00:00:00Z", write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_root,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-28T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    # Find the corpus-wide noise proposal (distinct from the bucket-suffix
+    # detector — both can fire on the same module).
+    corpus_proposals = [
+        p for p in result.payload["proposals"]
+        if "corpus-wide" in str(p["proposal"].get("title", "")).lower()
+    ]
+    assert len(corpus_proposals) == 1, (
+        f"expected exactly one corpus-wide noise proposal; got titles "
+        f"{[p['proposal'].get('title') for p in result.payload['proposals']]}"
+    )
+    proposal = corpus_proposals[0]["proposal"]
+    prune_changes = [c for c in proposal["changes"] if c["type"] == "prune_match_terms"]
+    by_target = {c["target"]: c["remove_terms"] for c in prune_changes}
+
+    # Every target carrying `implementation plan` (≥3 occurrences → broad)
+    # gets it pruned, including the TDD target (2 occurrences would NOT
+    # be flagged on its own, but `implementation plan` appears in 4
+    # targets total).
+    for target_name in [
+        "skill.skills.tdd",
+        "skill.skills.brainstorming",
+        "skill.skills.subagent",
+        "skill.skills.planning",
+    ]:
+        assert target_name in by_target, f"missing prune for {target_name}: {by_target}"
+        assert "implementation plan" in by_target[target_name]
+    # 'write plan' also appears in 3 targets (brainstorming + subagent + planning) → broad.
+    assert "write plan" in by_target["skill.skills.brainstorming"]
+    # Single-target terms must NOT be touched.
+    for target_name, removed in by_target.items():
+        assert "tdd" not in removed
+        assert "brainstorm" not in removed
+        assert "subagent" not in removed
+
+
+def test_dream_mode_corpus_wide_terms_preserves_last_name_bearing_term(tmp_path: Path) -> None:
+    """Preservation guard: if all of a target's `match.user_intent`
+    entries qualify for pruning (e.g. they're all corpus-wide-broad
+    AND they all happen to be the only carriers of the skill's
+    name), we must keep at least one name-bearing term so the
+    target stays routable.
+
+    Regression for the brainstorming case after step #1 noise prune:
+    when the only terms containing `brainstorm` were `'brainstorming
+    skills'` / `'brainstorm .tmp'` (bucket-suffix shape), pruning all
+    of them left the target with zero name-bearing terms.
+    """
+    root_dir = tmp_path / "modules" / "openclaw"
+    root_dir.mkdir(parents=True)
+    (root_dir / "AgentMakefile").write_text("version: \"0.1\"\n")
+    module_path = root_dir / "skills" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    # Two targets, both have the broad "implementation plan", and the
+    # narrow target's only OTHER term is also broad. Without the guard
+    # the narrow target loses all routing signal.
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  skills.tdd:
+    namespace: openclaw
+    description: TDD.
+    implementation: {source: /tmp/SKILL.md, relative_source: skills/tdd/SKILL.md}
+    match: {user_intent: [implementation plan, write plan]}
+  skills.brainstorming:
+    namespace: openclaw
+    description: Brainstorm.
+    implementation: {source: /tmp/SKILL.md, relative_source: skills/brainstorming/SKILL.md}
+    match: {user_intent: [brainstorm session, implementation plan, write plan]}
+  skills.subagent:
+    namespace: openclaw
+    description: Subagent.
+    implementation: {source: /tmp/SKILL.md, relative_source: skills/subagent/SKILL.md}
+    match: {user_intent: [subagent, implementation plan, write plan]}
+targets:
+  skill.skills.tdd:
+    match: {user_intent: [implementation plan, write plan]}
+    skills: [openclaw:skills.tdd]
+    steps: [{use_skill: openclaw:skills.tdd}]
+  skill.skills.brainstorming:
+    match: {user_intent: [brainstorm session, implementation plan, write plan]}
+    skills: [openclaw:skills.brainstorming]
+    steps: [{use_skill: openclaw:skills.brainstorming}]
+  skill.skills.subagent:
+    match: {user_intent: [subagent, implementation plan, write plan]}
+    skills: [openclaw:skills.subagent]
+    steps: [{use_skill: openclaw:skills.subagent}]
+"""
+    )
+    evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
+    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+
+    create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload={
+            "version": 1,
+            "openclaw_import": {
+                "root_path": str(root_dir / "AgentMakefile"),
+                "curator_evidence": {
+                    "skill_count": 3, "category_count": 1, "categories": {"skills": 3},
+                    "duplicate_original_names": {}, "module_paths": ["skills/AgentMakefile"],
+                },
+            },
+        },
+        out_dir=evidence_root, timestamp="2026-05-28T00:00:00Z", write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_root,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-28T00:00:00Z",
+        write=True,
+    )
+    assert result.ok, result.diagnostics.format()
+
+    corpus_proposals = [
+        p for p in result.payload["proposals"]
+        if "corpus-wide" in str(p["proposal"].get("title", "")).lower()
+    ]
+    assert len(corpus_proposals) == 1
+    by_target = {
+        c["target"]: c["remove_terms"]
+        for c in corpus_proposals[0]["proposal"]["changes"]
+        if c["type"] == "prune_match_terms"
+    }
+
+    # The TDD target has NO non-broad terms — both `implementation plan`
+    # and `write plan` are broad. The guard must keep at least one so
+    # routing still works. We expect ONE of them to be removed and ONE
+    # retained (no rule for which, just that the target ends up with
+    # at least one term after the change applies).
+    tdd_removes = by_target.get("skill.skills.tdd", [])
+    assert len(tdd_removes) == 1, (
+        f"preservation guard should keep one term for skill.skills.tdd "
+        f"(it has no name-bearing terms); got removes={tdd_removes}"
+    )
+
+    # The brainstorming target has the name-bearing `brainstorm session`
+    # in addition to the two broad terms, so BOTH broad terms can be
+    # pruned safely.
+    bs_removes = by_target.get("skill.skills.brainstorming", [])
+    assert "implementation plan" in bs_removes
+    assert "write plan" in bs_removes
+    assert "brainstorm session" not in bs_removes
+
+
 def test_dream_mode_low_signal_terms_prunes_bucket_suffix_and_boilerplate(tmp_path: Path) -> None:
     """Proactive noise detector: scans modules listed in openclaw_import
     evidence and proposes prune_match_terms for clearly low-signal
