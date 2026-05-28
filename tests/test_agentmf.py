@@ -3924,6 +3924,264 @@ targets:
     assert patch_result.payload["patch_status"] == "generated"
 
 
+def test_dream_mode_cross_module_prune_targets_actual_modules_file(tmp_path: Path) -> None:
+    """When the actual (wrongly-winning) target lives in a different module
+    than the intended one, the prune_match_terms change must point at the
+    actual's module — not the intended module — so the patch generator
+    edits the right file. Regression for the slack/gmail cross-module
+    miss: feedback said "send a slack message" should route to slack in
+    uncategorized/AgentMakefile but actually routed to gmail in
+    plugins/AgentMakefile, and the prune was looking for gmail's broad
+    'send' term in uncategorized/.
+    """
+    intended_module = tmp_path / "uncategorized" / "AgentMakefile"
+    actual_module = tmp_path / "plugins" / "AgentMakefile"
+    intended_module.parent.mkdir(parents=True)
+    actual_module.parent.mkdir(parents=True)
+    intended_module.write_text(
+        """\
+version: "0.1"
+skills:
+  uncategorized.slack:
+    namespace: smoke
+    description: Slack control.
+    implementation:
+      source: skills/slack/SKILL.md
+      relative_source: uncategorized/slack/SKILL.md
+    match:
+      user_intent:
+        - control slack
+targets:
+  skill.uncategorized.slack:
+    match:
+      user_intent:
+        - control slack
+    skills:
+      - smoke:uncategorized.slack
+    steps:
+      - use_skill: smoke:uncategorized.slack
+"""
+    )
+    actual_module.write_text(
+        """\
+version: "0.1"
+skills:
+  plugins.gmail:
+    namespace: smoke
+    description: Gmail control.
+    implementation:
+      source: skills/gmail/SKILL.md
+      relative_source: plugins/gmail/SKILL.md
+    match:
+      user_intent:
+        - inspect mailbox
+        - send
+targets:
+  skill.plugins.gmail:
+    match:
+      user_intent:
+        - inspect mailbox
+        - send
+    skills:
+      - smoke:plugins.gmail
+    steps:
+      - use_skill: smoke:plugins.gmail
+"""
+    )
+    evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    from agentmf.evolution import (
+        create_candidate_patch_payload,
+        create_dream_mode_payload,
+        create_evolution_evidence_payload,
+    )
+
+    create_evolution_evidence_payload(
+        source="user_feedback",
+        payload={
+            "request": "send a slack message",
+            "intended_module": str(intended_module),
+            "intended_target": "skill.uncategorized.slack",
+            "actual_module": str(actual_module),
+            "actual_target": "skill.plugins.gmail",
+            "corrective_terms": ["slack message", "send slack"],
+            "comment": "broad 'send' on gmail beat the intended slack route",
+        },
+        out_dir=evidence_root,
+        write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_root,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-28T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    proposals_with_prune = [
+        p for p in result.payload["proposals"]
+        if any(c.get("type") == "prune_match_terms" for c in p["proposal"]["changes"])
+    ]
+    assert len(proposals_with_prune) == 1, (
+        "expected exactly one proposal that includes a prune; "
+        f"got {[ [c.get('type') for c in p['proposal']['changes']] for p in result.payload['proposals']]}"
+    )
+    proposal = proposals_with_prune[0]["proposal"]
+    prune_change = next(c for c in proposal["changes"] if c["type"] == "prune_match_terms")
+
+    # The bug: prune.module used to be the intended module (where the
+    # actual target wasn't defined), so the lookup found nothing and
+    # `send` was never proposed for removal. After the fix, the prune
+    # change MUST point at the module that actually owns
+    # `skill.plugins.gmail`.
+    assert prune_change["module"] == str(actual_module), (
+        f"prune_match_terms.module should resolve to the actual_module "
+        f"({actual_module}); got {prune_change['module']}"
+    )
+    assert prune_change["target"] == "skill.plugins.gmail"
+    assert "send" in prune_change["remove_terms"], (
+        f"broad single-word 'send' should be proposed for pruning; "
+        f"got remove_terms={prune_change['remove_terms']}"
+    )
+    # Scope must also include the actual module so patch generation
+    # touches the right file.
+    assert str(actual_module) in proposal["scope"]["modules"]
+
+    # End-to-end: dream-emitted proposal must patch-generate without errors
+    # and the candidate gmail module really loses the `send` trigger.
+    proposal_path = Path(proposals_with_prune[0]["paths"]["proposal_json"])
+    patch_result = create_candidate_patch_payload(
+        proposal_file=proposal_path,
+        out_dir=tmp_path / "patch",
+        write=True,
+    )
+    assert patch_result.ok, patch_result.diagnostics.format()
+    assert patch_result.payload["patch_status"] == "generated"
+
+
+def test_dream_mode_low_signal_terms_prunes_bucket_suffix_and_boilerplate(tmp_path: Path) -> None:
+    """Proactive noise detector: scans modules listed in openclaw_import
+    evidence and proposes prune_match_terms for clearly low-signal
+    user_intent terms:
+      - bucket-suffix artifacts ("<name> .tmp", "<name> plugins", etc.)
+        left over from auto-import disambiguation
+      - common boilerplate stop-phrases ("You MUST use this",
+        "Use this skill when") that don't carry intent signal
+    Genuine multi-word intents must be left alone.
+    """
+    root_dir = tmp_path / "modules" / "openclaw"
+    root_dir.mkdir(parents=True)
+    root_makefile = root_dir / "AgentMakefile"
+    root_makefile.write_text("version: \"0.1\"\n")  # root index file, contents irrelevant here
+    module_path = root_dir / "skills" / "AgentMakefile"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        """\
+version: "0.1"
+skills:
+  skills.brainstorming:
+    namespace: openclaw
+    description: Brainstorming skill.
+    implementation:
+      source: /Users/x/.codex/skills/brainstorming/SKILL.md
+      relative_source: skills/brainstorming/SKILL.md
+    match:
+      user_intent:
+        - brainstorm
+        - brainstorming session
+        - brainstorming .tmp
+        - brainstorming plugins
+        - brainstorm .tmp
+        - You MUST use this
+        - Use this skill when starting fresh work
+targets:
+  skill.skills.brainstorming:
+    match:
+      user_intent:
+        - brainstorm
+        - brainstorming session
+        - brainstorming .tmp
+        - brainstorming plugins
+        - brainstorm .tmp
+        - You MUST use this
+        - Use this skill when starting fresh work
+    skills:
+      - openclaw:skills.brainstorming
+    steps:
+      - use_skill: openclaw:skills.brainstorming
+"""
+    )
+    evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
+
+    from agentmf.evolution import (
+        create_dream_mode_payload,
+        create_evolution_evidence_payload,
+    )
+
+    create_evolution_evidence_payload(
+        source="openclaw_import",
+        payload={
+            "version": 1,
+            "openclaw_import": {
+                "root_path": str(root_makefile),
+                "curator_evidence": {
+                    "skill_count": 1,
+                    "category_count": 1,
+                    "categories": {"skills": 1},
+                    "duplicate_original_names": {},
+                    "module_paths": ["skills/AgentMakefile"],
+                },
+            },
+        },
+        out_dir=evidence_root,
+        timestamp="2026-05-28T00:00:00Z",
+        write=True,
+    )
+
+    result = create_dream_mode_payload(
+        evidence_dir=evidence_root,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-05-28T00:00:00Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    noise_proposals = [
+        p for p in result.payload["proposals"]
+        if any(c.get("type") == "prune_match_terms" for c in p["proposal"]["changes"])
+        and any("low-signal" in str(p["proposal"].get("title", "")).lower()
+                or "noise" in str(p["proposal"].get("title", "")).lower()
+                for _ in [0])
+    ]
+    assert len(noise_proposals) == 1, (
+        f"expected exactly one low-signal noise proposal; got titles "
+        f"{[p['proposal'].get('title') for p in result.payload['proposals']]}"
+    )
+    proposal = noise_proposals[0]["proposal"]
+    # All prune changes should target the right module + target.
+    prune_changes = [c for c in proposal["changes"] if c["type"] == "prune_match_terms"]
+    assert len(prune_changes) >= 1
+    for change in prune_changes:
+        assert change["module"] == str(module_path)
+        assert change["target"] == "skill.skills.brainstorming"
+
+    removed = set()
+    for change in prune_changes:
+        removed.update(change.get("remove_terms", []))
+
+    # Bucket-suffix terms MUST be flagged for removal.
+    assert "brainstorming .tmp" in removed
+    assert "brainstorming plugins" in removed
+    assert "brainstorm .tmp" in removed
+    # Boilerplate stop-phrases MUST be flagged.
+    assert "You MUST use this" in removed
+    assert "Use this skill when starting fresh work" in removed
+    # Genuine intents MUST survive.
+    assert "brainstorm" not in removed
+    assert "brainstorming session" not in removed
+
+
 def test_dream_mode_category_resplit_suggests_sub_module_split(tmp_path: Path) -> None:
     """When an already-imported module hosts many skills sharing a common
     second-level path segment in their `relative_source`, the detector

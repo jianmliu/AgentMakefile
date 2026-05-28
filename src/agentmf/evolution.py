@@ -879,6 +879,9 @@ def create_dream_mode_payload(
     proposals.extend(
         _dream_category_resplit(evidence_files, out_dir, timestamp, write, diagnostics)
     )
+    proposals.extend(
+        _dream_low_signal_terms(evidence_files, out_dir, timestamp, write, diagnostics)
+    )
     if diagnostics.has_errors:
         return DreamModeResult(diagnostics)
     return DreamModeResult(
@@ -997,7 +1000,14 @@ def _dream_missing_match_terms(
     """
     by_target: Dict[tuple[str, str], list[Dict[str, Any]]] = {}
     terms_by_target: Dict[tuple[str, str], list[str]] = {}
-    actuals_by_target: Dict[tuple[str, str], Dict[str, list[str]]] = {}
+    # Map (intended_module, intended_target) -> {actual_target: [(actual_module, request_text), ...]}
+    # The actual_module may differ from intended_module when the wrongly-
+    # winning target lives in a sibling module (cross-module routing
+    # gap). Falls back to the intended module when the feedback caller
+    # didn't supply actual_module.
+    actuals_by_target: Dict[
+        tuple[str, str], Dict[str, list[tuple[str, str]]]
+    ] = {}
     for evidence_file in evidence_files:
         for record in _load_evidence_records([evidence_file], diagnostics):
             if record.get("source") != "user_feedback":
@@ -1022,7 +1032,14 @@ def _dream_missing_match_terms(
                     bucket.append(term)
             actual_target = summary.get("actual_target")
             if isinstance(actual_target, str) and actual_target:
-                actuals_by_target.setdefault(key, {}).setdefault(actual_target, []).append(str(request_text))
+                actual_module = summary.get("actual_module")
+                actual_module_path = (
+                    str(actual_module) if isinstance(actual_module, str) and actual_module
+                    else str(intended_module)
+                )
+                actuals_by_target.setdefault(key, {}).setdefault(actual_target, []).append(
+                    (actual_module_path, str(request_text))
+                )
 
     proposals: list[Dict[str, Any]] = []
     for key in sorted(by_target):
@@ -1038,22 +1055,37 @@ def _dream_missing_match_terms(
             }
         ]
         # Generate prune proposals for each actual_target that wrongly won.
-        for actual_target, requests in sorted(actuals_by_target.get(key, {}).items()):
-            broad_terms = _broad_match_terms_to_prune(Path(module_path), actual_target, requests)
-            if broad_terms:
-                changes.append(
-                    {
-                        "type": "prune_match_terms",
-                        "module": module_path,
-                        "target": actual_target,
-                        "remove_terms": broad_terms,
-                    }
+        # The lookup MUST run against the module that owns the actual
+        # target, which may be a different file than `module_path` (the
+        # intended module) when the routing gap crossed modules.
+        extra_scope_modules: list[str] = []
+        for actual_target, hits in sorted(actuals_by_target.get(key, {}).items()):
+            # Group by actual_module so each (target, module) pair gets
+            # its own prune change with the correct file pointer.
+            by_actual_module: Dict[str, list[str]] = {}
+            for actual_module_path, request_text in hits:
+                by_actual_module.setdefault(actual_module_path, []).append(request_text)
+            for actual_module_path, requests in sorted(by_actual_module.items()):
+                broad_terms = _broad_match_terms_to_prune(
+                    Path(actual_module_path), actual_target, requests
                 )
+                if broad_terms:
+                    changes.append(
+                        {
+                            "type": "prune_match_terms",
+                            "module": actual_module_path,
+                            "target": actual_target,
+                            "remove_terms": broad_terms,
+                        }
+                    )
+                    if actual_module_path != module_path and actual_module_path not in extra_scope_modules:
+                        extra_scope_modules.append(actual_module_path)
 
+        scope_modules = [module_path, *extra_scope_modules]
         result = create_skill_workshop_proposal_payload(
             title=f"Add match terms to {target_name}",
             evidence_records=records,
-            scope={"modules": [module_path], "targets": [target_name]},
+            scope={"modules": scope_modules, "targets": [target_name]},
             changes=changes,
             evaluation_commands=[],
             out_dir=out_dir,
@@ -1453,6 +1485,168 @@ def _dream_benchmark_case_suggester(
     return proposals
 
 
+# Bucket suffixes the OpenClaw importer appends to keep auto-generated
+# `match.user_intent` entries unique within a category. They're useful
+# at import time as disambiguators, but routing-wise they're noise:
+# someone asking "send a slack message" doesn't write "send slack
+# uncategorized". The low-signal detector flags these for removal.
+_OPENCLAW_BUCKET_SUFFIXES = (".tmp", "plugins", "skills", "vendor_imports", "uncategorized")
+
+# Boilerplate substrings that mark a `user_intent` term as documentation
+# rather than user intent. These are case-insensitive substring matches;
+# any term that contains one of these gets pruned. Kept short and
+# explicit so future readers can audit what we'll touch.
+_LOW_SIGNAL_BOILERPLATE_SUBSTRINGS = (
+    "you must use this",
+    "use this skill when",
+    "use this when",
+    "mandatory prerequisite",
+    "never call",
+    "you need to",
+)
+
+
+def _dream_low_signal_terms(
+    evidence_files: list[Path],
+    out_dir: Union[Path, str],
+    timestamp: Optional[str],
+    write: bool,
+    diagnostics: Diagnostics,
+) -> list[Dict[str, Any]]:
+    """Proactive noise detector. Scans modules listed in `openclaw_import`
+    evidence and emits `prune_match_terms` proposals for entries that
+    are clearly low-signal:
+
+      - bucket-suffix artifacts from auto-import (e.g. 'brainstorming
+        .tmp', 'slack uncategorized')
+      - common boilerplate / instruction phrases (e.g. 'You MUST use
+        this', 'Use this skill when ...')
+
+    Multi-word genuine user intents are preserved. One proposal is
+    produced per module that has any pruneable terms; per-skill prune
+    changes are grouped under that proposal so the patch generator can
+    apply them atomically. Skill `match.user_intent` AND its matching
+    `skill.<name>` target are both cleaned.
+    """
+    module_paths_seen: set[Path] = set()
+    for evidence_file in evidence_files:
+        for record in _load_evidence_records([evidence_file], diagnostics):
+            if record.get("source") != "openclaw_import":
+                continue
+            refs = record.get("artifact_refs") or {}
+            root = refs.get("root_agentmakefile")
+            module_relpaths = refs.get("module_paths") or []
+            if not isinstance(root, str) or not isinstance(module_relpaths, list):
+                continue
+            root_dir = Path(root).parent
+            for rel in module_relpaths:
+                if not isinstance(rel, str):
+                    continue
+                module_paths_seen.add((root_dir / rel).resolve())
+
+    proposals: list[Dict[str, Any]] = []
+    for module_path in sorted(module_paths_seen, key=lambda p: str(p)):
+        if not module_path.exists():
+            continue
+        try:
+            data = yaml.safe_load(module_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        prune_changes = _low_signal_prune_changes_for_module(module_path, data)
+        if not prune_changes:
+            continue
+        title = f"Prune low-signal match terms in {module_path.name}"
+        result = create_skill_workshop_proposal_payload(
+            title=title,
+            evidence_records=[],
+            scope={"modules": [str(module_path)], "targets": []},
+            changes=prune_changes,
+            evaluation_commands=[],
+            out_dir=out_dir,
+            timestamp=timestamp,
+            write=write,
+        )
+        diagnostics.extend(result.diagnostics.items)
+        if result.payload:
+            proposals.append(
+                {
+                    **result.payload,
+                    "patch_status": _dream_patch_status(result.payload),
+                }
+            )
+    return proposals
+
+
+def _low_signal_prune_changes_for_module(
+    module_path: Path, data: Dict[str, Any]
+) -> list[Dict[str, Any]]:
+    """For each skill in `data` collect its low-signal user_intent terms
+    (bucket-suffix + boilerplate). When a skill has any, emit one
+    `prune_match_terms` change against the matching `skill.<name>`
+    target (the selector matches at the target level — pruning only
+    the skill entry would leave the noise active for routing).
+    """
+    skills = data.get("skills")
+    targets = data.get("targets")
+    if not isinstance(skills, dict) or not isinstance(targets, dict):
+        return []
+    changes: list[Dict[str, Any]] = []
+    for skill_name in sorted(skills):
+        skill_body = skills.get(skill_name)
+        if not isinstance(skill_body, dict):
+            continue
+        target_name = f"skill.{skill_name}"
+        target_body = targets.get(target_name)
+        if not isinstance(target_body, dict):
+            continue
+        terms = ((target_body.get("match") or {}).get("user_intent")) or []
+        if not isinstance(terms, list):
+            continue
+        low_signal = _select_low_signal_terms(terms)
+        if not low_signal:
+            continue
+        changes.append(
+            {
+                "type": "prune_match_terms",
+                "module": str(module_path),
+                "target": target_name,
+                "remove_terms": low_signal,
+            }
+        )
+    return changes
+
+
+def _select_low_signal_terms(terms: list[Any]) -> list[str]:
+    selected: list[str] = []
+    for term in terms:
+        text = str(term).strip()
+        if not text:
+            continue
+        if _is_bucket_suffix_term(text) or _has_boilerplate_substring(text):
+            if text not in selected:
+                selected.append(text)
+    return selected
+
+
+def _is_bucket_suffix_term(text: str) -> bool:
+    """True for terms that end with ` <bucket>` where <bucket> is one of
+    the OpenClaw category names. Tokenises on whitespace so we don't
+    accidentally match a genuine intent that happens to contain the
+    word `plugins` mid-sentence.
+    """
+    tokens = text.split()
+    if len(tokens) < 2:
+        return False
+    return tokens[-1] in _OPENCLAW_BUCKET_SUFFIXES
+
+
+def _has_boilerplate_substring(text: str) -> bool:
+    lowered = text.lower()
+    return any(needle in lowered for needle in _LOW_SIGNAL_BOILERPLATE_SUBSTRINGS)
+
+
 DREAM_CATEGORY_RESPLIT_THRESHOLD = 10
 
 
@@ -1616,6 +1810,7 @@ def _summary_for_source(source: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             "intended_module": payload.get("intended_module"),
             "intended_target": payload.get("intended_target"),
             "intended_skill": payload.get("intended_skill"),
+            "actual_module": payload.get("actual_module"),
             "actual_target": payload.get("actual_target"),
             "corrective_terms": list(payload.get("corrective_terms") or []),
             "comment": payload.get("comment"),
