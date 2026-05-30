@@ -10,7 +10,7 @@ from agentmf.plugin import PluginPayloadResult, create_plugin_payload
 from agentmf.plugin_install import PluginInstallPayloadResult, create_plugin_install_payload
 from agentmf.prompt import PromptPayloadResult, create_prompt_payload
 from agentmf.runtime import RunPlanResult, create_run_plan
-from agentmf.selector import LinkPlanResult, create_link_plan
+from agentmf.selector import LinkPlanResult, ModelRoutingResult, create_link_plan, recommend_model
 from agentmf.skill_sync import SkillSyncPayloadResult, create_skill_sync_payload
 from agentmf.swebench import (
     SWE_BENCH_PROFILES,
@@ -37,6 +37,7 @@ __all__ = [
     "ExecPayloadResult",
     "HarnessBenchmarkResult",
     "LinkPlanResult",
+    "ModelRoutingResult",
     "PluginPayloadResult",
     "PluginInstallPayloadResult",
     "PromptPayloadResult",
@@ -51,6 +52,7 @@ __all__ = [
     "create_link_plan",
     "create_plugin_payload",
     "create_plugin_install_payload",
+    "recommend_model",
     "create_prompt_payload",
     "create_run_plan",
     "create_skill_sync_payload",

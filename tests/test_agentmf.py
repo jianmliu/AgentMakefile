@@ -13632,3 +13632,46 @@ targets:
 
     assert result.ok, result.diagnostics.format()
     assert result.plan["recommended_model"] is None
+
+
+def test_link_plan_recommends_model_even_when_no_target_matches(tmp_path: Path) -> None:
+    # "summarize text" matches the haiku model's match terms but NONE of the
+    # targets (implement feature / debug a hard problem). Model routing is
+    # orthogonal: the recommendation must still be present.
+    path = write_agentmakefile(tmp_path, MODEL_ROUTING_MODULE)
+
+    result = create_link_plan(path, request="please summarize text for me")
+
+    assert result.plan.get("selected_targets") == []
+    rec = result.plan.get("recommended_model")
+    assert rec is not None
+    assert rec["model"] == "haiku-fast"
+    assert rec["reason"] == "matched"
+
+
+def test_recommend_model_standalone_is_independent_of_target_routing(tmp_path: Path) -> None:
+    from agentmf import recommend_model
+
+    path = write_agentmakefile(tmp_path, MODEL_ROUTING_MODULE)
+
+    # a request that matches no target at all
+    result = recommend_model(path, request="please summarize text for me")
+    assert result.ok, result.diagnostics.format()
+    assert result.recommendation["model"] == "haiku-fast"
+    assert result.recommendation["reason"] == "matched"
+
+    # a request that matches no model -> default
+    result2 = recommend_model(path, request="totally unrelated nonsense xyz")
+    assert result2.ok
+    assert result2.recommendation["model"] == "haiku-fast"
+    assert result2.recommendation["reason"] == "default"
+
+    # module without a models block -> recommendation is None
+    plain = write_agentmakefile(
+        tmp_path,
+        "version: \"0.1\"\ntargets:\n  t:\n    match: {user_intent: [x]}\n    steps: [{action: a}]\n",
+        name="plain.AgentMakefile",
+    )
+    result3 = recommend_model(plain, request="x")
+    assert result3.ok
+    assert result3.recommendation is None

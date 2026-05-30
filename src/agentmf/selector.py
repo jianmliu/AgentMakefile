@@ -26,6 +26,16 @@ class LinkPlanResult:
         return not self.diagnostics.has_errors
 
 
+@dataclass
+class ModelRoutingResult:
+    diagnostics: Diagnostics
+    recommendation: Optional[Dict[str, Any]] = None
+
+    @property
+    def ok(self) -> bool:
+        return not self.diagnostics.has_errors
+
+
 DEFAULT_N_BEST = 3
 DEFAULT_HYBRID_TOP_K = 10
 SUPPORTED_MATCHERS = ("keyword", "embedding", "hybrid")
@@ -70,6 +80,10 @@ def create_link_plan(
     if ir is None or diagnostics.has_errors:
         return LinkPlanResult(diagnostics)
 
+    # Model routing is an orthogonal axis: compute it from request + models
+    # independently of target selection, so it survives a target no-match.
+    recommended_model = _recommend_model(ir.models, request)
+
     targets_by_name = {target.name: target for target in ir.targets}
     requested_targets = list(target_names or [])
     selection_trace: Dict[str, Any]
@@ -102,7 +116,9 @@ def create_link_plan(
         return LinkPlanResult(diagnostics)
 
     if diagnostics.has_errors:
-        return LinkPlanResult(diagnostics)
+        # Target routing failed (e.g. AMF118 no match), but model routing is
+        # orthogonal — still surface the recommendation.
+        return LinkPlanResult(diagnostics, {"selected_targets": [], "recommended_model": recommended_model})
 
     closure = _target_closure(selected_targets, targets_by_name)
     selection_trace = _with_dependency_closure(selection_trace, selected_targets, closure)
@@ -124,7 +140,7 @@ def create_link_plan(
         },
         "selection_trace": selection_trace,
         "selected_targets": [target.name for target in selected_targets],
-        "recommended_model": _recommend_model(ir.models, request),
+        "recommended_model": recommended_model,
         "alternatives": alternatives,
         "target_closure": [target.name for target in closure],
         "target_pipelines": target_pipelines,
@@ -139,6 +155,27 @@ def create_link_plan(
         ],
     }
     return LinkPlanResult(diagnostics, plan)
+
+
+def recommend_model(
+    path: Union[Path, str],
+    request: Optional[str] = None,
+) -> ModelRoutingResult:
+    """Standalone, orthogonal model routing — independent of target selection.
+
+    Loads the module, normalizes, and recommends a model purely from the request
+    and the `models:` block. Never depends on (or fails because of) target
+    routing. Returns recommendation=None when no `models:` block is defined.
+    """
+    diagnostics = Diagnostics()
+    source, load_diagnostics = load_source_with_diagnostics(path)
+    diagnostics.extend(load_diagnostics.items)
+    if source is None or diagnostics.has_errors:
+        return ModelRoutingResult(diagnostics)
+    ir = normalize(source, diagnostics)
+    if ir is None or diagnostics.has_errors:
+        return ModelRoutingResult(diagnostics)
+    return ModelRoutingResult(diagnostics, _recommend_model(ir.models, request))
 
 
 def _alternatives_from_trace(
