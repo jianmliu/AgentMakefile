@@ -13544,3 +13544,91 @@ def test_cli_configure_add_writes_file(tmp_path: Path, capsys) -> None:
 
     from agentmf.loader import load_source
     assert "opencode" in load_source(path).compile.targets
+
+
+MODEL_ROUTING_MODULE = """\
+version: "0.1"
+models:
+  haiku-fast:
+    family: claude
+    cost: low
+    capabilities:
+      - fast
+    priority: 50
+    default: true
+    match:
+      user_intent:
+        - quick lookup
+        - summarize text
+  opus-deep:
+    family: claude
+    cost: high
+    capabilities:
+      - deep-reasoning
+    priority: 70
+    match:
+      user_intent:
+        - debug a hard problem
+        - complex refactor
+targets:
+  code.task:
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - action: write_code
+  debug.task:
+    match:
+      user_intent:
+        - debug a hard problem
+    steps:
+      - action: investigate
+"""
+
+
+def test_link_plan_recommends_model_matched_by_request(tmp_path: Path) -> None:
+    path = write_agentmakefile(tmp_path, MODEL_ROUTING_MODULE)
+
+    result = create_link_plan(path, request="please debug a hard problem")
+
+    assert result.ok, result.diagnostics.format()
+    rec = result.plan["recommended_model"]
+    assert rec["model"] == "opus-deep"
+    assert rec["reason"] == "matched"
+    assert rec["family"] == "claude"
+    assert rec["cost"] == "high"
+    assert rec["capabilities"] == ["deep-reasoning"]
+    assert "debug a hard problem" in rec["matched_terms"]
+
+
+def test_link_plan_recommends_default_model_when_no_model_matches(tmp_path: Path) -> None:
+    path = write_agentmakefile(tmp_path, MODEL_ROUTING_MODULE)
+
+    result = create_link_plan(path, request="implement feature")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["code.task"]
+    rec = result.plan["recommended_model"]
+    assert rec["model"] == "haiku-fast"
+    assert rec["reason"] == "default"
+
+
+def test_link_plan_recommended_model_is_none_without_models_block(tmp_path: Path) -> None:
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+targets:
+  code.task:
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - action: write_code
+""",
+    )
+
+    result = create_link_plan(path, request="implement feature")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["recommended_model"] is None

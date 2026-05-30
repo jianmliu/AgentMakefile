@@ -7,6 +7,7 @@ from agentmf.diagnostics import Diagnostics
 from agentmf.models import (
     AgentMakefileSource,
     AgentRuleIR,
+    IRModel,
     IRPermission,
     IRPolicy,
     IRSkill,
@@ -39,6 +40,7 @@ def normalize(source: AgentMakefileSource, diagnostics: Diagnostics) -> Optional
         targets=targets,
         policies=list(policies.values()),
         skills=list(skills.values()),
+        models=[IRModel(name=name, **model.model_dump()) for name, model in source.models.items()],
         permission_defaults=permissions.defaults,
         permissions=_flatten_permissions(permissions),
         hooks=source.hooks,

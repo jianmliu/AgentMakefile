@@ -76,6 +76,15 @@ class SkillSpec(StrictModel):
     output_schema: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ModelSpec(StrictModel):
+    family: Optional[str] = None
+    cost: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    match: Dict[str, Any] = Field(default_factory=dict)
+    priority: StrictInt = Field(default=50, ge=0, le=100)
+    default: bool = False
+
+
 class TargetSpec(StrictModel):
     phony: bool = True
     priority: StrictInt = Field(default=50, ge=0, le=100)
@@ -108,6 +117,7 @@ class AgentMakefileSource(StrictModel):
     outputs: Dict[str, OutputSpec] = Field(default_factory=dict)
     policies: Dict[str, PolicySpec] = Field(default_factory=dict)
     skills: Dict[str, SkillSpec] = Field(default_factory=dict)
+    models: Dict[str, ModelSpec] = Field(default_factory=dict)
     targets: Dict[str, TargetSpec] = Field(default_factory=dict)
     permissions: PermissionSource = Field(default_factory=PermissionSpec)
     hooks: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
@@ -175,6 +185,16 @@ class IRTarget(StrictModel):
     pipeline: Dict[str, Any] = Field(default_factory=dict)
 
 
+class IRModel(StrictModel):
+    name: str
+    family: Optional[str] = None
+    cost: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    match: Dict[str, Any] = Field(default_factory=dict)
+    priority: int = 50
+    default: bool = False
+
+
 class IRPermission(StrictModel):
     tool: str
     pattern: str
@@ -188,6 +208,7 @@ class AgentRuleIR(StrictModel):
     targets: List[IRTarget]
     policies: List[IRPolicy]
     skills: List[IRSkill]
+    models: List[IRModel] = Field(default_factory=list)
     permission_defaults: Dict[str, PermissionAction]
     permissions: List[IRPermission]
     hooks: Dict[str, List[Dict[str, Any]]]
