@@ -1,0 +1,77 @@
+version: "0.1"
+
+metadata:
+  name: model-routing-demo
+  description: Advisory model routing — pick a model per request alongside skills.
+
+# A `models:` block makes model selection a first-class, routable resource,
+# matched the same way targets/skills are. `agentmf select` / `plugin payload`
+# emit `recommended_model`; the host still owns the actual model call.
+models:
+  haiku-fast:
+    family: claude
+    cost: low
+    capabilities: [fast, retrieval]
+    default: true            # fallback when no model's match terms hit
+    priority: 50
+    match:
+      user_intent:
+        - quick lookup
+        - look something up
+        - summarize
+        - simple edit
+
+  sonnet-balanced:
+    family: claude
+    cost: medium
+    capabilities: [coding, tool-use]
+    priority: 60
+    match:
+      user_intent:
+        - implement a feature
+        - write code
+        - refactor
+
+  opus-deep:
+    family: claude
+    cost: high
+    capabilities: [deep-reasoning, tool-use]
+    priority: 70
+    match:
+      user_intent:
+        - debug a hard problem
+        - root cause analysis
+        - design a complex system
+
+  gemini-vision:
+    family: gemini
+    cost: medium
+    capabilities: [vision]
+    priority: 65
+    match:
+      user_intent:
+        - analyze a screenshot
+        - read an image
+        - review a ui mockup
+
+targets:
+  code.task:
+    priority: 60
+    match:
+      user_intent:
+        - implement a feature
+        - write code
+        - refactor
+        - debug a hard problem
+    steps:
+      - action: write_code
+
+  research.task:
+    priority: 55
+    match:
+      user_intent:
+        - quick lookup
+        - summarize
+        - analyze a screenshot
+    steps:
+      - action: gather_and_summarize

@@ -81,6 +81,7 @@ The benchmark CLI design lives in [docs/agentmf_benchmark_cli_spec.md](docs/agen
 The harness benchmark suite design lives in [docs/agentmf_harness_benchmark_suite_spec.md](docs/agentmf_harness_benchmark_suite_spec.md).
 The plugin-first adapter design lives in [docs/agentmf_plugin_adapter_spec.md](docs/agentmf_plugin_adapter_spec.md).
 Example host adapter flows live in [docs/agentmf_plugin_adapter_examples.md](docs/agentmf_plugin_adapter_examples.md).
+The advisory model-routing design lives in [docs/agentmf_model_routing_spec.md](docs/agentmf_model_routing_spec.md), with a runnable [demos/model-routing](demos/model-routing/) module.
 The current runtime walkthrough lives in [docs/agentmf_step_by_step_demo.md](docs/agentmf_step_by_step_demo.md).
 The staged implementation backlog lives in [docs/spec_breakdown.md](docs/spec_breakdown.md).
 This repository is self-hosted by the root [AgentMakefile](AgentMakefile), which compiles project development guidance into `AGENTS.md`, `CLAUDE.md`, and Cursor rules.

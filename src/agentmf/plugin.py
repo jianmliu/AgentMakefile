@@ -117,6 +117,7 @@ def create_plugin_payload(
         "mode": "prompt_payload",
         "request": request,
         "selected_targets": list(run_result.plan["link_plan"]["selected_targets"]),
+        "recommended_model": run_result.plan["link_plan"].get("recommended_model"),
         "selected_skills": selected_skills,
         "selected_pipeline": selected_pipeline,
         "skill_artifacts": _skill_artifacts(selected_skills),

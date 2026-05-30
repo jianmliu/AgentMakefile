@@ -13675,3 +13675,32 @@ def test_recommend_model_standalone_is_independent_of_target_routing(tmp_path: P
     result3 = recommend_model(plain, request="x")
     assert result3.ok
     assert result3.recommendation is None
+
+
+def test_plugin_payload_includes_recommended_model(tmp_path: Path) -> None:
+    from agentmf.plugin import create_plugin_payload
+
+    path = write_agentmakefile(tmp_path, MODEL_ROUTING_MODULE)
+
+    result = create_plugin_payload(path, host="codex", request="debug a hard problem")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["selected_targets"] == ["debug.task"]
+    rec = result.payload["recommended_model"]
+    assert rec["model"] == "opus-deep"
+    assert rec["reason"] == "matched"
+    assert rec["cost"] == "high"
+
+
+def test_plugin_payload_recommended_model_none_without_models(tmp_path: Path) -> None:
+    from agentmf.plugin import create_plugin_payload
+
+    path = write_agentmakefile(
+        tmp_path,
+        "version: \"0.1\"\ntargets:\n  code.task:\n    match: {user_intent: [implement feature]}\n    steps: [{action: write_code}]\n",
+    )
+
+    result = create_plugin_payload(path, host="codex", request="implement feature")
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["recommended_model"] is None
