@@ -116,6 +116,7 @@ def _normalize_targets(
                 name=name,
                 phony=target.phony,
                 priority=target.priority,
+                cost=target.cost,
                 compile_to=target.compile_to,
                 description=target.description,
                 inputs=target.inputs,

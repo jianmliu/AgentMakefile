@@ -42,6 +42,10 @@
       "review.task"
     ],
     "recommended_model": null,
+    "budget": {
+      "limit": null,
+      "dropped_over_budget": []
+    },
     "alternatives": [],
     "target_closure": [
       "base.task",

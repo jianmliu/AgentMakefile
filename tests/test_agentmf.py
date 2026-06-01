@@ -13704,3 +13704,48 @@ def test_plugin_payload_recommended_model_none_without_models(tmp_path: Path) ->
 
     assert result.ok, result.diagnostics.format()
     assert result.payload["recommended_model"] is None
+
+
+BUDGET_MODULE = """\
+version: "0.1"
+targets:
+  cheap.task:
+    priority: 50
+    cost: 0.2
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - action: cheap_work
+  expensive.task:
+    priority: 90
+    cost: 5.0
+    match:
+      user_intent:
+        - implement feature
+    steps:
+      - action: heavy_solver
+"""
+
+
+def test_link_plan_without_budget_picks_highest_ranked(tmp_path: Path) -> None:
+    path = write_agentmakefile(tmp_path, BUDGET_MODULE)
+    result = create_link_plan(path, request="implement feature")
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["expensive.task"]
+
+
+def test_link_plan_budget_aware_drops_over_budget_target(tmp_path: Path) -> None:
+    path = write_agentmakefile(tmp_path, BUDGET_MODULE)
+    result = create_link_plan(path, request="implement feature", budget=1.0)
+    assert result.ok, result.diagnostics.format()
+    # expensive.task (cost 5.0 > 1.0) filtered -> cheap.task selected despite lower priority
+    assert result.plan["selected_targets"] == ["cheap.task"]
+    assert result.plan["budget"]["limit"] == 1.0
+    assert "expensive.task" in result.plan["budget"]["dropped_over_budget"]
+
+
+def test_link_plan_budget_below_all_yields_no_match(tmp_path: Path) -> None:
+    path = write_agentmakefile(tmp_path, BUDGET_MODULE)
+    result = create_link_plan(path, request="implement feature", budget=0.1)
+    assert not result.ok  # both targets exceed budget -> AMF118 (budget-limited)

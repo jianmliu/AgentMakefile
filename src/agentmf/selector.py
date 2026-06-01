@@ -52,6 +52,7 @@ def create_link_plan(
     embedder: Optional[Any] = None,
     embedder_cache_path: Optional[Union[Path, str]] = None,
     embedder_top_k: int = DEFAULT_HYBRID_TOP_K,
+    budget: Optional[float] = None,
 ) -> LinkPlanResult:
     diagnostics = Diagnostics()
     if backend not in FRAGMENT_BACKEND_DIRS:
@@ -86,6 +87,15 @@ def create_link_plan(
 
     targets_by_name = {target.name: target for target in ir.targets}
     requested_targets = list(target_names or [])
+    # Budget-aware selection: when a budget is given, a target whose estimated
+    # execution cost exceeds it is dropped before matching (so a cheaper relevant
+    # skill, or no skill, is chosen rather than one that can't run in budget).
+    dropped_over_budget = (
+        [t.name for t in ir.targets if t.cost > budget] if budget is not None else []
+    )
+    eligible_targets = (
+        [t for t in ir.targets if t.cost <= budget] if budget is not None else ir.targets
+    )
     selection_trace: Dict[str, Any]
     if requested_targets:
         selected_targets = _explicit_targets(requested_targets, targets_by_name, diagnostics)
@@ -93,10 +103,10 @@ def create_link_plan(
         selection_trace = _explicit_selection_trace(selected_targets, requested_targets)
     elif request:
         if matcher == "keyword":
-            selected_targets, selection_trace = _targets_for_request(request, ir.targets, diagnostics)
+            selected_targets, selection_trace = _targets_for_request(request, eligible_targets, diagnostics)
         elif matcher == "embedding":
             selected_targets, selection_trace = _targets_for_request_embedding(
-                request, source, ir.targets,
+                request, source, eligible_targets,
                 embedder=embedder,
                 cache_path=Path(embedder_cache_path) if embedder_cache_path else None,
                 top_k=embedder_top_k,
@@ -104,7 +114,7 @@ def create_link_plan(
             )
         else:  # hybrid
             selected_targets, selection_trace = _targets_for_request_hybrid(
-                request, source, ir.targets,
+                request, source, eligible_targets,
                 embedder=embedder,
                 cache_path=Path(embedder_cache_path) if embedder_cache_path else None,
                 top_k=embedder_top_k,
@@ -141,6 +151,7 @@ def create_link_plan(
         "selection_trace": selection_trace,
         "selected_targets": [target.name for target in selected_targets],
         "recommended_model": recommended_model,
+        "budget": {"limit": budget, "dropped_over_budget": dropped_over_budget},
         "alternatives": alternatives,
         "target_closure": [target.name for target in closure],
         "target_pipelines": target_pipelines,

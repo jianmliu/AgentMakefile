@@ -88,6 +88,7 @@ class ModelSpec(StrictModel):
 class TargetSpec(StrictModel):
     phony: bool = True
     priority: StrictInt = Field(default=50, ge=0, le=100)
+    cost: float = Field(default=0.0, ge=0)
     description: Optional[str] = None
     inputs: InputSpec = Field(default_factory=InputSpec)
     match: Dict[str, Any] = Field(default_factory=dict)
@@ -170,6 +171,7 @@ class IRTarget(StrictModel):
     name: str
     phony: bool
     priority: int
+    cost: float = 0.0
     compile_to: Optional[str] = None
     description: Optional[str] = None
     inputs: InputSpec = Field(default_factory=InputSpec)

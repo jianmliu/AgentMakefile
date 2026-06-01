@@ -207,6 +207,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     select_cmd.add_argument("--target", action="append", dest="targets")
     select_cmd.add_argument("--backend", choices=["agents-fragments", "claude-fragments"], default="agents-fragments")
     select_cmd.add_argument("--format", choices=["text", "json"], default="json")
+    select_cmd.add_argument("--budget", type=float, default=None,
+                            help="cost-aware selection: drop targets whose `cost` exceeds this budget")
     _add_matcher_args(select_cmd)
 
     run_cmd = subparsers.add_parser("run", help="dry-run an AgentMakefile runtime plan")
@@ -924,6 +926,7 @@ def _select(args: argparse.Namespace) -> int:
         request=args.request,
         target_names=args.targets,
         backend=args.backend,
+        budget=args.budget,
         **_matcher_kwargs(args),
     )
     if args.format == "json":
