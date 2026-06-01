@@ -35,6 +35,7 @@ def create_ask_payload(
     max_output_tokens: Optional[int] = None,
     token_budget: Optional[int] = None,
     max_output_per_call: Optional[int] = None,
+    pricing_table: Optional[Union[Path, str]] = None,
 ) -> AskPayloadResult:
     diagnostics = Diagnostics()
     prompt_result = create_prompt_payload(
@@ -47,6 +48,7 @@ def create_ask_payload(
         include_git_status=include_git_status,
         include_git_diff=include_git_diff,
         budget=float(token_budget) if token_budget is not None else None,
+        pricing_table=pricing_table,
     )
     diagnostics.extend(prompt_result.diagnostics.items)
     if diagnostics.has_errors:

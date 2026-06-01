@@ -37,6 +37,7 @@ def create_prompt_payload(
     embedder_cache_path: Optional[Union[Path, str]] = None,
     embedder_top_k: int = 10,
     budget: Optional[float] = None,
+    pricing_table: Optional[Union[Path, str]] = None,
 ) -> PromptPayloadResult:
     diagnostics = Diagnostics()
     agentmakefile_path = Path(path)
@@ -66,6 +67,7 @@ def create_prompt_payload(
         embedder_cache_path=embedder_cache_path,
         embedder_top_k=embedder_top_k,
         budget=budget,
+        pricing_table=pricing_table,
     )
     diagnostics.extend(run_result.diagnostics.items)
     if diagnostics.has_errors:

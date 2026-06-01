@@ -13982,3 +13982,85 @@ def test_plugin_payload_estimates_usd_when_recommended_model_has_pricing(tmp_pat
     assert tb["pricing"] == {"input_per_mtok": 15.0, "output_per_mtok": 75.0}  # opus pricing applied
     assert tb["estimated_usd_per_call_ceiling"] > 0
     assert tb["estimated_usd_remaining_cap"] is not None
+
+
+PRICING_TABLE_YAML = """\
+version: 1
+source: "anthropic public list, 2026-Q2"
+note: "advisory; +20-30% buffer; cache tiers not modeled"
+models:
+  haiku-fast:
+    input_per_mtok: 1.0
+    output_per_mtok: 5.0
+  opus-deep:
+    input_per_mtok: 15.0
+    output_per_mtok: 75.0
+"""
+
+
+def test_pricing_table_loads_and_resolves_by_model_name(tmp_path: Path) -> None:
+    from agentmf.pricing import load_pricing_table, resolve_pricing
+
+    pt_path = tmp_path / "pricing.yaml"
+    pt_path.write_text(PRICING_TABLE_YAML)
+    table = load_pricing_table(pt_path)
+    assert resolve_pricing(table, "haiku-fast") == {"input_per_mtok": 1.0, "output_per_mtok": 5.0}
+    assert resolve_pricing(table, "opus-deep") == {"input_per_mtok": 15.0, "output_per_mtok": 75.0}
+    assert resolve_pricing(table, "unknown-model") is None
+
+
+def test_link_plan_uses_pricing_table_when_model_has_no_inline_pricing(tmp_path: Path) -> None:
+    # External pricing table fills in pricing for a model that didn't declare it.
+    pt_path = tmp_path / "pricing.yaml"
+    pt_path.write_text(PRICING_TABLE_YAML)
+    am = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+models:
+  haiku-fast:
+    family: claude
+    default: true
+    priority: 50
+    match: {user_intent: [help]}
+  opus-deep:
+    family: claude
+    priority: 70
+    match: {user_intent: [debug]}
+targets:
+  t:
+    match: {user_intent: [debug]}
+    steps: [{action: a}]
+""",
+    )
+    result = create_link_plan(am, request="debug", pricing_table=pt_path)
+    assert result.ok, result.diagnostics.format()
+    rec = result.plan["recommended_model"]
+    assert rec["model"] == "opus-deep"
+    assert rec["pricing"] == {"input_per_mtok": 15.0, "output_per_mtok": 75.0}
+
+
+def test_inline_pricing_overrides_external_table(tmp_path: Path) -> None:
+    pt_path = tmp_path / "pricing.yaml"
+    pt_path.write_text(PRICING_TABLE_YAML)
+    am = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+models:
+  opus-deep:
+    family: claude
+    default: true
+    priority: 70
+    pricing: {input_per_mtok: 99.0, output_per_mtok: 999.0}
+    match: {user_intent: [debug]}
+targets:
+  t:
+    match: {user_intent: [debug]}
+    steps: [{action: a}]
+""",
+    )
+    result = create_link_plan(am, request="debug", pricing_table=pt_path)
+    assert result.ok, result.diagnostics.format()
+    # inline wins
+    assert result.plan["recommended_model"]["pricing"] == {"input_per_mtok": 99.0, "output_per_mtok": 999.0}

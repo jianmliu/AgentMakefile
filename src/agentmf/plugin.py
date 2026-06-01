@@ -80,6 +80,7 @@ def create_plugin_payload(
     include_git_diff: bool = False,
     token_budget: Optional[int] = None,
     max_output_per_call: int = 1024,
+    pricing_table: Optional[Union[Path, str]] = None,
 ) -> PluginPayloadResult:
     diagnostics = Diagnostics()
     if host not in HOSTS:
@@ -106,6 +107,7 @@ def create_plugin_payload(
         backend=backend,
         dry_run=True,
         budget=float(token_budget) if token_budget is not None else None,
+        pricing_table=pricing_table,
     )
     diagnostics.extend(run_result.diagnostics.items)
     if diagnostics.has_errors:

@@ -9,6 +9,7 @@ from agentmf.ir import normalize
 from agentmf.loader import load_source_with_diagnostics
 from agentmf.matcher import RequestProfile, build_request_profile, match_term
 from agentmf.models import IRModel, IRTarget
+from agentmf.pricing import load_pricing_table, resolve_pricing
 from agentmf.token_budget import estimate_tokens
 
 FRAGMENT_BACKEND_DIRS = {
@@ -54,6 +55,7 @@ def create_link_plan(
     embedder_cache_path: Optional[Union[Path, str]] = None,
     embedder_top_k: int = DEFAULT_HYBRID_TOP_K,
     budget: Optional[float] = None,
+    pricing_table: Optional[Union[Path, str]] = None,
 ) -> LinkPlanResult:
     diagnostics = Diagnostics()
     if backend not in FRAGMENT_BACKEND_DIRS:
@@ -83,7 +85,16 @@ def create_link_plan(
         return LinkPlanResult(diagnostics)
 
     # Model routing is an orthogonal axis: compute it from request + models
-    # independently of target selection, so it survives a target no-match.
+    # independently of target selection, so it survives a target no-match. If a
+    # pricing table was given, fill in pricing for models that didn't declare it
+    # inline (inline wins; table only fills gaps).
+    if pricing_table is not None:
+        table = load_pricing_table(pricing_table)
+        for m in ir.models:
+            if not m.pricing:
+                fallback = resolve_pricing(table, m.name)
+                if fallback:
+                    m.pricing = fallback
     recommended_model = _recommend_model(ir.models, request)
 
     targets_by_name = {target.name: target for target in ir.targets}

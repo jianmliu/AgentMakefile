@@ -73,6 +73,7 @@ def create_exec_payload(
     provider: str = "host",
     token_budget: Optional[int] = None,
     max_output_per_call: int = 1024,
+    pricing_table: Optional[Union[Path, str]] = None,
 ) -> ExecPayloadResult:
     diagnostics = Diagnostics()
     normalized_tool_calls = _normalize_tool_calls(tool_calls or [])
@@ -95,6 +96,7 @@ def create_exec_payload(
         backend=backend,
         dry_run=True,
         proposed_tool_calls=normalized_tool_calls,
+        pricing_table=pricing_table,
     )
     diagnostics.extend(run_result.diagnostics.items)
     if diagnostics.has_errors:

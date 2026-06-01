@@ -1,0 +1,17 @@
+# AgentMakefile example token pricing table.
+# Pricing is advisory; apply +20-30% buffer for hard caps (cache tiers /
+# retries / thinking tokens not modeled). Override via inline
+# `models.<name>.pricing` per AgentMakefile when you need to.
+version: 1
+source: "vendor public price lists, 2026-Q2 (illustrative)"
+note: "advisory; cache tiers / batch API discounts not modeled"
+models:
+  haiku:           {input_per_mtok: 1.0,  output_per_mtok: 5.0}
+  haiku-fast:      {input_per_mtok: 1.0,  output_per_mtok: 5.0}
+  sonnet:          {input_per_mtok: 3.0,  output_per_mtok: 15.0}
+  sonnet-balanced: {input_per_mtok: 3.0,  output_per_mtok: 15.0}
+  opus:            {input_per_mtok: 15.0, output_per_mtok: 75.0}
+  opus-deep:       {input_per_mtok: 15.0, output_per_mtok: 75.0}
+  gpt-4o-mini:     {input_per_mtok: 0.15, output_per_mtok: 0.60}
+  gpt-4o:          {input_per_mtok: 2.50, output_per_mtok: 10.0}
+  gemini-vision:   {input_per_mtok: 0.35, output_per_mtok: 1.05}

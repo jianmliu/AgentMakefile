@@ -117,6 +117,16 @@ output. Raise the budget, shrink the prefix, or abstain.
   (the non-token cost dimension). Complementary to the token meter; together
   they bound both dimensions.
 
+
+## External pricing table
+
+Pricing changes; rates should live outside an AgentMakefile module.
+Pass `--pricing-table FILE` (or `pricing_table=` to `create_link_plan` /
+`create_plugin_payload` / `create_ask_payload` / `create_exec_payload`)
+to fill in missing `models[*].pricing` from a small YAML/JSON file.
+Resolution: inline > external table > none. See
+`config/pricing.example.yaml` for the format.
+
 ## Limitations & roadmap
 
 - Token-only. Wall-clock / tool-call / external-spend caps are future work and

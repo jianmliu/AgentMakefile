@@ -60,6 +60,7 @@ def create_run_plan(
     embedder_cache_path: Optional[Union[Path, str]] = None,
     embedder_top_k: int = 10,
     budget: Optional[float] = None,
+    pricing_table: Optional[Union[Path, str]] = None,
 ) -> RunPlanResult:
     diagnostics = Diagnostics()
     if not dry_run:
@@ -76,6 +77,7 @@ def create_run_plan(
         matcher=matcher, embedder=embedder,
         embedder_cache_path=embedder_cache_path, embedder_top_k=embedder_top_k,
         budget=budget,
+        pricing_table=pricing_table,
     )
     diagnostics.extend(link_result.diagnostics.items)
     if diagnostics.has_errors:

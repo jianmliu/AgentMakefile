@@ -209,6 +209,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     select_cmd.add_argument("--format", choices=["text", "json"], default="json")
     select_cmd.add_argument("--budget", type=float, default=None,
                             help="cost-aware selection: drop targets whose `cost` exceeds this budget")
+    select_cmd.add_argument("--pricing-table", default=None,
+                            help="external YAML/JSON pricing table to fill missing models.<name>.pricing")
     _add_matcher_args(select_cmd)
 
     run_cmd = subparsers.add_parser("run", help="dry-run an AgentMakefile runtime plan")
@@ -252,6 +254,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                           help="total token budget for the task (loading + multi-turn)")
     ask_cmd.add_argument("--max-output-per-call", type=int, default=None,
                           help="output cap per model call (used in per-call ceiling)")
+    ask_cmd.add_argument("--pricing-table", default=None,
+                          help="external YAML/JSON pricing table to fill missing models.<name>.pricing")
     ask_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
     exec_cmd = subparsers.add_parser("exec", help="run a gated tool-loop prototype")
@@ -269,6 +273,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="total token budget for the exec loop; tool calls past the cap are halted (default: unbounded)")
     exec_cmd.add_argument("--max-output-per-call", type=int, default=1024,
         help="per-call output cap used in the worst-case ceiling")
+    exec_cmd.add_argument("--pricing-table", default=None,
+        help="external YAML/JSON pricing table to fill missing models.<name>.pricing")
     exec_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
     plugin_cmd = subparsers.add_parser("plugin", help="plugin adapter commands")
@@ -288,6 +294,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="total token budget; drops targets whose loading cost exceeds it and emits token_budget meter view")
     plugin_payload_cmd.add_argument("--max-output-per-call", type=int, default=1024,
         help="output cap per model call (for the per-call worst-case ceiling)")
+    plugin_payload_cmd.add_argument("--pricing-table", default=None,
+        help="external YAML/JSON pricing table to fill missing models.<name>.pricing")
     plugin_payload_cmd.add_argument("--format", choices=["text", "json"], default="json")
     plugin_install_cmd = plugin_subcommands.add_parser(
         "install",
@@ -939,6 +947,7 @@ def _select(args: argparse.Namespace) -> int:
         target_names=args.targets,
         backend=args.backend,
         budget=args.budget,
+        pricing_table=Path(args.pricing_table) if args.pricing_table else None,
         **_matcher_kwargs(args),
     )
     if args.format == "json":
@@ -1134,6 +1143,7 @@ def _ask(args: argparse.Namespace) -> int:
         max_output_tokens=args.max_output_tokens,
         token_budget=args.token_budget,
         max_output_per_call=args.max_output_per_call,
+        pricing_table=Path(args.pricing_table) if args.pricing_table else None,
     )
     if args.format == "json":
         print(
@@ -1172,6 +1182,7 @@ def _exec(args: argparse.Namespace) -> int:
         execute_fallbacks=args.execute_fallbacks,
         token_budget=args.token_budget,
         max_output_per_call=args.max_output_per_call,
+        pricing_table=Path(args.pricing_table) if args.pricing_table else None,
     )
     if args.format == "json":
         print(
@@ -2191,6 +2202,7 @@ def _plugin_payload(args: argparse.Namespace) -> int:
         include_git_diff=args.include_git_diff,
         token_budget=args.token_budget,
         max_output_per_call=args.max_output_per_call,
+        pricing_table=Path(args.pricing_table) if args.pricing_table else None,
     )
     if args.format == "json":
         print(

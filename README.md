@@ -191,6 +191,74 @@ agentmf swebench import-official-report --report-file agentmf-gpt-5.4.agentmf-li
 agentmf compile --file AgentMakefile --write
 ```
 
+## Cost-aware execution
+
+AgentMakefile carries a small, layered cost-treatment stack so a host can route,
+load, and run skills under bounded spend — without surprise bills in the token
+dimension. All of it is opt-in (no fields → unchanged behavior).
+
+### Layers and where they bite
+
+| Concern | Surface | Mechanism |
+| --- | --- | --- |
+| Which model? | `recommended_model` on link plan / plugin / ask | model routing — `models[*].match` + `cost` tier + (optional) `pricing` |
+| Which skill, given a budget? | `agentmf select --budget N` (and `--token-budget N` on plugin/ask/exec) | skills whose loading cost > budget are **dropped before matching**; abstain (AMF118) if all exceed |
+| What is one call's worst case? | `token_budget.per_call_ceiling` on plugin/ask | `input_tokens + max_output_per_call` — EVM-`gasLimit` analog |
+| How much in dollars? | `token_budget.estimated_usd_*` (when pricing known) | `tokens × $/M-token` per direction, from inline `models[*].pricing` or an external table |
+| Multi-turn cap? | `from agentmf.token_budget import TokenBudget` | meter accumulates `spent_input`/`spent_output`; **refuses next call if ceiling > remaining**; halts when total spent |
+| **Hard-stop when `agentmf exec`-driven** | `agentmf exec --token-budget N` | tool calls past the cap return `status: halted_over_budget` with **no spend** |
+
+Together: selection only loads what fits, the per-call worst case is computable
+before any call, multi-turn accumulation is bounded, and the runtime AgentMakefile
+owns (`exec`) enforces the cap. For host-driven calls (`ask` / `plugin payload`)
+the same numbers are emitted as a contract under `halt_policy` for the host to
+enforce.
+
+### Pricing table (external, externally maintainable)
+
+Pricing changes; do not hard-code rates. Use `config/pricing.example.yaml` as a
+template:
+
+```yaml
+version: 1
+source: "vendor public price lists, 2026-Q2 (illustrative)"
+models:
+  haiku:  {input_per_mtok: 1.0,  output_per_mtok: 5.0}
+  sonnet: {input_per_mtok: 3.0,  output_per_mtok: 15.0}
+  opus:   {input_per_mtok: 15.0, output_per_mtok: 75.0}
+```
+
+Resolution order: inline `models.<name>.pricing` > `--pricing-table FILE` > none.
+
+### Try it
+
+```bash
+# Selection drops over-budget skills; USD shown when pricing is known.
+agentmf select --file demos/budget-aware/AgentMakefile \
+  --request "answer a question" --budget 200 \
+  --pricing-table config/pricing.example.yaml --format json
+
+# Plugin payload exposes the meter view + USD estimate to the host.
+agentmf plugin payload --host codex --file demos/budget-aware/AgentMakefile \
+  --request "answer a question" --token-budget 10000 --max-output-per-call 200 \
+  --pricing-table config/pricing.example.yaml --format json
+
+# Same flag on exec: when set, the tool loop HARD-STOPS past the cap.
+agentmf exec --file /path/to/AgentMakefile --request "..." --apply \
+  --token-budget 10000 --max-output-per-call 200 \
+  --pricing-table config/pricing.example.yaml
+```
+
+### Honest scope
+
+**Token-only.** Tool calls / local compute / external paid APIs spend in
+dimensions the token meter cannot see (a SCIP solver burns wall-clock not tokens;
+a paid API spends real dollars). Treat those as a separate, deferred dimension.
+Pricing-table USD is **advisory** (cache tiers, retries, thinking tokens not
+modeled) — apply a +20–30% buffer for hard caps. The complete design and how
+this was empirically tested live in [docs/agentmf_budget_aware_spec.md](docs/agentmf_budget_aware_spec.md)
+and the `skill-retrieval-bench` study (separate repo).
+
 ## Quickstart
 
 From a fresh checkout:
