@@ -73,6 +73,8 @@ def create_exec_payload(
     provider: str = "host",
     token_budget: Optional[int] = None,
     max_output_per_call: int = 1024,
+    max_per_call_tokens: Optional[int] = None,
+    max_per_call_usd: Optional[float] = None,
     pricing_table: Optional[Union[Path, str]] = None,
 ) -> ExecPayloadResult:
     diagnostics = Diagnostics()
@@ -109,22 +111,40 @@ def create_exec_payload(
     # call whose worst case wouldn't fit the remaining budget. This makes
     # "surprise bills in the token dimension" impossible for calls running
     # THROUGH agentmf exec — host-driven calls still rely on the contract.
-    meter: Optional[TokenBudget] = (
-        TokenBudget(total=token_budget, max_output_per_call=max_output_per_call)
-        if token_budget is not None else None
-    )
+    # Enable the meter if EITHER a total budget OR per-call caps are configured.
+    # Per-call caps (C-dimension) are useful even without a total cap: they
+    # defend against an accidentally oversized prompt regardless of total spend.
+    meter: Optional[TokenBudget] = None
+    if token_budget is not None or max_per_call_tokens is not None or max_per_call_usd is not None:
+        meter = TokenBudget(
+            total=token_budget if token_budget is not None else 10**12,  # effectively unbounded
+            max_output_per_call=max_output_per_call,
+            max_per_call_tokens=max_per_call_tokens,
+            max_per_call_usd=max_per_call_usd,
+        )
     tool_results: List[Dict[str, Any]] = []
     for permission_decision in permission_decisions:
         if meter is not None:
             input_text = permission_decision.get("input", "") or ""
             if not meter.check_or_halt(input_text):
-                tool_results.append({
-                    **_tool_result_base(permission_decision),
-                    "status": "halted_over_budget",
-                    "reason": (
+                # Distinguish C (per-call cap → this call only) from B (total
+                # cap exhausted → session halted). meter.halted is the signal.
+                if meter.halted:
+                    status, why = "halted_over_budget", (
                         f"token budget exhausted or next call's worst-case ceiling "
                         f"({meter.per_call_ceiling(input_text)}) > remaining ({meter.remaining()})"
-                    ),
+                    )
+                else:
+                    status, why = "oversized_call", (
+                        f"single-call worst case "
+                        f"({meter.per_call_ceiling(input_text)} tokens) exceeds "
+                        f"per-call cap (max_per_call_tokens={max_per_call_tokens}, "
+                        f"max_per_call_usd={max_per_call_usd}); session continues"
+                    )
+                tool_results.append({
+                    **_tool_result_base(permission_decision),
+                    "status": status,
+                    "reason": why,
                 })
                 continue
         result = _run_tool_call(permission_decision, cwd=execution_cwd, sandbox=sandbox)

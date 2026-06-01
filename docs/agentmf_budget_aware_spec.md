@@ -186,6 +186,27 @@ There is no current inbound contract for budget metadata in any agent
 host; the right inbound channels are SKILL.md frontmatter (this) and a
 future MCP metadata extension (tracked, see project memory).
 
+
+## Three independent cost-control dimensions (A/B/C)
+
+Cost control has THREE orthogonal axes that are commonly conflated:
+
+| | What it bounds | TokenBudget field | Refusal effect |
+| --- | --- | --- | --- |
+| A | Long-term cumulative quota (per key / month / team) | *external* (gateway-layer; LiteLLM/sub2api/new-api) | depends |
+| B | Total-budget worst-case check (cumulative + this call's ceiling) | `total` + per-call ceiling vs `remaining` | **session halts** (`halted=True`) |
+| **C** | Per-call ABSOLUTE cap (independent of total) | `max_per_call_tokens`, `max_per_call_usd` | **refuse THIS call only; session continues** |
+
+**Why C is its own dimension**: A and B both protect against *running out*
+of budget. C protects against an *individual* call being unreasonably
+expensive even when the budget is fine — defense against accidental
+oversized prompts (1 MB file pasted in), mis-set `max_tokens=999_999`,
+or sanity-bounded session policies ("no single call may cost >$0.50").
+LiteLLM does not provide a built-in C cap; they expose `async_pre_call_hook`
+as a generic extension point. We make it a first-class field.
+
+**exec status codes**: `executed` (ran), `halted_over_budget` (B fired, session halted, all subsequent calls also refused), `oversized_call` (C fired, only this call refused, session continues).
+
 ## Limitations & roadmap
 
 - Token-only. Wall-clock / tool-call / external-spend caps are future work and

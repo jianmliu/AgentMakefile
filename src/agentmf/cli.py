@@ -273,6 +273,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="total token budget for the exec loop; tool calls past the cap are halted (default: unbounded)")
     exec_cmd.add_argument("--max-output-per-call", type=int, default=1024,
         help="per-call output cap used in the worst-case ceiling")
+    exec_cmd.add_argument("--max-per-call-tokens", type=int, default=None,
+        help="C-dimension absolute per-call cap (tokens). Refuses a single call "
+             "whose worst case exceeds this — session continues, only THIS "
+             "call is rejected with status=oversized_call. Independent of total budget.")
+    exec_cmd.add_argument("--max-per-call-usd", type=float, default=None,
+        help="C-dimension per-call cap (USD); requires pricing")
     exec_cmd.add_argument("--pricing-table", default=None,
         help="external YAML/JSON pricing table to fill missing models.<name>.pricing")
     exec_cmd.add_argument("--format", choices=["text", "json"], default="text")
@@ -1182,6 +1188,8 @@ def _exec(args: argparse.Namespace) -> int:
         execute_fallbacks=args.execute_fallbacks,
         token_budget=args.token_budget,
         max_output_per_call=args.max_output_per_call,
+        max_per_call_tokens=args.max_per_call_tokens,
+        max_per_call_usd=args.max_per_call_usd,
         pricing_table=Path(args.pricing_table) if args.pricing_table else None,
     )
     if args.format == "json":

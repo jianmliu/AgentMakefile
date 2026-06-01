@@ -67,6 +67,15 @@ class TokenBudget:
     # would pin the budget at remaining headroom. Cap the effective output at
     # min(caller_requested, model_max_output_tokens). None = no model ceiling.
     model_max_output_tokens: Optional[int] = None
+    # Per-call ABSOLUTE caps (the "C" dimension). Independent of total budget:
+    # rejects a single call whose worst case exceeds these, even when the total
+    # budget would still fit it. Defends against accidental oversized prompts
+    # (e.g. 1MB file pasted in) and reverse-DoS where any one call is too
+    # expensive to be sane. Distinct from total-budget refuse: rejecting on
+    # per-call cap does NOT halt the session — only THIS call is refused, the
+    # next normal-sized call still goes through.
+    max_per_call_tokens: Optional[int] = None
+    max_per_call_usd: Optional[float] = None
     spent: int = 0
     spent_input: int = 0
     spent_output: int = 0
@@ -119,14 +128,31 @@ class TokenBudget:
         return not self.halted and self.per_call_ceiling(input_text) <= self.remaining()
 
     def check_or_halt(self, input_text: str) -> bool:
-        """Pre-call gate: if the next call's worst case won't fit, halt and refuse.
+        """Pre-call gate. Three independent reasons to refuse the next call:
 
-        Returns True if the caller may make the call, False if it must stop.
-        Refusing *before* an unaffordable call is what bounds the bill.
+          (1) Session halted from a previous refusal/exhaustion.
+          (2) Total-budget refusal — worst case > remaining → halt the session.
+          (3) Per-call absolute cap — worst case > max_per_call_{tokens,usd} →
+              refuse THIS call only; session continues (next normal-sized call
+              still allowed).
+
+        Returns True iff the caller may make the call. Refusing before an
+        unaffordable call is what bounds the bill.
         """
-        if not self.can_afford(input_text):
+        if self.halted:
+            return False
+        ceiling = self.per_call_ceiling(input_text)
+        # (2) total-budget refusal — halts the session
+        if ceiling > self.remaining():
             self.halted = True
             return False
+        # (3) per-call absolute caps — refuse this call, do NOT halt the session
+        if self.max_per_call_tokens is not None and ceiling > self.max_per_call_tokens:
+            return False
+        if self.max_per_call_usd is not None:
+            usd = self.estimated_usd_ceiling(input_text)
+            if usd is not None and usd > self.max_per_call_usd:
+                return False
         return True
 
     def charge(self, input_text: str, output_text: str) -> int:
@@ -172,6 +198,8 @@ class TokenBudget:
             "remaining": self.remaining(),
             "turns": self.turns,
             "max_output_per_call": self.max_output_per_call,
+            "max_per_call_tokens": self.max_per_call_tokens,
+            "max_per_call_usd": self.max_per_call_usd,
             "halted": self.halted,
         }
         if self.pricing:

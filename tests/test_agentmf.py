@@ -14190,3 +14190,71 @@ skills:
     output_format: [structured_summary, citations_required, no_speculation]
 """)
     assert big > small, f"big={big} should exceed small={small}"
+
+
+def test_token_budget_max_per_call_tokens_rejects_oversized_without_halting() -> None:
+    """C dimension (per-call absolute cap): when a single call's worst case
+    exceeds `max_per_call_tokens`, refuse THIS call — but do NOT halt the whole
+    session (the next, smaller call should still be allowed). Distinct from B
+    (total-budget overrun), which halts the session."""
+    from agentmf.token_budget import TokenBudget
+    b = TokenBudget(total=100_000, max_output_per_call=200, max_per_call_tokens=500)
+    huge_input = "x" * 4000  # ~1000 input tokens; ceiling = 1000 + 200 = 1200 > 500
+    assert b.check_or_halt(huge_input) is False
+    assert b.halted is False                       # session NOT halted
+    assert b.spent == 0                            # no spend
+    # session continues: a normal-sized call still goes through
+    small_input = "x" * 40                         # ~10 input tokens; ceiling = 210 < 500
+    assert b.check_or_halt(small_input) is True
+    b.charge(small_input, "out")
+    assert b.turns == 1
+    assert b.spent > 0
+
+
+def test_token_budget_max_per_call_usd_rejects_oversized_when_pricing_known() -> None:
+    """USD form of C: when pricing is known, cap on per-call worst-case dollar
+    amount, independent of total budget."""
+    from agentmf.token_budget import TokenBudget
+    pricing = {"input_per_mtok": 15.0, "output_per_mtok": 75.0}  # opus-ish
+    # max_per_call_usd = $0.001 (very tight, refuses any non-trivial call)
+    b = TokenBudget(total=100_000, max_output_per_call=200,
+                    pricing=pricing, max_per_call_usd=0.001)
+    inp = "x" * 400  # 100 input tok -> ceiling USD = (100*15 + 200*75)/1e6 = 0.0165
+    assert b.check_or_halt(inp) is False
+    assert b.halted is False    # session not halted
+    assert b.spent == 0
+
+
+def test_token_budget_max_per_call_disabled_when_unset() -> None:
+    """Backward compatibility: with neither cap set, behavior is unchanged."""
+    from agentmf.token_budget import TokenBudget
+    b = TokenBudget(total=100_000, max_output_per_call=200)
+    big = "x" * 40000
+    assert b.check_or_halt(big) is True   # B passes (budget large), no C cap
+    assert b.halted is False
+
+
+def test_exec_skips_oversized_call_but_continues_session(tmp_path: Path) -> None:
+    """In exec, an oversized tool call (per-call cap exceeded) gets status
+    'oversized_call' and the next normal-sized call still executes. Distinct
+    from 'halted_over_budget' (total cap exhausted, halts the loop)."""
+    from agentmf.tool_loop import create_exec_payload
+    path = write_agentmakefile(tmp_path, EXEC_BUDGET_MODULE)
+    result = create_exec_payload(
+        path, request="run things", apply=True,
+        tool_calls=[
+            {"tool": "bash", "input": "echo huge " + "x" * 4000},  # oversized
+            {"tool": "bash", "input": "echo small"},               # normal
+        ],
+        sandbox_profile="workspace-write", cwd=tmp_path,
+        token_budget=100_000,        # generous total
+        max_output_per_call=200,
+        max_per_call_tokens=500,     # tight per-call cap (C)
+    )
+    assert result.ok
+    statuses = [r["status"] for r in result.payload["tool_results"]]
+    assert "oversized_call" in statuses
+    assert "executed" in statuses                  # next call DID run
+    tb = result.payload["token_budget"]
+    assert tb["halted"] is False                   # session not halted
+    assert tb["max_per_call_tokens"] == 500
