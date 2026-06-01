@@ -13910,3 +13910,75 @@ def test_exec_hard_stops_when_token_budget_exhausted(tmp_path: Path) -> None:
     assert tb["halted"] is True
     # the halted call was NOT charged — refusal is what bounds the bill
     assert tb["spent"] <= tb["total"]
+
+
+def test_token_budget_with_pricing_estimates_usd_cost() -> None:
+    from agentmf.token_budget import TokenBudget
+    pricing = {"input_per_mtok": 3.0, "output_per_mtok": 15.0}  # Sonnet-ish
+    b = TokenBudget(total=10000, max_output_per_call=200, pricing=pricing)
+    # 100 input tokens -> 100*3 + 200*15 = 300 + 3000 = 3300 micro-$  -> $0.0033
+    inp = "x" * 400
+    ceiling_usd = b.estimated_usd_ceiling(inp)
+    assert abs(ceiling_usd - (100 * 3.0 + 200 * 15.0) / 1_000_000) < 1e-9
+    # initial spent USD = 0
+    assert b.estimated_usd_spent() == 0.0
+    # after charging an actual call: 100 in + 50 out -> (100*3 + 50*15)/1e6
+    b.charge(inp, "y" * 200)
+    expected = (100 * 3.0 + 50 * 15.0) / 1_000_000
+    assert abs(b.estimated_usd_spent() - expected) < 1e-9
+
+
+def test_token_budget_without_pricing_returns_none_for_usd() -> None:
+    from agentmf.token_budget import TokenBudget
+    b = TokenBudget(total=1000, max_output_per_call=100)
+    assert b.estimated_usd_ceiling("hello") is None
+    assert b.estimated_usd_spent() is None
+
+
+MODEL_PRICING_MODULE = """\
+version: "0.1"
+models:
+  haiku-fast:
+    family: claude
+    cost: low
+    pricing: {input_per_mtok: 1.0, output_per_mtok: 5.0}
+    default: true
+    priority: 50
+    match:
+      user_intent: [quick lookup]
+  opus-deep:
+    family: claude
+    cost: high
+    pricing: {input_per_mtok: 15.0, output_per_mtok: 75.0}
+    priority: 70
+    match:
+      user_intent: [debug a hard problem]
+targets:
+  do.task:
+    match: {user_intent: [debug a hard problem]}
+    steps: [{action: a}]
+"""
+
+
+def test_link_plan_recommended_model_carries_pricing(tmp_path: Path) -> None:
+    path = write_agentmakefile(tmp_path, MODEL_PRICING_MODULE)
+    result = create_link_plan(path, request="debug a hard problem")
+    assert result.ok, result.diagnostics.format()
+    rec = result.plan["recommended_model"]
+    assert rec["model"] == "opus-deep"
+    assert rec["pricing"] == {"input_per_mtok": 15.0, "output_per_mtok": 75.0}
+
+
+def test_plugin_payload_estimates_usd_when_recommended_model_has_pricing(tmp_path: Path) -> None:
+    from agentmf.plugin import create_plugin_payload
+
+    path = write_agentmakefile(tmp_path, MODEL_PRICING_MODULE)
+    result = create_plugin_payload(
+        path, host="codex", request="debug a hard problem",
+        token_budget=10000, max_output_per_call=200,
+    )
+    assert result.ok, result.diagnostics.format()
+    tb = result.payload["token_budget"]
+    assert tb["pricing"] == {"input_per_mtok": 15.0, "output_per_mtok": 75.0}  # opus pricing applied
+    assert tb["estimated_usd_per_call_ceiling"] > 0
+    assert tb["estimated_usd_remaining_cap"] is not None

@@ -365,6 +365,7 @@ def _recommend_model(models: List[IRModel], request: Optional[str]) -> Optional[
             "reason": reason,
             "matched_terms": [detail["term"] for detail in details],
             "match_score": _match_score(details),
+            "pricing": dict(model.pricing) if model.pricing else None,
         }
 
     matches = []

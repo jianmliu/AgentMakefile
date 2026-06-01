@@ -13,7 +13,8 @@ worst case is known up front and surprise bills cannot happen.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 
 def estimate_tokens(text: str) -> int:
@@ -28,11 +29,20 @@ def estimate_tokens(text: str) -> int:
 
 @dataclass
 class TokenBudget:
-    """A per-task token budget meter (gasLimit for tokens)."""
+    """A per-task token budget meter (gasLimit for tokens).
+
+    Optional `pricing` ({"input_per_mtok": float, "output_per_mtok": float})
+    enables a derived USD view via `estimated_usd_*`. Pricing is advisory: real
+    bills include caching tiers, retries, thinking tokens — apply a +20-30%
+    buffer when treating these numbers as a hard cost cap.
+    """
 
     total: int                      # total token budget for the task
     max_output_per_call: int        # output cap per model call
+    pricing: Optional[dict] = None  # {input_per_mtok, output_per_mtok}
     spent: int = 0
+    spent_input: int = 0
+    spent_output: int = 0
     turns: int = 0
     halted: bool = False
 
@@ -60,19 +70,49 @@ class TokenBudget:
 
     def charge(self, input_text: str, output_text: str) -> int:
         """Post-call: deduct actual tokens, accumulate across turns, halt if spent."""
-        used = estimate_tokens(input_text) + estimate_tokens(output_text)
+        in_tok = estimate_tokens(input_text)
+        out_tok = estimate_tokens(output_text)
+        used = in_tok + out_tok
         self.spent += used
+        self.spent_input += in_tok
+        self.spent_output += out_tok
         self.turns += 1
         if self.spent >= self.total:
             self.halted = True
         return used
 
+    def estimated_usd_ceiling(self, input_text: str) -> Optional[float]:
+        """USD worst-case for the next call = input × in_rate + output_cap × out_rate.
+
+        Like EVM gasLimit × gasPrice but split per-direction (LLM API charges
+        input and output at different rates). Returns None if pricing not set.
+        """
+        if not self.pricing:
+            return None
+        ip = self.pricing.get("input_per_mtok", 0.0)
+        op = self.pricing.get("output_per_mtok", 0.0)
+        return (estimate_tokens(input_text) * ip + self.max_output_per_call * op) / 1_000_000
+
+    def estimated_usd_spent(self) -> Optional[float]:
+        """USD spent so far, from per-direction token tallies × pricing."""
+        if not self.pricing:
+            return None
+        ip = self.pricing.get("input_per_mtok", 0.0)
+        op = self.pricing.get("output_per_mtok", 0.0)
+        return (self.spent_input * ip + self.spent_output * op) / 1_000_000
+
     def trace(self) -> dict:
-        return {
+        view = {
             "total": self.total,
             "spent": self.spent,
+            "spent_input": self.spent_input,
+            "spent_output": self.spent_output,
             "remaining": self.remaining(),
             "turns": self.turns,
             "max_output_per_call": self.max_output_per_call,
             "halted": self.halted,
         }
+        if self.pricing:
+            view["pricing"] = dict(self.pricing)
+            view["estimated_usd_spent"] = self.estimated_usd_spent()
+        return view

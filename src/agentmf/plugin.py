@@ -115,8 +115,9 @@ def create_plugin_payload(
     content = prefix["content"]
     selected_skills = _selected_skills(run_result.plan)
     selected_pipeline = _selected_pipeline(run_result.plan)
+    pricing = (run_result.plan["link_plan"].get("recommended_model") or {}).get("pricing")
     token_budget_block = _token_budget_block(
-        run_result.plan["link_plan"], content, token_budget, max_output_per_call
+        run_result.plan["link_plan"], content, token_budget, max_output_per_call, pricing
     )
     payload = {
         "version": 1,
@@ -160,6 +161,7 @@ def _token_budget_block(
     stable_prefix: str,
     token_budget: Optional[int],
     max_output_per_call: int,
+    pricing: Optional[Dict[str, float]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Token-only cost meter view for the host.
 
@@ -185,6 +187,18 @@ def _token_budget_block(
     if token_budget is not None:
         block["fits_first_call"] = per_call_ceiling <= token_budget
         block["headroom_after_first_call"] = max(0, token_budget - per_call_ceiling)
+    if pricing:
+        ip = pricing.get("input_per_mtok", 0.0)
+        op = pricing.get("output_per_mtok", 0.0)
+        block["pricing"] = dict(pricing)
+        block["estimated_usd_per_call_ceiling"] = (stable_tokens * ip + max_output_per_call * op) / 1_000_000
+        # Upper bound: if every remaining token were billed at the more expensive
+        # rate (output). Honest worst case; real spend will be lower.
+        worst_rate = max(ip, op)
+        block["estimated_usd_remaining_cap"] = (
+            token_budget * worst_rate / 1_000_000 if token_budget is not None else None
+        )
+        block["pricing_note"] = "advisory; apply +20-30% buffer (retries/cache tiers/thinking tokens not modeled)"
     return block
 
 

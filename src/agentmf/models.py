@@ -83,6 +83,7 @@ class ModelSpec(StrictModel):
     match: Dict[str, Any] = Field(default_factory=dict)
     priority: StrictInt = Field(default=50, ge=0, le=100)
     default: bool = False
+    pricing: Dict[str, float] = Field(default_factory=dict)
 
 
 class TargetSpec(StrictModel):
@@ -195,6 +196,7 @@ class IRModel(StrictModel):
     match: Dict[str, Any] = Field(default_factory=dict)
     priority: int = 50
     default: bool = False
+    pricing: Dict[str, float] = Field(default_factory=dict)
 
 
 class IRPermission(StrictModel):
