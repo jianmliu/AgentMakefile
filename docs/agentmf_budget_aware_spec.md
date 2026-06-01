@@ -150,6 +150,42 @@ What we deliberately did NOT adopt: the proxy reservation/reconcile model
 AgentMakefile's in-process meter doesn't have concurrent admission and is
 better served by the simpler `check_or_halt → charge` cycle.
 
+
+## Cost metadata in generated SKILL.md (option (b), reachable today)
+
+Compiled `SKILL.md` files now embed the skill's loading cost in YAML
+frontmatter under `metadata.cost.tokens`:
+
+```yaml
+---
+name: karpathy-guidelines
+description: Apply Karpathy-style coding guidelines...
+metadata:
+  cost:
+    tokens: 366
+---
+```
+
+Position chosen to be **non-conflicting**: the
+[agentskills.io spec](https://agentskills.io/specification) treats
+frontmatter `metadata` as an open namespace for arbitrary keys (author,
+version, etc.) — `metadata.cost.tokens` is a clean extension, not a new
+top-level field.
+
+**What this enables today**: any SKILL.md reader (custom agent loop,
+future host that adds budget-awareness) can see the loading cost without
+loading the body. Current production hosts (Claude Code / Codex CLI /
+Cursor) are OTel *emitters*, not *readers* — they will not consume this
+field automatically. The field is a forward-compatible breadcrumb, not a
+live integration.
+
+**Why not `gen_ai.budget.*` (OpenTelemetry namespace)**: OpenTelemetry
+GenAI semantic conventions are post-call telemetry emitted *by* the host
+to a backend, not metadata read *by* the host from an upstream module.
+There is no current inbound contract for budget metadata in any agent
+host; the right inbound channels are SKILL.md frontmatter (this) and a
+future MCP metadata extension (tracked, see project memory).
+
 ## Limitations & roadmap
 
 - Token-only. Wall-clock / tool-call / external-spend caps are future work and

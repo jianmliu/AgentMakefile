@@ -239,13 +239,19 @@ def render_cursor_rule(ir: AgentRuleIR, frontmatter: Dict[str, Any]) -> str:
 
 
 def render_skill_markdown(skill: IRSkill, ir: Optional[AgentRuleIR] = None) -> str:
+    """Render a SKILL.md compatible with the agentskills.io frontmatter spec.
+
+    Frontmatter carries `metadata.cost.tokens` — the skill's loading footprint
+    in tokens — so any host that reads SKILL.md can see the budget cost without
+    parsing the body. Position chosen for compatibility:
+    [agentskills.io](https://agentskills.io/specification) treats `metadata`
+    as an open arbitrary-key namespace, so this is a clean non-conflicting
+    extension rather than a new top-level key. See
+    `docs/agentmf_budget_aware_spec.md` for the full cost-aware story.
+    """
     description = skill.description or f"AgentMakefile skill {skill.qualified_name}."
-    lines = [
-        "---",
-        f"name: {skill.qualified_name}",
-        f"description: {description}",
-        "---",
-        "",
+    # Render the body first so we can score its token cost into the frontmatter.
+    body_lines: List[str] = [
         f"# {skill.qualified_name}",
         "",
         "## Overview",
@@ -253,13 +259,33 @@ def render_skill_markdown(skill: IRSkill, ir: Optional[AgentRuleIR] = None) -> s
         description,
         "",
     ]
-    _append_skill_mapping(lines, "When To Use", skill.match)
-    _append_skill_list(lines, "Guards", skill.guards)
-    _append_skill_list(lines, "Procedure", skill.steps)
-    _append_skill_list(lines, "Output Requirements", skill.output_format)
+    _append_skill_mapping(body_lines, "When To Use", skill.match)
+    _append_skill_list(body_lines, "Guards", skill.guards)
+    _append_skill_list(body_lines, "Procedure", skill.steps)
+    _append_skill_list(body_lines, "Output Requirements", skill.output_format)
     if ir is not None:
-        _append_permission_section(lines, ir)
-    return "\n".join(lines).rstrip() + "\n"
+        _append_permission_section(body_lines, ir)
+    body = "\n".join(body_lines)
+    cost_tokens = _estimate_tokens(body)
+    front = [
+        "---",
+        f"name: {skill.qualified_name}",
+        f"description: {description}",
+        "metadata:",
+        "  cost:",
+        f"    tokens: {cost_tokens}",
+        "---",
+        "",
+    ]
+    return "\n".join(front + body_lines).rstrip() + "\n"
+
+
+def _estimate_tokens(text: str) -> int:
+    """Cheap chars/4 token estimate — same heuristic as agentmf.token_budget.
+    Inlined to avoid a circular import (token_budget can depend on backends?)."""
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
 
 
 def render_skills_index(ir: AgentRuleIR) -> str:

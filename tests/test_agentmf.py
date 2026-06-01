@@ -223,11 +223,19 @@ skills:
 
     content = render_skill_markdown(skill)
 
-    assert content == """\
----
-name: superpowers:systematic-debugging
-description: Debug failures by reproducing them and finding root cause before fixing.
----
+    # Frontmatter carries `metadata.cost.tokens` (loading footprint) per the
+    # agentskills.io open `metadata` namespace. Assert frontmatter shape +
+    # exact body; the cost integer scales with body size and is asserted
+    # separately by test_render_skill_markdown_cost_scales_with_skill_size.
+    import re as _re
+    m = _re.match(
+        r"^---\nname: superpowers:systematic-debugging\n"
+        r"description: Debug failures by reproducing them and finding root cause before fixing\.\n"
+        r"metadata:\n  cost:\n    tokens: \d+\n---\n",
+        content,
+    )
+    assert m is not None, f"frontmatter shape mismatch; got:\n{content[:300]}"
+    assert content[m.end():] == """\
 
 # superpowers:systematic-debugging
 
@@ -14113,3 +14121,72 @@ def test_token_budget_pricing_table_overrides_litellm(monkeypatch) -> None:
                            model="some-fake-model", pricing=explicit)
     inp = "x" * 400
     assert abs(b.estimated_usd_ceiling(inp) - (100*1.0 + 200*5.0)/1_000_000) < 1e-12  # explicit wins
+
+
+def test_render_skill_markdown_includes_cost_tokens_in_metadata(tmp_path: Path) -> None:
+    """Generated SKILL.md frontmatter carries the skill's loading cost in tokens
+    so any reader (Claude Code / Codex skill loaders) can see the budget cost
+    without parsing the body. Position: `metadata.cost.tokens` — agentskills.io
+    spec puts arbitrary keys under `metadata`, so this stays a clean extension.
+    """
+    from agentmf.backends import render_skill_markdown
+    from agentmf.ir import normalize
+    from agentmf.loader import load_source
+
+    path = write_agentmakefile(
+        tmp_path,
+        """\
+version: "0.1"
+skills:
+  short-skill:
+    description: tiny skill body
+    steps: [{action: do_thing}]
+""",
+    )
+    ir = normalize(load_source(path), __import__("agentmf").compile_agentmakefile.__globals__["Diagnostics"]())
+    skill = ir.skills[0]
+    out = render_skill_markdown(skill, ir)
+    head = out.split("---", 2)[1]  # frontmatter block
+    assert "metadata:" in head
+    assert "cost:" in head
+    assert "tokens:" in head
+    # token count must roughly match the rendered body length, not be a constant
+    import re
+    m = re.search(r"tokens:\s*(\d+)", head)
+    assert m is not None
+    n = int(m.group(1))
+    assert n >= 1  # at minimum some loading cost
+
+
+def test_render_skill_markdown_cost_scales_with_skill_size(tmp_path: Path) -> None:
+    """The cost field should reflect the skill's actual rendered size — a larger
+    skill must have a higher cost. Sanity check that we are not hard-coding it."""
+    from agentmf.backends import render_skill_markdown
+    from agentmf.ir import normalize
+    from agentmf.loader import load_source
+    from agentmf.diagnostics import Diagnostics
+    import re
+
+    def cost_for(yaml_src: str) -> int:
+        path = write_agentmakefile(tmp_path, yaml_src, name=f"{abs(hash(yaml_src))}.AgentMakefile")
+        ir = normalize(load_source(path), Diagnostics())
+        out = render_skill_markdown(ir.skills[0], ir)
+        return int(re.search(r"tokens:\s*(\d+)", out).group(1))
+
+    small = cost_for("""\
+version: "0.1"
+skills:
+  s:
+    description: x
+    steps: [{action: a}]
+""")
+    big = cost_for("""\
+version: "0.1"
+skills:
+  s:
+    description: "a much longer description spanning many words and tokens to test that cost reflects actual rendered size and is not a fixed value"
+    steps: [{action: a}, {action: b}, {action: c}]
+    guards: [validate_input, check_output, ensure_consistency]
+    output_format: [structured_summary, citations_required, no_speculation]
+""")
+    assert big > small, f"big={big} should exceed small={small}"

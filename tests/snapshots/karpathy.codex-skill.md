@@ -1,6 +1,9 @@
 ---
 name: karpathy-guidelines
 description: Apply Karpathy-style coding guidelines for writing, reviewing, debugging, refactoring, testing, or discussing code.
+metadata:
+  cost:
+    tokens: 366
 ---
 
 # karpathy-guidelines
