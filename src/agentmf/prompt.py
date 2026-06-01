@@ -36,6 +36,7 @@ def create_prompt_payload(
     embedder: Optional[Any] = None,
     embedder_cache_path: Optional[Union[Path, str]] = None,
     embedder_top_k: int = 10,
+    budget: Optional[float] = None,
 ) -> PromptPayloadResult:
     diagnostics = Diagnostics()
     agentmakefile_path = Path(path)
@@ -64,6 +65,7 @@ def create_prompt_payload(
         embedder=embedder,
         embedder_cache_path=embedder_cache_path,
         embedder_top_k=embedder_top_k,
+        budget=budget,
     )
     diagnostics.extend(run_result.diagnostics.items)
     if diagnostics.has_errors:
@@ -86,6 +88,7 @@ def create_prompt_payload(
         "mode": "prompt",
         "request": request,
         "selected_targets": list(link_plan["selected_targets"]),
+        "budget": link_plan.get("budget"),
         "stable_prefix": {
             "backend": backend,
             "content": stable_content,

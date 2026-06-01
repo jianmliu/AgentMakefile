@@ -248,6 +248,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ask_cmd.add_argument("--model")
     ask_cmd.add_argument("--temperature", type=float)
     ask_cmd.add_argument("--max-output-tokens", type=int)
+    ask_cmd.add_argument("--token-budget", type=int, default=None,
+                          help="total token budget for the task (loading + multi-turn)")
+    ask_cmd.add_argument("--max-output-per-call", type=int, default=None,
+                          help="output cap per model call (used in per-call ceiling)")
     ask_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
     exec_cmd = subparsers.add_parser("exec", help="run a gated tool-loop prototype")
@@ -276,6 +280,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     plugin_payload_cmd.add_argument("--include-git-status", action="store_true")
     plugin_payload_cmd.add_argument("--include-git-diff", action="store_true")
     plugin_payload_cmd.add_argument("--context-file", action="append", dest="context_files")
+    plugin_payload_cmd.add_argument("--token-budget", type=int, default=None,
+        help="total token budget; drops targets whose loading cost exceeds it and emits token_budget meter view")
+    plugin_payload_cmd.add_argument("--max-output-per-call", type=int, default=1024,
+        help="output cap per model call (for the per-call worst-case ceiling)")
     plugin_payload_cmd.add_argument("--format", choices=["text", "json"], default="json")
     plugin_install_cmd = plugin_subcommands.add_parser(
         "install",
@@ -1120,6 +1128,8 @@ def _ask(args: argparse.Namespace) -> int:
         model=args.model,
         temperature=args.temperature,
         max_output_tokens=args.max_output_tokens,
+        token_budget=args.token_budget,
+        max_output_per_call=args.max_output_per_call,
     )
     if args.format == "json":
         print(
@@ -2173,6 +2183,8 @@ def _plugin_payload(args: argparse.Namespace) -> int:
         context_files=[Path(path) for path in args.context_files or []],
         include_git_status=args.include_git_status,
         include_git_diff=args.include_git_diff,
+        token_budget=args.token_budget,
+        max_output_per_call=args.max_output_per_call,
     )
     if args.format == "json":
         print(

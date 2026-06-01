@@ -1,0 +1,37 @@
+version: "0.1"
+
+metadata:
+  name: budget-aware-demo
+  description: |
+    Cost-aware skill selection (token-only): each target carries a `cost` (token
+    units). At selection time, targets whose loading cost exceeds the budget are
+    dropped before matching — a cheaper relevant skill is chosen, or selection
+    abstains. Combined with the runtime TokenBudget meter (input+max output +
+    multi-turn hard-stop), this prevents surprise token bills.
+
+# Two skills covering the same intent at very different loading footprints.
+# When `cost` is omitted, it is auto-derived from the target's token size.
+targets:
+  quick.answer:
+    priority: 50
+    cost: 80          # small skill — loads in ~80 tokens
+    match:
+      user_intent:
+        - answer a question
+        - quick lookup
+        - explain briefly
+    steps:
+      - action: short_answer
+
+  deep.analysis:
+    priority: 90
+    cost: 4000        # large skill — loads ~4k tokens of methodology
+    match:
+      user_intent:
+        - answer a question
+        - deep analysis
+        - exhaustive comparison
+    steps:
+      - action: gather_evidence
+      - action: synthesize
+      - action: cite_sources

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 from agentmf.backends import skill_slug
 from agentmf.diagnostics import Diagnostics
 from agentmf.runtime import create_run_plan
+from agentmf.token_budget import estimate_tokens
 
 
 HOST_PROFILES = {
@@ -77,6 +78,8 @@ def create_plugin_payload(
     context_files: Optional[List[Union[Path, str]]] = None,
     include_git_status: bool = False,
     include_git_diff: bool = False,
+    token_budget: Optional[int] = None,
+    max_output_per_call: int = 1024,
 ) -> PluginPayloadResult:
     diagnostics = Diagnostics()
     if host not in HOSTS:
@@ -102,6 +105,7 @@ def create_plugin_payload(
         target_names=target_names,
         backend=backend,
         dry_run=True,
+        budget=float(token_budget) if token_budget is not None else None,
     )
     diagnostics.extend(run_result.diagnostics.items)
     if diagnostics.has_errors:
@@ -111,6 +115,9 @@ def create_plugin_payload(
     content = prefix["content"]
     selected_skills = _selected_skills(run_result.plan)
     selected_pipeline = _selected_pipeline(run_result.plan)
+    token_budget_block = _token_budget_block(
+        run_result.plan["link_plan"], content, token_budget, max_output_per_call
+    )
     payload = {
         "version": 1,
         "host": host,
@@ -118,6 +125,7 @@ def create_plugin_payload(
         "request": request,
         "selected_targets": list(run_result.plan["link_plan"]["selected_targets"]),
         "recommended_model": run_result.plan["link_plan"].get("recommended_model"),
+        "token_budget": token_budget_block,
         "selected_skills": selected_skills,
         "selected_pipeline": selected_pipeline,
         "skill_artifacts": _skill_artifacts(selected_skills),
@@ -145,6 +153,39 @@ def create_plugin_payload(
         "diagnostics": diagnostics.to_list(),
     }
     return PluginPayloadResult(diagnostics, payload)
+
+
+def _token_budget_block(
+    link_plan: Dict[str, Any],
+    stable_prefix: str,
+    token_budget: Optional[int],
+    max_output_per_call: int,
+) -> Optional[Dict[str, Any]]:
+    """Token-only cost meter view for the host.
+
+    Reports the EVM-gas-style worst-case ceiling for the FIRST call (stable
+    prefix tokens + max output) and the budget headroom. The host enforces it
+    at runtime via TokenBudget.check_or_halt() and TokenBudget.charge() across
+    turns. Also surfaces which targets were dropped because their loading cost
+    exceeded the budget at selection time.
+    """
+    if token_budget is None and max_output_per_call <= 0:
+        return None
+    budget_meta = link_plan.get("budget") or {}
+    stable_tokens = estimate_tokens(stable_prefix)
+    per_call_ceiling = stable_tokens + max_output_per_call
+    block: Dict[str, Any] = {
+        "total": token_budget,
+        "max_output_per_call": max_output_per_call,
+        "stable_prefix_tokens": stable_tokens,
+        "per_call_ceiling": per_call_ceiling,
+        "dropped_over_budget": list(budget_meta.get("dropped_over_budget") or []),
+        "halt_policy": "host should refuse next call if per_call_ceiling > remaining; charge actual usage after each call",
+    }
+    if token_budget is not None:
+        block["fits_first_call"] = per_call_ceiling <= token_budget
+        block["headroom_after_first_call"] = max(0, token_budget - per_call_ceiling)
+    return block
 
 
 def _selected_pipeline(run_plan: Dict[str, Any]) -> Dict[str, Any]:

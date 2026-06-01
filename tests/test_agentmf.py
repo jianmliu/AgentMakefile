@@ -13809,3 +13809,46 @@ targets:
     assert result.ok, result.diagnostics.format()
     assert result.plan["selected_targets"] == ["small.task"]
     assert "big.task" in result.plan["budget"]["dropped_over_budget"]
+
+
+BUDGET_DEMO_MODULE = """\
+version: "0.1"
+targets:
+  tiny.task:
+    match: {user_intent: [help]}
+    description: tiny
+    steps: [{action: a}]
+  huge.task:
+    priority: 90
+    match: {user_intent: [help]}
+    description: "very large skill spelled out at great length with many words and tokens accumulated to make its loading footprint visibly large for the budget filter to react to"
+    steps: [{action: a}, {action: b}, {action: c}]
+"""
+
+
+def test_plugin_payload_emits_token_budget_block_and_respects_budget(tmp_path: Path) -> None:
+    from agentmf.plugin import create_plugin_payload
+
+    path = write_agentmakefile(tmp_path, BUDGET_DEMO_MODULE)
+    # tight budget -> huge.task is dropped, tiny.task selected; payload exposes the meter
+    result = create_plugin_payload(path, host="codex", request="help",
+                                    token_budget=50, max_output_per_call=200)
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["selected_targets"] == ["tiny.task"]
+    tb = result.payload["token_budget"]
+    assert tb["total"] == 50
+    assert tb["max_output_per_call"] == 200
+    assert tb["per_call_ceiling"] > 0
+    assert "huge.task" in tb["dropped_over_budget"]
+
+
+def test_ask_payload_emits_token_budget_block_and_respects_budget(tmp_path: Path) -> None:
+    from agentmf import create_ask_payload
+
+    path = write_agentmakefile(tmp_path, BUDGET_DEMO_MODULE)
+    result = create_ask_payload(path, request="help", provider="echo",
+                                 token_budget=50, max_output_per_call=200)
+    assert result.ok, result.diagnostics.format()
+    tb = result.payload["token_budget"]
+    assert tb["total"] == 50
+    assert "huge.task" in tb["dropped_over_budget"]
