@@ -9,6 +9,7 @@ from agentmf.ir import normalize
 from agentmf.loader import load_source_with_diagnostics
 from agentmf.matcher import RequestProfile, build_request_profile, match_term
 from agentmf.models import IRModel, IRTarget
+from agentmf.token_budget import estimate_tokens
 
 FRAGMENT_BACKEND_DIRS = {
     "agents-fragments": "agents",
@@ -87,14 +88,24 @@ def create_link_plan(
 
     targets_by_name = {target.name: target for target in ir.targets}
     requested_targets = list(target_names or [])
-    # Budget-aware selection: when a budget is given, a target whose estimated
-    # execution cost exceeds it is dropped before matching (so a cheaper relevant
-    # skill, or no skill, is chosen rather than one that can't run in budget).
+    # Budget-aware selection: when a budget is given (token units by default), a
+    # target whose loading cost exceeds it is dropped before matching. When the
+    # target's `cost` isn't authored explicitly, derive it from the target's token
+    # size (description + steps + guards + skills) — the real loading-context cost
+    # the request will pay if this target is selected.
+    def _target_cost(t: IRTarget) -> float:
+        if t.cost > 0:
+            return t.cost
+        body = (t.description or "") + " " + " ".join(map(str, t.steps)) \
+               + " " + " ".join(map(str, t.guards)) \
+               + " " + " ".join(s.qualified_name for s in t.skills)
+        return float(estimate_tokens(body))
+
     dropped_over_budget = (
-        [t.name for t in ir.targets if t.cost > budget] if budget is not None else []
+        [t.name for t in ir.targets if _target_cost(t) > budget] if budget is not None else []
     )
     eligible_targets = (
-        [t for t in ir.targets if t.cost <= budget] if budget is not None else ir.targets
+        [t for t in ir.targets if _target_cost(t) <= budget] if budget is not None else ir.targets
     )
     selection_trace: Dict[str, Any]
     if requested_targets:

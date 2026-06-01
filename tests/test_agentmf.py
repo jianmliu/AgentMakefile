@@ -13749,3 +13749,63 @@ def test_link_plan_budget_below_all_yields_no_match(tmp_path: Path) -> None:
     path = write_agentmakefile(tmp_path, BUDGET_MODULE)
     result = create_link_plan(path, request="implement feature", budget=0.1)
     assert not result.ok  # both targets exceed budget -> AMF118 (budget-limited)
+
+
+def test_token_budget_per_call_ceiling_is_input_plus_output_cap() -> None:
+    from agentmf.token_budget import TokenBudget, estimate_tokens
+    b = TokenBudget(total=1000, max_output_per_call=200)
+    inp = "x" * 400  # ~100 tokens
+    assert b.per_call_ceiling(inp) == estimate_tokens(inp) + 200
+
+
+def test_token_budget_refuses_unaffordable_call_before_spending() -> None:
+    from agentmf.token_budget import TokenBudget
+    b = TokenBudget(total=120, max_output_per_call=100)
+    big_input = "x" * 400  # ~100 tokens -> ceiling 200 > 120 remaining
+    assert b.check_or_halt(big_input) is False  # refuse before the call
+    assert b.halted is True
+    assert b.spent == 0  # nothing spent — the bill is bounded by refusing up front
+
+
+def test_token_budget_multi_turn_accumulates_and_hard_stops_within_budget() -> None:
+    from agentmf.token_budget import TokenBudget, estimate_tokens
+    b = TokenBudget(total=300, max_output_per_call=20)
+    context = "system prompt " * 5   # initial context
+    turns_run = 0
+    while b.check_or_halt(context):   # pre-call hard-stop gate
+        output = "o" * 40             # ~10 tokens of output this turn
+        b.charge(context, output)
+        context += output             # context GROWS each turn (multi-turn cost)
+        turns_run += 1
+        if turns_run > 100:           # safety
+            break
+    assert b.halted is True
+    assert b.spent <= b.total                 # never overspent the budget
+    assert b.remaining() < b.per_call_ceiling(context)  # halted because next call won't fit
+    assert turns_run >= 1
+
+
+def test_link_plan_budget_uses_token_cost_when_cost_unset(tmp_path: Path) -> None:
+    # No explicit cost -> loading cost is auto-derived from the target's token size.
+    big_desc = "optimize " * 200  # large skill -> high token loading cost
+    path = write_agentmakefile(
+        tmp_path,
+        f"""\
+version: "0.1"
+targets:
+  small.task:
+    match: {{user_intent: [help me]}}
+    description: tiny
+    steps: [{{action: a}}]
+  big.task:
+    priority: 90
+    match: {{user_intent: [help me]}}
+    description: "{big_desc.strip()}"
+    steps: [{{action: a}}]
+""",
+    )
+    # token budget below big.task's loading cost -> big dropped, small selected
+    result = create_link_plan(path, request="help me", budget=50.0)
+    assert result.ok, result.diagnostics.format()
+    assert result.plan["selected_targets"] == ["small.task"]
+    assert "big.task" in result.plan["budget"]["dropped_over_budget"]
