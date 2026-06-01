@@ -14,7 +14,29 @@ worst case is known up front and surprise bills cannot happen.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple
+
+
+def _litellm_cost_per_token(model: str, prompt_tokens: int, completion_tokens: int
+                            ) -> Optional[Tuple[float, float]]:
+    """Optional integration point: defer to LiteLLM's maintained price table when
+    available. Returns (input_usd, output_usd) or None if unavailable.
+
+    LiteLLM ships a comprehensive, kept-current pricing table for hundreds of
+    provider models. If the user has it installed and gives us a `model`, we
+    use it — no need to reimplement the table or learn it ourselves.
+    Inline / external `pricing` always wins (see `resolved_pricing()`); this is
+    the fallback when the user hasn't authored prices for that model.
+    """
+    try:
+        import litellm  # optional dependency
+        return litellm.cost_per_token(
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    except Exception:
+        return None
 
 
 def estimate_tokens(text: str) -> int:
@@ -38,20 +60,59 @@ class TokenBudget:
     """
 
     total: int                      # total token budget for the task
-    max_output_per_call: int        # output cap per model call
-    pricing: Optional[dict] = None  # {input_per_mtok, output_per_mtok}
+    max_output_per_call: int        # output cap per model call (clamped, see below)
+    pricing: Optional[dict] = None  # {input_per_mtok, output_per_mtok} — explicit
+    model: Optional[str] = None     # used for LiteLLM cost_per_token fallback
+    # Anti-DoS clamp (per LiteLLM): a caller asking for max_output=999_999_999
+    # would pin the budget at remaining headroom. Cap the effective output at
+    # min(caller_requested, model_max_output_tokens). None = no model ceiling.
+    model_max_output_tokens: Optional[int] = None
     spent: int = 0
     spent_input: int = 0
     spent_output: int = 0
     turns: int = 0
     halted: bool = False
 
+    @property
+    def effective_max_output(self) -> int:
+        """Clamped per-call output cap. Per LiteLLM's _estimate_output_tokens:
+        a model can only physically emit up to its model ceiling, so reserving
+        more is wasteful and a DoS surface."""
+        if self.model_max_output_tokens is None:
+            return self.max_output_per_call
+        return min(self.max_output_per_call, self.model_max_output_tokens)
+
+    def _resolved_pricing(self, prompt_tokens: int = 0, completion_tokens: int = 0
+                          ) -> Optional[Tuple[float, float]]:
+        """Returns per-direction $/M-token tuple. Resolution order:
+        explicit `pricing` > LiteLLM `cost_per_token` (if `model` set and lib
+        installed) > None. This matches AgentMakefile's selector convention.
+
+        Returned as ($/M input, $/M output) for symmetry, not the per-call
+        absolute amounts.
+        """
+        if self.pricing:
+            return (self.pricing.get("input_per_mtok", 0.0),
+                    self.pricing.get("output_per_mtok", 0.0))
+        if self.model:
+            # Probe with 1M tokens so the returned per-direction $ equals the
+            # per-million rate (the LiteLLM API takes token counts, returns USD).
+            result = _litellm_cost_per_token(self.model, 1_000_000, 1_000_000)
+            if result is not None:
+                in_usd, out_usd = result
+                return (in_usd, out_usd)
+        return None
+
     def remaining(self) -> int:
         return max(0, self.total - self.spent)
 
     def per_call_ceiling(self, input_text: str) -> int:
-        """Worst-case tokens for one call = input (countable) + output cap."""
-        return estimate_tokens(input_text) + self.max_output_per_call
+        """Worst-case tokens for one call = input (countable) + clamped output cap.
+
+        The output term uses `effective_max_output`, i.e. min(caller_max,
+        model_ceiling) — same anti-DoS clamp as LiteLLM's _estimate_output_tokens.
+        """
+        return estimate_tokens(input_text) + self.effective_max_output
 
     def can_afford(self, input_text: str) -> bool:
         """Would the WORST CASE of the next call still fit the remaining budget?"""
@@ -82,23 +143,24 @@ class TokenBudget:
         return used
 
     def estimated_usd_ceiling(self, input_text: str) -> Optional[float]:
-        """USD worst-case for the next call = input × in_rate + output_cap × out_rate.
+        """USD worst-case for the next call. Pricing resolution order:
+        explicit `pricing` > LiteLLM `cost_per_token` for `model` > None.
 
-        Like EVM gasLimit × gasPrice but split per-direction (LLM API charges
-        input and output at different rates). Returns None if pricing not set.
+        Output term uses the CLAMPED max (effective_max_output), so a caller
+        with max_output=999_999_999 can't inflate the ceiling.
         """
-        if not self.pricing:
+        rates = self._resolved_pricing()
+        if rates is None:
             return None
-        ip = self.pricing.get("input_per_mtok", 0.0)
-        op = self.pricing.get("output_per_mtok", 0.0)
-        return (estimate_tokens(input_text) * ip + self.max_output_per_call * op) / 1_000_000
+        ip, op = rates
+        return (estimate_tokens(input_text) * ip + self.effective_max_output * op) / 1_000_000
 
     def estimated_usd_spent(self) -> Optional[float]:
-        """USD spent so far, from per-direction token tallies × pricing."""
-        if not self.pricing:
+        """USD spent so far, from per-direction token tallies × resolved rates."""
+        rates = self._resolved_pricing()
+        if rates is None:
             return None
-        ip = self.pricing.get("input_per_mtok", 0.0)
-        op = self.pricing.get("output_per_mtok", 0.0)
+        ip, op = rates
         return (self.spent_input * ip + self.spent_output * op) / 1_000_000
 
     def trace(self) -> dict:

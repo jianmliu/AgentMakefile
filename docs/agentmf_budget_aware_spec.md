@@ -127,6 +127,29 @@ to fill in missing `models[*].pricing` from a small YAML/JSON file.
 Resolution: inline > external table > none. See
 `config/pricing.example.yaml` for the format.
 
+
+## Adopting LiteLLM best practices (light)
+
+`TokenBudget` borrows two practices from LiteLLM's mature proxy budget code
+(`litellm/proxy/spend_tracking/budget_reservation.py`):
+
+1. **Anti-DoS output clamp.** When `model_max_output_tokens` is set, the
+   per-call ceiling uses `min(caller_max_output, model_ceiling)`. This prevents
+   a caller from inflating the worst case (and pinning the budget) by
+   requesting `max_output_tokens=999_999_999` for a model that can only emit
+   a few thousand tokens anyway.
+2. **LiteLLM as optional pricing source.** When `model` is set and `litellm`
+   is installed but no explicit `pricing` was given, the USD methods defer to
+   `litellm.cost_per_token` — leveraging the maintained, multi-provider price
+   table without reimplementing it. Resolution: explicit `pricing` > LiteLLM
+   > none. `litellm` stays an *optional* dependency; without it, behavior is
+   unchanged.
+
+What we deliberately did NOT adopt: the proxy reservation/reconcile model
+(atomic concurrent admission). It's the right design for a multi-tenant proxy;
+AgentMakefile's in-process meter doesn't have concurrent admission and is
+better served by the simpler `check_or_halt → charge` cycle.
+
 ## Limitations & roadmap
 
 - Token-only. Wall-clock / tool-call / external-spend caps are future work and

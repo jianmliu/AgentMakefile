@@ -14064,3 +14064,52 @@ targets:
     assert result.ok, result.diagnostics.format()
     # inline wins
     assert result.plan["recommended_model"]["pricing"] == {"input_per_mtok": 99.0, "output_per_mtok": 999.0}
+
+
+def test_token_budget_output_clamp_caps_excessive_max_output() -> None:
+    """LiteLLM-style anti-DoS: per_call_ceiling clamps max_output_per_call
+    against `model_max_output_tokens` so an adversarial caller asking for
+    max_output=999_999_999 can't pin the budget at remaining headroom."""
+    from agentmf.token_budget import TokenBudget
+    # caller asked for 1_000_000 max-output but model only emits up to 4096
+    b = TokenBudget(total=1_000_000, max_output_per_call=1_000_000,
+                    model_max_output_tokens=4096)
+    inp = "x" * 400  # ~100 input tokens
+    ceiling = b.per_call_ceiling(inp)
+    # clamp pins effective output cap at 4096; ceiling = 100 + 4096 = 4196
+    assert ceiling == 100 + 4096
+
+
+def test_token_budget_pricing_from_litellm_when_available(monkeypatch) -> None:
+    """When `pricing` is not given but a `model` is set and litellm provides
+    cost_per_token, the meter derives pricing automatically. Provider-maintained
+    price table comes for free; we do not reimplement it."""
+    from agentmf import token_budget as tb_mod
+    # simulate litellm being importable with a known model
+    def fake_cost_per_token(model, prompt_tokens, completion_tokens):
+        # rates: $5/M input, $20/M output for the fake model
+        return (prompt_tokens * 5.0 / 1_000_000, completion_tokens * 20.0 / 1_000_000)
+    monkeypatch.setattr(tb_mod, "_litellm_cost_per_token", fake_cost_per_token)
+
+    b = tb_mod.TokenBudget(total=10000, max_output_per_call=200, model="some-fake-model")
+    # USD ceiling for 100-input call: (100*5 + 200*20)/1e6 = (500 + 4000)/1e6
+    inp = "x" * 400
+    assert abs(b.estimated_usd_ceiling(inp) - 4500/1_000_000) < 1e-12
+    b.charge(inp, "o" * 200)  # ~50 output tokens
+    expected_spent = (100 * 5.0 + 50 * 20.0) / 1_000_000
+    assert abs(b.estimated_usd_spent() - expected_spent) < 1e-12
+
+
+def test_token_budget_pricing_table_overrides_litellm(monkeypatch) -> None:
+    """Inline/external pricing > litellm fallback. Same resolution order as
+    AgentMakefile selector: explicit beats provider table."""
+    from agentmf import token_budget as tb_mod
+    def fake_cost_per_token(model, prompt_tokens, completion_tokens):
+        return (prompt_tokens * 99.0 / 1_000_000, prompt_tokens * 999.0 / 1_000_000)
+    monkeypatch.setattr(tb_mod, "_litellm_cost_per_token", fake_cost_per_token)
+
+    explicit = {"input_per_mtok": 1.0, "output_per_mtok": 5.0}
+    b = tb_mod.TokenBudget(total=10000, max_output_per_call=200,
+                           model="some-fake-model", pricing=explicit)
+    inp = "x" * 400
+    assert abs(b.estimated_usd_ceiling(inp) - (100*1.0 + 200*5.0)/1_000_000) < 1e-12  # explicit wins
