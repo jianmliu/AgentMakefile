@@ -207,6 +207,25 @@ as a generic extension point. We make it a first-class field.
 
 **exec status codes**: `executed` (ran), `halted_over_budget` (B fired, session halted, all subsequent calls also refused), `oversized_call` (C fired, only this call refused, session continues).
 
+
+## Dynamic adjustment of per-call caps (C only)
+
+C-dimension caps can be tightened or relaxed mid-session via
+`TokenBudget.adjust_per_call_cap(tokens=..., usd=..., reason=...)`.
+Use cases:
+
+- start conservatively (small cap), relax temporarily for a known-large
+  call (user approved a big doc; aggregation step needs more headroom);
+- tighten an over-permissive cap after an unsafe trend;
+- lift a cap explicitly with `tokens=None` (axis disabled).
+
+Every adjustment is appended to `per_call_cap_adjustments` (audit
+trail) with `at_turn` and an optional `reason`. **Only C is dynamic.**
+B (total budget) is fixed for the meter's lifetime: raising the total
+mid-run would authorize more spend and should require an explicit
+policy decision (rebuild the meter, not flip a flag). Invalid values
+(<=0) raise `ValueError` to avoid silent footguns.
+
 ## Limitations & roadmap
 
 - Token-only. Wall-clock / tool-call / external-spend caps are future work and

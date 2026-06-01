@@ -14258,3 +14258,64 @@ def test_exec_skips_oversized_call_but_continues_session(tmp_path: Path) -> None
     tb = result.payload["token_budget"]
     assert tb["halted"] is False                   # session not halted
     assert tb["max_per_call_tokens"] == 500
+
+
+def test_token_budget_dynamic_raise_per_call_cap_admits_previously_rejected() -> None:
+    """A previously oversized call becomes admissible after raising the cap.
+    The session is not halted, so we can change C mid-run."""
+    from agentmf.token_budget import TokenBudget
+    b = TokenBudget(total=100_000, max_output_per_call=200, max_per_call_tokens=500)
+    big = "x" * 4000  # ~1000 input tok -> ceiling 1200 > 500
+    assert b.check_or_halt(big) is False
+    # raise the cap; the same call now fits
+    b.adjust_per_call_cap(tokens=2000, reason="user approved big doc")
+    assert b.check_or_halt(big) is True
+    # audit trail records the change with a reason
+    trace = b.trace()
+    assert trace["max_per_call_tokens"] == 2000
+    history = trace["per_call_cap_adjustments"]
+    assert len(history) == 1
+    assert history[0]["tokens"] == 2000
+    assert history[0]["reason"] == "user approved big doc"
+    assert "at_turn" in history[0]
+
+
+def test_token_budget_dynamic_lower_per_call_cap_rejects_what_used_to_fit() -> None:
+    """Tightening the cap mid-run rejects calls that used to fit."""
+    from agentmf.token_budget import TokenBudget
+    b = TokenBudget(total=100_000, max_output_per_call=200, max_per_call_tokens=5000)
+    medium = "x" * 4000  # ~1000 input tok -> ceiling 1200
+    assert b.check_or_halt(medium) is True
+    b.charge(medium, "out")
+    b.adjust_per_call_cap(tokens=500, reason="tightening to default")
+    assert b.check_or_halt(medium) is False
+    assert b.halted is False  # still C, not B
+
+
+def test_token_budget_dynamic_disable_per_call_cap_with_none() -> None:
+    """Passing tokens=None disables only that axis, not the USD axis."""
+    from agentmf.token_budget import TokenBudget
+    b = TokenBudget(total=100_000, max_output_per_call=200,
+                    max_per_call_tokens=500, max_per_call_usd=0.001,
+                    pricing={"input_per_mtok": 1.0, "output_per_mtok": 5.0})
+    big = "x" * 4000
+    assert b.check_or_halt(big) is False  # both caps reject
+    b.adjust_per_call_cap(tokens=None, reason="lift token cap")  # only token axis
+    # token axis lifted but USD axis still active (cap 0.001 vs ceiling ~0.005 usd) -> still refused
+    assert b.check_or_halt(big) is False
+    b.adjust_per_call_cap(usd=None, reason="lift usd cap too")
+    assert b.check_or_halt(big) is True
+
+
+def test_token_budget_dynamic_rejects_invalid_cap_values() -> None:
+    """Non-positive caps would be incoherent; rejected with ValueError to avoid
+    silent footguns."""
+    from agentmf.token_budget import TokenBudget
+    b = TokenBudget(total=100_000, max_output_per_call=200)
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        b.adjust_per_call_cap(tokens=0)
+    with _pytest.raises(ValueError):
+        b.adjust_per_call_cap(tokens=-10)
+    with _pytest.raises(ValueError):
+        b.adjust_per_call_cap(usd=-0.1)

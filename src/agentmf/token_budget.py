@@ -14,7 +14,7 @@ worst case is known up front and surprise bills cannot happen.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 def _litellm_cost_per_token(model: str, prompt_tokens: int, completion_tokens: int
@@ -81,6 +81,12 @@ class TokenBudget:
     spent_output: int = 0
     turns: int = 0
     halted: bool = False
+    # Audit trail for dynamic C-cap adjustments. Each entry = {at_turn, tokens,
+    # usd, reason}. Only the C dimension is dynamically adjustable — B (total)
+    # is intentionally not, because raising the total mid-run would be
+    # equivalent to authorizing more spend, which should require rebuilding
+    # the meter with the new budget under explicit policy.
+    per_call_cap_adjustments: list = field(default_factory=list)
 
     @property
     def effective_max_output(self) -> int:
@@ -189,6 +195,40 @@ class TokenBudget:
         ip, op = rates
         return (self.spent_input * ip + self.spent_output * op) / 1_000_000
 
+    # Sentinel: distinguish "not provided" from "explicitly None (lift the cap)".
+    _UNSET = object()
+
+    def adjust_per_call_cap(self, *, tokens=_UNSET, usd=_UNSET,
+                            reason: Optional[str] = None) -> dict:
+        """Dynamically adjust the per-call (C) absolute caps mid-session.
+
+        Pass `tokens=N` (positive int) to set or raise/lower the token cap;
+        `tokens=None` explicitly lifts the cap. Same for `usd`. Either axis
+        may be left untouched by not passing it. Non-positive numeric values
+        are rejected with ValueError (silent footgun).
+
+        Records an entry in `per_call_cap_adjustments` (audit trail) with the
+        turn index at adjustment time and an optional `reason`. Only C is
+        adjustable — total budget (B) is intentionally fixed for the
+        meter's lifetime (raising it = authorizing more spend, which should
+        require an explicit policy decision, not a Python attribute set).
+        """
+        entry: Dict[str, Any] = {"at_turn": self.turns, "reason": reason}
+        if tokens is not self._UNSET:
+            if tokens is not None and tokens <= 0:
+                raise ValueError(f"max_per_call_tokens must be > 0 or None; got {tokens!r}")
+            self.max_per_call_tokens = tokens
+            entry["tokens"] = tokens
+        if usd is not self._UNSET:
+            if usd is not None and usd <= 0:
+                raise ValueError(f"max_per_call_usd must be > 0 or None; got {usd!r}")
+            self.max_per_call_usd = usd
+            entry["usd"] = usd
+        if "tokens" not in entry and "usd" not in entry:
+            raise ValueError("adjust_per_call_cap: pass at least one of tokens=, usd=")
+        self.per_call_cap_adjustments.append(entry)
+        return entry
+
     def trace(self) -> dict:
         view = {
             "total": self.total,
@@ -200,6 +240,7 @@ class TokenBudget:
             "max_output_per_call": self.max_output_per_call,
             "max_per_call_tokens": self.max_per_call_tokens,
             "max_per_call_usd": self.max_per_call_usd,
+            "per_call_cap_adjustments": list(self.per_call_cap_adjustments),
             "halted": self.halted,
         }
         if self.pricing:
