@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from agentmf.diagnostics import Diagnostics
 from agentmf.runtime import create_run_plan
+from agentmf.token_budget import TokenBudget, estimate_tokens
 
 SUPPORTED_TOOLS = ["bash"]
 TOOL_TIMEOUT_SECONDS = 30
@@ -70,6 +71,8 @@ def create_exec_payload(
     sandbox_profile: str = "workspace-write",
     execute_fallbacks: bool = False,
     provider: str = "host",
+    token_budget: Optional[int] = None,
+    max_output_per_call: int = 1024,
 ) -> ExecPayloadResult:
     diagnostics = Diagnostics()
     normalized_tool_calls = _normalize_tool_calls(tool_calls or [])
@@ -99,10 +102,34 @@ def create_exec_payload(
 
     permission_decisions = run_result.plan["permission_evaluation"]["tool_calls"]
     execution_cwd = Path(cwd) if cwd is not None else Path(path).parent
-    tool_results = [
-        _run_tool_call(permission_decision, cwd=execution_cwd, sandbox=sandbox)
-        for permission_decision in permission_decisions
-    ]
+
+    # Token-budget meter: when set, the meter HARD-STOPS the tool loop before a
+    # call whose worst case wouldn't fit the remaining budget. This makes
+    # "surprise bills in the token dimension" impossible for calls running
+    # THROUGH agentmf exec — host-driven calls still rely on the contract.
+    meter: Optional[TokenBudget] = (
+        TokenBudget(total=token_budget, max_output_per_call=max_output_per_call)
+        if token_budget is not None else None
+    )
+    tool_results: List[Dict[str, Any]] = []
+    for permission_decision in permission_decisions:
+        if meter is not None:
+            input_text = permission_decision.get("input", "") or ""
+            if not meter.check_or_halt(input_text):
+                tool_results.append({
+                    **_tool_result_base(permission_decision),
+                    "status": "halted_over_budget",
+                    "reason": (
+                        f"token budget exhausted or next call's worst-case ceiling "
+                        f"({meter.per_call_ceiling(input_text)}) > remaining ({meter.remaining()})"
+                    ),
+                })
+                continue
+        result = _run_tool_call(permission_decision, cwd=execution_cwd, sandbox=sandbox)
+        if meter is not None and result.get("status") == "executed":
+            stdout = (result.get("stdout") or "") + (result.get("stderr") or "")
+            meter.charge(permission_decision.get("input", "") or "", stdout)
+        tool_results.append(result)
     payload = {
         "version": 1,
         "mode": "exec",
@@ -116,6 +143,7 @@ def create_exec_payload(
         "sandbox": sandbox,
         "runtime_plan": run_result.plan,
         "tool_results": tool_results,
+        "token_budget": (meter.trace() if meter is not None else None),
         "tool_interception": _tool_interception_contract(
             provider=provider,
             permission_decisions=permission_decisions,

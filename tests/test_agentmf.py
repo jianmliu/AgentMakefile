@@ -13852,3 +13852,61 @@ def test_ask_payload_emits_token_budget_block_and_respects_budget(tmp_path: Path
     tb = result.payload["token_budget"]
     assert tb["total"] == 50
     assert "huge.task" in tb["dropped_over_budget"]
+
+
+EXEC_BUDGET_MODULE = """\
+version: "0.1"
+permissions:
+  defaults:
+    bash: allow
+targets:
+  do.things:
+    match: {user_intent: [run things]}
+    steps: [{action: a}]
+"""
+
+
+def test_exec_runs_calls_within_token_budget_and_emits_trace(tmp_path: Path) -> None:
+    from agentmf.tool_loop import create_exec_payload
+
+    path = write_agentmakefile(tmp_path, EXEC_BUDGET_MODULE)
+    # large budget; both allowed calls should run
+    result = create_exec_payload(
+        path, request="run things", apply=True,
+        tool_calls=[{"tool": "bash", "input": "echo one"}, {"tool": "bash", "input": "echo two"}],
+        sandbox_profile="workspace-write", cwd=tmp_path,
+        token_budget=10000, max_output_per_call=200,
+    )
+    assert result.ok, result.diagnostics.format()
+    statuses = [r["status"] for r in result.payload["tool_results"]]
+    assert statuses == ["executed", "executed"]
+    tb = result.payload["token_budget"]
+    assert tb["total"] == 10000
+    assert tb["halted"] is False
+    assert tb["turns"] == 2
+    assert tb["spent"] > 0
+
+
+def test_exec_hard_stops_when_token_budget_exhausted(tmp_path: Path) -> None:
+    from agentmf.tool_loop import create_exec_payload
+
+    path = write_agentmakefile(tmp_path, EXEC_BUDGET_MODULE)
+    # tight budget: first allowed call fits, second one's worst case won't ->
+    # second call is HALTED (not executed) before any spend.
+    result = create_exec_payload(
+        path, request="run things", apply=True,
+        tool_calls=[
+            {"tool": "bash", "input": "echo first"},
+            {"tool": "bash", "input": "echo second " + "x" * 4000},
+        ],
+        sandbox_profile="workspace-write", cwd=tmp_path,
+        token_budget=200, max_output_per_call=100,
+    )
+    # not an error — exec succeeds, but later calls were refused
+    assert result.ok
+    statuses = [r["status"] for r in result.payload["tool_results"]]
+    assert "halted_over_budget" in statuses
+    tb = result.payload["token_budget"]
+    assert tb["halted"] is True
+    # the halted call was NOT charged — refusal is what bounds the bill
+    assert tb["spent"] <= tb["total"]

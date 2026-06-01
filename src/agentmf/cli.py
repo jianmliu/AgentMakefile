@@ -265,6 +265,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     exec_cmd.add_argument("--sandbox-profile", choices=["none", "read-only", "workspace-write"], default="workspace-write")
     exec_cmd.add_argument("--execute-fallbacks", action="store_true")
     exec_cmd.add_argument("--apply", action="store_true")
+    exec_cmd.add_argument("--token-budget", type=int, default=None,
+        help="total token budget for the exec loop; tool calls past the cap are halted (default: unbounded)")
+    exec_cmd.add_argument("--max-output-per-call", type=int, default=1024,
+        help="per-call output cap used in the worst-case ceiling")
     exec_cmd.add_argument("--format", choices=["text", "json"], default="text")
 
     plugin_cmd = subparsers.add_parser("plugin", help="plugin adapter commands")
@@ -1166,6 +1170,8 @@ def _exec(args: argparse.Namespace) -> int:
         apply=args.apply,
         sandbox_profile=args.sandbox_profile,
         execute_fallbacks=args.execute_fallbacks,
+        token_budget=args.token_budget,
+        max_output_per_call=args.max_output_per_call,
     )
     if args.format == "json":
         print(
