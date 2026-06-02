@@ -768,6 +768,75 @@ class OpenClawCuratorResult:
         return not self.diagnostics.has_errors
 
 
+def _category_clusters(data: Dict[str, Any]) -> Dict[str, list[str]]:
+    """Group a module's skills by the second path segment of their
+    `implementation.relative_source` (the sub-category), for skills nested at
+    least `<category>/<sub-category>/...` deep. Shared by the OpenClaw curator
+    (which turns over-threshold clusters into promotable `split_module`
+    proposals) and the dream-mode re-split detector (which flags them)."""
+    groups: Dict[str, list[str]] = {}
+    skills = data.get("skills") or {}
+    if not isinstance(skills, dict):
+        return groups
+    for skill_name, skill in skills.items():
+        if not isinstance(skill, dict):
+            continue
+        impl = skill.get("implementation") or {}
+        rel = impl.get("relative_source") if isinstance(impl, dict) else None
+        if not isinstance(rel, str):
+            continue
+        segments = [segment for segment in rel.split("/") if segment]
+        if len(segments) < 3:
+            continue
+        sub_category = segments[1]
+        if not sub_category:
+            continue
+        groups.setdefault(sub_category, []).append(skill_name)
+    return groups
+
+
+def _openclaw_category_split_changes(module_refs: list[str]) -> list[Dict[str, Any]]:
+    """Emit one promotable `split_module` change per sub-category whose skill
+    cluster in a referenced module reaches DREAM_CATEGORY_RESPLIT_THRESHOLD.
+
+    The apply step (`_apply_split_module_change`) moves those skills into a new
+    `<module-dir>/<sub-category>/<module-name>` category sub-module — this is
+    the AMF-EVO-006 "category module suggestion" deliverable, distinct from the
+    dream detector's review-only `investigate_category_resplit` flag.
+    """
+    changes: list[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for ref in module_refs:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        module_path = Path(ref)
+        if not module_path.exists():
+            continue
+        try:
+            data = yaml.safe_load(module_path.read_text(encoding="utf-8")) or {}
+        except OSError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        for sub_category in sorted(_category_clusters(data)):
+            members = _category_clusters(data)[sub_category]
+            if len(members) < DREAM_CATEGORY_RESPLIT_THRESHOLD:
+                continue
+            target_module = module_path.parent / sub_category / module_path.name
+            changes.append(
+                {
+                    "type": "split_module",
+                    "source_module": str(module_path),
+                    "target_module": str(target_module),
+                    "skills": sorted(members),
+                    "targets": [],
+                    "reason": f"{len(members)} skills cluster under sub-category '{sub_category}'.",
+                }
+            )
+    return changes
+
+
 def create_openclaw_curator_payload(
     *,
     evidence_file: Union[Path, str],
@@ -780,37 +849,53 @@ def create_openclaw_curator_payload(
     if diagnostics.has_errors:
         return OpenClawCuratorResult(diagnostics)
 
-    duplicate_records = [
+    openclaw_records = [
         record
         for record in records
-        if record.get("source") == "openclaw_import"
-        and isinstance(record.get("summary"), dict)
-        and record["summary"].get("duplicate_original_names")
+        if record.get("source") == "openclaw_import" and isinstance(record.get("summary"), dict)
     ]
-    if not duplicate_records:
-        return OpenClawCuratorResult(
-            diagnostics,
-            {"version": 1, "mode": "openclaw_curator", "proposal_count": 0, "proposal": None},
-        )
 
     duplicate_original_names: Dict[str, Any] = {}
-    modules = []
-    for record in duplicate_records:
-        summary = record["summary"]
-        duplicate_original_names.update(summary.get("duplicate_original_names", {}))
-        modules.extend(_module_refs_from_openclaw_record(record))
+    modules: list[str] = []
+    for record in openclaw_records:
+        names = record["summary"].get("duplicate_original_names")
+        if names:
+            duplicate_original_names.update(names)
+            modules.extend(_module_refs_from_openclaw_record(record))
 
-    proposal = create_skill_workshop_proposal_payload(
-        title="Curate duplicate OpenClaw skills",
-        evidence_files=[evidence_file],
-        scope={"modules": sorted(set(modules)), "targets": []},
-        changes=[
+    all_module_refs: list[str] = []
+    for record in openclaw_records:
+        all_module_refs.extend(_module_refs_from_openclaw_record(record))
+
+    changes: list[Dict[str, Any]] = []
+    if duplicate_original_names:
+        changes.append(
             {
                 "type": "merge_duplicate_targets",
                 "duplicate_original_names": duplicate_original_names,
                 "reason": "OpenClaw import evidence reported duplicate original skill names.",
             }
-        ],
+        )
+    split_changes = _openclaw_category_split_changes(all_module_refs)
+    changes.extend(split_changes)
+    modules.extend(change["source_module"] for change in split_changes)
+
+    if not changes:
+        return OpenClawCuratorResult(
+            diagnostics,
+            {"version": 1, "mode": "openclaw_curator", "proposal_count": 0, "proposal": None},
+        )
+
+    title = (
+        "Curate duplicate OpenClaw skills"
+        if duplicate_original_names
+        else "Curate OpenClaw skill categories"
+    )
+    proposal = create_skill_workshop_proposal_payload(
+        title=title,
+        evidence_files=[evidence_file],
+        scope={"modules": sorted(set(modules)), "targets": []},
+        changes=changes,
         evaluation_commands=[
             "agentmf validate --file modules/openclaw/AgentMakefile",
             "agentmf benchmark harness --file modules/openclaw/AgentMakefile --case \"review code\"",
@@ -1899,25 +1984,7 @@ def _dream_category_resplit(
             continue
         if not isinstance(data, dict):
             continue
-        skills = data.get("skills") or {}
-        if not isinstance(skills, dict):
-            continue
-        groups: Dict[str, list[str]] = {}
-        for skill_name, skill in skills.items():
-            if not isinstance(skill, dict):
-                continue
-            impl = skill.get("implementation") or {}
-            rel = impl.get("relative_source") if isinstance(impl, dict) else None
-            if not isinstance(rel, str):
-                continue
-            segments = [segment for segment in rel.split("/") if segment]
-            # Need at least <category>/<sub-category>/... to split.
-            if len(segments) < 3:
-                continue
-            sub_category = segments[1]
-            if not sub_category:
-                continue
-            groups.setdefault(sub_category, []).append(skill_name)
+        groups = _category_clusters(data)
         for sub_category in sorted(groups):
             members = groups[sub_category]
             if len(members) < DREAM_CATEGORY_RESPLIT_THRESHOLD:

@@ -6506,6 +6506,69 @@ def test_openclaw_curator_creates_duplicate_skill_proposal(tmp_path: Path) -> No
     }
 
 
+def test_openclaw_curator_proposes_category_split(tmp_path: Path) -> None:
+    # AMF-EVO-006: a module whose skills cluster heavily under one sub-category
+    # should yield a promotable split_module proposal (not just a flag), so the
+    # large imported ecosystem can be re-organised into category sub-modules.
+    from agentmf.evolution import DREAM_CATEGORY_RESPLIT_THRESHOLD
+
+    skills = {}
+    for i in range(DREAM_CATEGORY_RESPLIT_THRESHOLD):
+        skills[f"web_skill_{i}"] = {
+            "description": f"web skill {i}",
+            "implementation": {"relative_source": f"coding/web/skill_{i}/SKILL.md"},
+        }
+    # A second sub-category below threshold must NOT trigger a split.
+    skills["cli_skill_0"] = {
+        "description": "cli skill",
+        "implementation": {"relative_source": "coding/cli/skill_0/SKILL.md"},
+    }
+    module_file = tmp_path / "coding" / "AgentMakefile"
+    module_file.parent.mkdir(parents=True)
+    module_file.write_text(
+        yaml.safe_dump({"version": "0.1", "skills": skills, "targets": {}}, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    evidence_file = tmp_path / "openclaw_import.jsonl"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "event_id": "sha256:openclaw-split",
+                "timestamp": "2026-06-02T00:00:00Z",
+                "source": "openclaw_import",
+                "summary": {
+                    "skill_count": len(skills),
+                    "categories": {"coding": len(skills)},
+                    "module_paths": [str(module_file)],
+                },
+            }
+        )
+        + "\n"
+    )
+
+    from agentmf.evolution import create_openclaw_curator_payload
+
+    result = create_openclaw_curator_payload(
+        evidence_file=evidence_file,
+        out_dir=tmp_path / ".agentmf" / "evolution" / "candidates",
+        timestamp="2026-06-02T00:00:01Z",
+        write=True,
+    )
+
+    assert result.ok, result.diagnostics.format()
+    assert result.payload["proposal_count"] == 1
+    proposal = result.payload["proposal"]["proposal"]
+    split_changes = [c for c in proposal["changes"] if c["type"] == "split_module"]
+    assert len(split_changes) == 1, "exactly one over-threshold sub-category should split"
+    change = split_changes[0]
+    assert change["source_module"] == str(module_file)
+    assert change["target_module"] == str(module_file.parent / "web" / module_file.name)
+    assert change["skills"] == sorted(f"web_skill_{i}" for i in range(DREAM_CATEGORY_RESPLIT_THRESHOLD))
+    assert change["targets"] == []
+
+
 def test_cli_evo_patch_generate_and_evaluate_candidate(tmp_path: Path, capsys) -> None:
     module_path = write_agentmakefile(
         tmp_path,

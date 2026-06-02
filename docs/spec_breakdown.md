@@ -2457,8 +2457,10 @@ Acceptance:
 ### AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator
 
 Status: implemented (duplicate + missing-term + trust + heavy-tool +
-benchmark-case suggester all ship); category module suggestions remain
-the only spec deliverable not yet detected.
+benchmark-case suggester + category-split suggestions all ship). The
+curator now emits promotable `split_module` proposals for over-threshold
+sub-category clusters (`_openclaw_category_split_changes`), closing the
+last spec deliverable.
 
 Goal: use the evolution loop to curate large imported skill ecosystems such as
 OpenClaw instead of loading thousands of skills as a flat index.
@@ -2608,7 +2610,7 @@ Completed:
 - AMF-EVO-004B Compile and Benchmark Candidate Gates (folded into AMF-EVO-004 above).
 - AMF-EVO-005 Dream Mode Dry-Run (4/4 detectors: openclaw duplicates, recurring routing gaps, missing match terms, drifted permissions).
 - AMF-EVO-005B Additional Dream Mode Detectors (folded into AMF-EVO-005 above).
-- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator (duplicate + missing-term + trust + heavy-tool + benchmark-case suggester all ship; routing baseline 13/29 -> 29/29 via the closed-loop demo).
+- AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator (duplicate + missing-term + trust + heavy-tool + benchmark-case suggester + category-split `split_module` proposals all ship; routing baseline 13/29 -> 29/29 via the closed-loop demo).
 - AMF-EVO-006B OpenClaw Trust and Overlap Analysis (folded into AMF-EVO-006 above).
 
 Next:
