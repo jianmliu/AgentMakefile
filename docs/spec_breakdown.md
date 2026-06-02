@@ -2515,6 +2515,109 @@ These tasks should not block compiler milestones:
 - Host OS sandbox integration beyond prototype preflight checks.
 - External fallback actions beyond internal no-op execution.
 
+## Cost-Aware Execution and Model Routing
+
+These tasks make **cost** a first-class, declarative, routable concern across
+selection, runtime metering, and model choice. Authoritative behaviour lives in
+`agentmf_budget_aware_spec.md` and `agentmf_model_routing_spec.md` and in design
+spec §32; the entries below record the shipped work against the roadmap. Scope
+is the **token** dimension (input counted, output capped); non-token cost
+(tool / compute / paid-API spend) is a deferred dimension.
+
+### AMF-COST-001 Budget-Aware Skill Selection
+
+Status: implemented.
+
+Goal: let a per-task token budget steer which skill is selected, so a cheap
+relevant skill wins over a heavy one that would burn the budget.
+
+Implementation:
+
+- `create_link_plan(..., budget=...)` drops targets whose `cost` exceeds the
+  budget before matching; selection then matches the survivors or abstains
+  (AMF118 — preferred to overspending).
+- `cost` is a `float >= 0` target field; when unset (or 0) and a budget is
+  given, cost is derived from the target's token footprint.
+- `agentmf select --budget N`; the link plan carries
+  `budget: {limit, dropped_over_budget}`.
+
+### AMF-COST-002 TokenBudget Runtime Meter (Dimension B)
+
+Status: implemented.
+
+Goal: a runtime token meter (EVM-`gasLimit` analog) that bounds a multi-turn
+agent loop's worst-case spend.
+
+Implementation:
+
+- `TokenBudget.per_call_ceiling` (input + clamped `max_output_per_call`),
+  `check_or_halt` (refuse + halt session when the ceiling exceeds remaining),
+  `charge` (deduct actual usage, accumulate across turns, halt when spent).
+- `agentmf exec` enforces it; `agentmf plugin payload` / `ask` emit the meter
+  view (`per_call_ceiling`, `fits_first_call`, `halt_policy`) as a host contract.
+- exec statuses: `executed`, `halted_over_budget` (B fired).
+
+### AMF-COST-003 Per-Call Absolute Cap (Dimension C) + Dynamic Adjustment
+
+Status: implemented.
+
+Goal: reject a single over-expensive call independently of the total budget,
+without halting the session.
+
+Implementation:
+
+- `max_per_call_tokens` / `max_per_call_usd`: refuse a call whose worst-case
+  ceiling exceeds the cap; session continues (exec status `oversized_call`).
+- `adjust_per_call_cap(tokens=, usd=, reason=)` tightens/relaxes C mid-session
+  with an audit trail (`per_call_cap_adjustments`); B stays fixed for the
+  meter's lifetime (raising the total = authorizing more spend).
+
+### AMF-COST-004 USD Pricing and External Pricing Table
+
+Status: implemented.
+
+Goal: a USD view over the token meter, with prices kept outside modules.
+
+Implementation:
+
+- `models[*].pricing` (`input_per_mtok` / `output_per_mtok`) → `estimated_usd_*`.
+- `--pricing-table FILE` (`load_pricing_table` / `resolve_pricing`); resolution
+  inline > external table > LiteLLM `cost_per_token` fallback > none.
+- Anti-DoS output clamp (`min(caller_max, model_max_output_tokens)`), adopted
+  from LiteLLM's proxy budget code.
+
+### AMF-COST-005 Cost Metadata in Generated SKILL.md
+
+Status: implemented.
+
+Goal: let any SKILL.md reader see a skill's loading cost without loading it.
+
+Implementation:
+
+- Compiled `SKILL.md` embeds `metadata.cost.tokens` under the agentskills.io
+  open `metadata` namespace. A forward-compatible breadcrumb (current hosts are
+  OTel emitters, not readers); the future inbound channel is an MCP metadata
+  extension (tracked).
+
+### AMF-ROUTE-001 Declarative Model Routing
+
+Status: implemented (advisory, deterministic matcher).
+
+Goal: make "which model handles this request" a declarative, routable concern
+on the same matcher that routes skills.
+
+Implementation:
+
+- A `models:` block (`family`, `cost`, `capabilities`, `default`, `priority`,
+  `match`); the selector emits `recommended_model`
+  (`{model, family, cost, capabilities, priority, reason, matched_terms,
+  match_score}`), falling back to the `default: true` model.
+- Orthogonal to target routing (emitted even when no target matches, AMF118);
+  standalone `from agentmf import recommend_model`.
+- Surfaces: `agentmf select` / `plugin payload` JSON `recommended_model`.
+- Not yet: hard `require:`/`deny:` constraints, confidence-thresholded
+  escalation, and `compile`-time emission of model guidance into host configs.
+
 ## Recommended Execution Order
 
 Completed:
@@ -2612,6 +2715,12 @@ Completed:
 - AMF-EVO-005B Additional Dream Mode Detectors (folded into AMF-EVO-005 above).
 - AMF-EVO-006 OpenClaw Large Skill Ecosystem Curator (duplicate + missing-term + trust + heavy-tool + benchmark-case suggester + category-split `split_module` proposals all ship; routing baseline 13/29 -> 29/29 via the closed-loop demo).
 - AMF-EVO-006B OpenClaw Trust and Overlap Analysis (folded into AMF-EVO-006 above).
+- AMF-COST-001 Budget-Aware Skill Selection (`--budget`; over-budget targets dropped before matching; `link_plan.budget`).
+- AMF-COST-002 TokenBudget Runtime Meter — Dimension B (`per_call_ceiling` / `check_or_halt` / `charge`; enforced in `agentmf exec`, emitted by `plugin payload` / `ask`).
+- AMF-COST-003 Per-Call Absolute Cap — Dimension C + dynamic adjustment (`max_per_call_{tokens,usd}`, `oversized_call`, `adjust_per_call_cap` audit trail).
+- AMF-COST-004 USD Pricing and External Pricing Table (`models[*].pricing`, `--pricing-table`, LiteLLM `cost_per_token` fallback, anti-DoS output clamp).
+- AMF-COST-005 Cost Metadata in Generated SKILL.md (`metadata.cost.tokens` under the agentskills.io open namespace).
+- AMF-ROUTE-001 Declarative Model Routing (`models:` block + `recommended_model`; deterministic matcher; orthogonal to target routing).
 
 Next:
 

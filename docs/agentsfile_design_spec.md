@@ -4019,3 +4019,61 @@ This milestone proves the core value proposition:
 ```text
 one structured skill source → multiple platform-native rule files
 ```
+
+## 32. Cost-Aware Execution and Model Routing
+
+AgentMakefile treats **cost** as a first-class, declarative, routable concern,
+on the same footing as skill/target routing. Two standalone specs carry the
+authoritative detail — [`agentmf_budget_aware_spec.md`](agentmf_budget_aware_spec.md)
+and [`agentmf_model_routing_spec.md`](agentmf_model_routing_spec.md) — and this
+section indexes them into the design.
+
+### 32.1 Cost dimensions (A / B / C)
+
+Three orthogonal axes that are commonly conflated:
+
+| | Bounds | Where it lives | Refusal effect |
+| --- | --- | --- | --- |
+| A | Long-term cumulative quota (per key / month / team) | external gateway (LiteLLM / sub2api / new-api) | gateway policy |
+| B | Total-budget worst case (cumulative + next call's ceiling) | `TokenBudget.total` + per-call ceiling | session halts |
+| C | Per-call absolute cap (independent of total) | `max_per_call_tokens` / `max_per_call_usd` | refuse this call only |
+
+AgentMakefile owns **B and C in-process**; **A** is the gateway layer's job.
+Scope is the **token** dimension: input is counted from the prompt and output
+is bounded by `max_tokens`, so surprise bills *in tokens* are impossible.
+Non-token cost (tool calls, local compute, paid APIs) is a deferred dimension a
+token meter cannot see.
+
+### 32.2 Budget-aware selection (select time)
+
+A target's `cost` (token units; auto-derived from its loading footprint when
+unset) is compared to a per-task budget; over-budget targets are dropped before
+matching, so selection picks a cheaper relevant skill or abstains (AMF118). The
+link plan carries a `budget` block. Advisory — the host owns execution.
+
+### 32.3 TokenBudget runtime meter (run time)
+
+An EVM-`gasLimit` analog for tokens: it pre-computes a per-call worst-case
+ceiling (input + clamped `max_output_per_call`), **refuses** unaffordable calls
+up front, **charges** actual usage after each call, accumulates across turns,
+and **hard-stops** within budget. `agentmf exec` enforces it; `plugin payload`
+and `ask` emit it as a contract for the host. USD views resolve via inline
+`models[*].pricing` > external `--pricing-table` > LiteLLM `cost_per_token`
+fallback, with an anti-DoS output clamp. The C-dimension caps are dynamically
+adjustable with an audit trail; B (total) is fixed for the meter's lifetime.
+
+### 32.4 Cost metadata in generated SKILL.md
+
+Compiled `SKILL.md` embeds the skill's loading cost as `metadata.cost.tokens`
+under the agentskills.io open `metadata` namespace, so any reader can see the
+cost without loading the body. A forward-compatible breadcrumb, not a live
+host integration.
+
+### 32.5 Model routing
+
+A `models:` block makes "which model should handle this request" declarative
+and routable by the same deterministic matcher that picks skills; the selector
+emits `recommended_model` (orthogonal to target routing, advisory). This is the
+runtime escalation lever of the project's core cost split: a big model at build
+time (label / tune / audit → cheap artifacts), a cheap model at run time with
+escalation only when a request's `match` terms warrant it.
