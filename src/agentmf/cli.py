@@ -26,12 +26,12 @@ from agentmf.evolution import (
     PROMOTION_STATUSES,
     create_candidate_patch_payload,
     create_compile_evaluate_payload,
-    create_dream_mode_payload,
     create_evolution_evidence_payload,
     create_openclaw_curator_payload,
     create_promotion_payload,
     create_skill_workshop_proposal_payload,
 )
+from agentmf.dream import create_dream_mode_payload
 from agentmf.loader import load_source_with_diagnostics
 from agentmf.openclaw import create_openclaw_import_payload
 from agentmf.plugin import create_plugin_payload

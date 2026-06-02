@@ -3264,7 +3264,7 @@ def test_dream_mode_dry_run_creates_openclaw_duplicate_proposal(tmp_path: Path) 
         + "\n"
     )
 
-    from agentmf.evolution import create_dream_mode_payload
+    from agentmf.dream import create_dream_mode_payload
 
     result = create_dream_mode_payload(
         evidence_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
@@ -3348,7 +3348,7 @@ def test_dream_mode_dry_run_detects_recurring_routing_gaps(tmp_path: Path) -> No
     ]
     evidence_file.write_text("\n".join(json.dumps(r) for r in records) + "\n")
 
-    from agentmf.evolution import create_dream_mode_payload
+    from agentmf.dream import create_dream_mode_payload
 
     result = create_dream_mode_payload(
         evidence_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
@@ -3805,7 +3805,7 @@ def test_dream_mode_drifted_permissions_proposes_review_for_recurring_denials(tm
     ]
     evidence_file.write_text("\n".join(json.dumps(r) for r in records) + "\n")
 
-    from agentmf.evolution import create_dream_mode_payload
+    from agentmf.dream import create_dream_mode_payload
 
     result = create_dream_mode_payload(
         evidence_dir=tmp_path / ".agentmf" / "evolution" / "evidence",
@@ -3866,9 +3866,9 @@ targets:
     )
     evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
 
+    from agentmf.dream import create_dream_mode_payload
     from agentmf.evolution import (
         create_candidate_patch_payload,
-        create_dream_mode_payload,
         create_evolution_evidence_payload,
     )
 
@@ -3998,9 +3998,9 @@ targets:
     )
     evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
 
+    from agentmf.dream import create_dream_mode_payload
     from agentmf.evolution import (
         create_candidate_patch_payload,
-        create_dream_mode_payload,
         create_evolution_evidence_payload,
     )
 
@@ -4590,7 +4590,8 @@ targets:
 """
     )
     evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
-    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+    from agentmf.dream import create_dream_mode_payload
+    from agentmf.evolution import create_evolution_evidence_payload
 
     create_evolution_evidence_payload(
         source="openclaw_import",
@@ -4705,7 +4706,8 @@ targets:
 """
     )
     evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
-    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+    from agentmf.dream import create_dream_mode_payload
+    from agentmf.evolution import create_evolution_evidence_payload
 
     create_evolution_evidence_payload(
         source="openclaw_import",
@@ -4815,8 +4817,8 @@ targets:
     )
     evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
 
+    from agentmf.dream import create_dream_mode_payload
     from agentmf.evolution import (
-        create_dream_mode_payload,
         create_evolution_evidence_payload,
     )
 
@@ -4922,7 +4924,8 @@ def test_dream_mode_category_resplit_suggests_sub_module_split(tmp_path: Path) -
 
     evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
 
-    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+    from agentmf.dream import create_dream_mode_payload
+    from agentmf.evolution import create_evolution_evidence_payload
 
     create_evolution_evidence_payload(
         source="openclaw_import",
@@ -5010,7 +5013,8 @@ skills:
     )
     evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
 
-    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+    from agentmf.dream import create_dream_mode_payload
+    from agentmf.evolution import create_evolution_evidence_payload
 
     create_evolution_evidence_payload(
         source="openclaw_import",
@@ -5095,7 +5099,8 @@ skills:
     )
     evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
 
-    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+    from agentmf.dream import create_dream_mode_payload
+    from agentmf.evolution import create_evolution_evidence_payload
 
     create_evolution_evidence_payload(
         source="openclaw_import",
@@ -5166,7 +5171,8 @@ targets:
     )
     evidence_dir = tmp_path / ".agentmf" / "evolution" / "evidence"
 
-    from agentmf.evolution import create_dream_mode_payload, create_evolution_evidence_payload
+    from agentmf.dream import create_dream_mode_payload
+    from agentmf.evolution import create_evolution_evidence_payload
 
     # OpenClaw import evidence so the suggester can resolve target -> module.
     create_evolution_evidence_payload(
@@ -5256,9 +5262,9 @@ targets:
     )
     evidence_root = tmp_path / ".agentmf" / "evolution" / "evidence"
 
+    from agentmf.dream import create_dream_mode_payload
     from agentmf.evolution import (
         create_candidate_patch_payload,
-        create_dream_mode_payload,
         create_evolution_evidence_payload,
     )
 
