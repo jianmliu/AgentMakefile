@@ -665,6 +665,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     swebench_official_dry_run_cmd.add_argument("--split")
     swebench_official_dry_run_cmd.add_argument("--format", choices=["text", "json"], default="json")
 
+    serve_cmd = subparsers.add_parser("serve", help="run the local JSON engine API (see docs/agentmf_serve_api_spec.md)")
+    serve_cmd.add_argument("--root", default=".", help="project directory containing an AgentMakefile")
+    serve_cmd.add_argument("--port", type=int, default=8787)
+    serve_cmd.add_argument("--token", help="optional bearer token required on every request")
+
     args = parser.parse_args(argv)
     if args.command == "validate":
         return _validate(args)
@@ -700,7 +705,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _clawbench(args)
     if args.command == "swebench":
         return _swebench(args)
+    if args.command == "serve":
+        return _serve(args)
     return 2
+
+
+def _serve(args: argparse.Namespace) -> int:
+    from agentmf.serve import run_server
+
+    root = Path(args.root)
+    print(f"agentmf serve — root={root} http://127.0.0.1:{args.port}", file=sys.stderr)
+    try:
+        run_server(root, port=args.port, token=args.token)
+    except KeyboardInterrupt:
+        return 0
+    return 0
 
 
 def _validate(args: argparse.Namespace) -> int:

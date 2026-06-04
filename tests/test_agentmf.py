@@ -14388,3 +14388,69 @@ def test_token_budget_dynamic_rejects_invalid_cap_values() -> None:
         b.adjust_per_call_cap(tokens=-10)
     with _pytest.raises(ValueError):
         b.adjust_per_call_cap(usd=-0.1)
+
+
+def test_serve_dispatch_core(tmp_path: Path) -> None:
+    """agentmf serve — the pure dispatch(method, path, body, root) over the
+    existing payload builders + a uniform {ok, diagnostics, data} envelope."""
+    from agentmf.serve import dispatch
+
+    write_agentmakefile(
+        tmp_path,
+        content='''version: "0.1"
+models:
+  haiku:
+    family: claude
+    cost: low
+    default: true
+    match:
+      user_intent: [quick lookup]
+targets:
+  code.review:
+    priority: 90
+    match:
+      user_intent: [review code]
+    steps:
+      - action: gather
+''',
+        name="AgentMakefile",
+    )
+    root = tmp_path
+
+    # healthz
+    status, env = dispatch("GET", "/healthz", {}, root)
+    assert status == 200 and env["ok"] is True
+    assert env["data"]["agentmakefile_present"] is True
+
+    # introspection
+    status, env = dispatch("GET", "/backends", {}, root)
+    assert status == 200 and "claude-code" in env["data"]
+    status, env = dispatch("GET", "/matchers", {}, root)
+    assert set(env["data"]) >= {"keyword", "embedding", "hybrid"}
+    status, env = dispatch("GET", "/targets", {}, root)
+    assert status == 200 and isinstance(env["data"], list)
+    assert all("name" in t for t in env["data"])
+
+    # select -> link_plan structure
+    status, env = dispatch("POST", "/select", {"request": "review code"}, root)
+    assert status == 200 and env["ok"] is True
+    assert "selected_targets" in env["data"] or "recommended_model" in env["data"]
+
+    # plugin payload carries the token_budget block when a budget is given
+    status, env = dispatch(
+        "POST", "/plugin/payload", {"request": "review code", "token_budget": 5000}, root
+    )
+    assert status == 200
+    assert "token_budget" in env["data"]
+
+    # validate (SIMPLE is valid)
+    status, env = dispatch("POST", "/validate", {}, root)
+    assert status == 200 and env["ok"] is True
+
+    # unknown route -> 404, ok false, diagnostics present
+    status, env = dispatch("DELETE", "/nope", {}, root)
+    assert status == 404 and env["ok"] is False and env["diagnostics"]
+
+    # error envelope: an unsupported matcher fails with ok=false + diagnostics
+    status, env = dispatch("POST", "/select", {"request": "x", "matcher": "bogus"}, root)
+    assert env["ok"] is False and env["diagnostics"]
