@@ -17,7 +17,7 @@ distinct kinds, and they map cleanly onto what we already have:
 | **procedural** | *how to do X* | skills, workflows | structured & executable (steps, guards, `match`) |
 | **semantic** | *what is true* | facts, preferences, decision rationale | informational body |
 | **episodic** | *what happened* | events, decisions, sessions | narrative body |
-| *(working)* | *current scratch* | task scratchpad | ephemeral, TTL'd |
+| *(working)* — *deferred* | *current scratch* | task scratchpad | ephemeral, TTL'd |
 
 All four are durable (except working), self-describing, retrieved by relevance, and
 consolidated from experience. So this is **one typed substrate**, not "memory
@@ -236,18 +236,26 @@ closing the deep unification deferred at Phase 2c.
 | **M2** | `memory` domain: frontmatter (+`kind`) parse/render, multi-file appliers, kind-aware gates, evidence detectors. TDD end-to-end on a `memory/` corpus with both `procedural` and `semantic` units. |
 | **M3** | Scanner enhancement: honor explicit `match.user_intent` + carry `kind`. Wire `agentmf skills scan memory/` → route → **kind-aware compile** to `MEMORY.md` / skill files. |
 | **M4** | `aigg-memory consolidate` writes typed units; `select` returns task-scoped, kind-filtered memory bundles. |
-| **(later)** | Re-route AMF's own skill evolution through the same `memory` domain — the closed loop made literal (procedural memory). |
+| **(later)** | embedding / hybrid recall; `kind: working` (ephemeral, TTL'd); re-route AMF's own skill evolution through the same `memory` domain — the closed loop made literal (procedural memory). |
 
-## Open questions
+## Resolved decisions
 
-- **Unit granularity**: one fact per unit, or a unit per topic? (Skill-shaped favors
-  one coherent note per unit.)
-- **Manifest source of truth**: units are the source; `MemoryMakefile` and `MEMORY.md`
-  are both compiled artifacts (lean: yes).
-- **Working memory**: is `kind: working` (ephemeral, TTL'd scratch) in scope, or a
-  later addition?
-- **Embedding routing**: reuse AgentMakefile's `embedding`/`hybrid` matcher for recall
-  — same cost-aware build-time/run-time split as the skill corpus.
+- **Unit granularity — one coherent topic per unit.** A unit ≈ a SKILL.md: one
+  routable subject, whose body may hold several related facts. Not one sentence per
+  unit (fragments routing), nor a catch-all file. Matches today's `MEMORY.md`
+  entries (`project_name_decision`, `skill_corpus`, `budget_protocol`).
+- **`kind: working` — deferred (not M1–M4).** Working memory is ephemeral, TTL'd,
+  not consolidated, and excluded from compile — a different lifecycle that does not
+  share the consolidation loop. First phase ships the three durable kinds
+  (procedural / semantic / episodic). The `kind` enum reserves `working`; its
+  semantics come later.
+- **Routing — keyword first, embedding / hybrid later.** The matcher already supports
+  all three; memory starts on keyword (zero build-time cost, deterministic,
+  testable). Add embedding / hybrid when the corpus is large enough to need semantic
+  recall — the cost principle (the embedding index is a build-time investment, paid
+  when it earns its keep).
+- **Manifest source of truth — the units.** `memory/*/SKILL.md` are the source;
+  `MemoryMakefile` and `MEMORY.md` are both compiled artifacts, never hand-edited.
 
 ## Out of scope (this spec)
 
