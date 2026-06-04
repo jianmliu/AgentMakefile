@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Set
+from typing import Any, Iterable, List, Optional, Set
 
 
 STOPWORDS = {
@@ -223,3 +223,53 @@ def _unique(values: Iterable[str]) -> List[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+
+
+# --- shared matching/scoring primitives (moved from selector.py) ---
+
+def _append_match_details(
+    details: List[dict],
+    seen: set,
+    candidates: Iterable[Any],
+    profile: RequestProfile,
+    *,
+    source: Optional[str],
+) -> None:
+    for candidate in _match_strings(candidates):
+        detail = match_term(profile, candidate)
+        if detail is None:
+            continue
+        key = (detail["term"], detail["method"])
+        if key in seen:
+            continue
+        seen.add(key)
+        if source is not None:
+            detail = dict(detail)
+            detail["source"] = source
+        details.append(detail)
+
+
+def _candidate_source_rank(match_details: List[dict]) -> int:
+    return min(_detail_source_rank(detail) for detail in match_details)
+
+
+def _detail_source_rank(detail: dict) -> int:
+    return 1 if "source" in detail else 0
+
+
+def _match_score(match_details: List[dict]) -> int:
+    if not match_details:
+        return 0
+    return max(detail["score"] for detail in match_details)
+
+
+def _match_strings(values: Iterable[Any]) -> Iterable[str]:
+    for value in values:
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, list):
+            yield from _match_strings(value)
+        elif isinstance(value, dict):
+            yield from _match_strings(value.values())
