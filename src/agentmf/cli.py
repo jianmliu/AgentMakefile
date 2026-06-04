@@ -714,7 +714,7 @@ def _serve(args: argparse.Namespace) -> int:
     from agentmf.serve import run_server
 
     root = Path(args.root)
-    print(f"agentmf serve — root={root} http://127.0.0.1:{args.port}", file=sys.stderr)
+    print(f"agentmf serve — root={root} http://0.0.0.0:{args.port}", file=sys.stderr)
     try:
         run_server(root, port=args.port, token=args.token)
     except KeyboardInterrupt:

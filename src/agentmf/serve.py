@@ -692,4 +692,4 @@ def run_server(root: Union[Path, str], port: int = 8787, token: Optional[str] = 
         def log_message(self, *args: Any) -> None:  # quiet
             pass
 
-    HTTPServer(("127.0.0.1", port), _Handler).serve_forever()
+    HTTPServer(("0.0.0.0", port), _Handler).serve_forever()
