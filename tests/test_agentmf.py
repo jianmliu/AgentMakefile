@@ -14598,3 +14598,54 @@ def test_scanned_memory_corpus_is_valid_and_routable(tmp_path: Path) -> None:
     plan = create_link_plan(makefile, request="token budget contract", matcher="keyword")
     assert not plan.diagnostics.has_errors
     assert "skill.budget_protocol" in plan.plan.get("selected_targets", [])
+
+
+def _scan_memory_corpus(tmp_path: Path) -> Path:
+    """Build a typed memory corpus on disk (semantic + procedural) and scan it
+    into a MemoryMakefile. Returns the makefile path."""
+    from aigg_memory import memory as mem
+    from agentmf.skill_scanner import render_agentmakefile_from_skill_dirs
+
+    def obs(slug, kind, desc, match, ev):
+        from aigg_memory import EvidenceRecord
+        return EvidenceRecord(1, "t", "observation", "f",
+                              {"slug": slug, "name": slug, "kind": kind, "description": desc, "match": match, "body": "note"},
+                              None, "h", ev)
+
+    records = [
+        obs("budget_protocol", "semantic", "token_budget contract", ["token budget", "cost contract"], "e1"),
+        obs("budget_protocol", "semantic", "token_budget contract", ["token budget", "cost contract"], "e2"),
+        obs("tdd_flow", "procedural", "red green refactor cycle", ["tdd", "test first"], "e3"),
+        obs("tdd_flow", "procedural", "red green refactor cycle", ["tdd", "test first"], "e4"),
+    ]
+    mem.consolidate_corpus(tmp_path, records, write=True)
+    makefile = tmp_path / "MemoryMakefile"
+    makefile.write_text(
+        render_agentmakefile_from_skill_dirs([tmp_path / "memory"], package_name="MemoryMakefile"),
+        encoding="utf-8",
+    )
+    return makefile
+
+
+def test_recall_memory_kind_filtered_and_kind_aware_rendering(tmp_path: Path) -> None:
+    """M5 read side: recall a task-scoped, kind-filtered bundle; render it
+    kind-aware (procedural -> actionable, declarative -> context line)."""
+    from agentmf.memory_recall import recall_memory
+
+    makefile = _scan_memory_corpus(tmp_path)
+
+    # kind filter: only semantic units come back for a budget query
+    semantic = recall_memory(makefile, request="token budget cost contract", kinds=["semantic"])
+    names = [u["name"] for u in semantic["units"]]
+    assert names and all(u["kind"] == "semantic" for u in semantic["units"])
+    assert "budget_protocol" in names and "tdd_flow" not in names
+    assert "## Facts" in semantic["bundle"] and "token_budget contract" in semantic["bundle"]
+
+    # procedural recall renders an actionable "apply" line, not a bare fact
+    procedural = recall_memory(makefile, request="tdd test first", kinds=["procedural"])
+    assert "tdd_flow" in [u["name"] for u in procedural["units"]]
+    assert "apply" in procedural["bundle"].lower()
+
+    # no kind filter -> kind-agnostic routing returns relevant units of any kind
+    both = recall_memory(makefile, request="tdd test first")
+    assert "tdd_flow" in [u["name"] for u in both["units"]]
