@@ -1,6 +1,6 @@
 # `agentmemory` — a domain-agnostic agent-memory kernel
 
-Status: design + Phase 1 landed. Date: 2026-06-04.
+Status: Phase 1 (kernel) + Phase 3 (markdown domain) landed. Date: 2026-06-04.
 
 ## Why
 
@@ -89,6 +89,32 @@ it does not know markdown from YAML. The caller maps documents ↔ files.
 The existing `create_*_payload` functions become thin adapters that build the
 AgentMakefile `Domain` and call the kernel — so the 16 evolution/dream tests and
 the `evo` CLI keep passing unchanged.
+
+## Markdown notebook domain (Phase 3 — landed)
+
+`agentmemory.markdown` is a real, usable agent-memory tool over the kernel,
+modelling the MEMORY.md index format (`- [Title](slug.md) — summary`) and the
+consolidate-memory operations:
+
+| operation | driven by | change type |
+| --- | --- | --- |
+| promote a repeatedly-observed fact into a new entry | evidence (≥N observations) | `add_entry` |
+| fix a stale summary | evidence (`outcome=correction`) | `update_summary` |
+| prune an obsolete entry | evidence (`outcome=obsolete`) | `prune_entry` |
+| merge duplicate index entries (keep richest summary) | the document itself | `merge_entries` |
+
+Gates: `unique_slugs`, `well_formed_index`. The orchestrator
+`markdown.consolidate(memory_text, records) -> ConsolidationResult` runs the
+whole loop purely (no file IO); the CLI adds the IO:
+
+```
+python -m agentmemory observe     --evidence E.jsonl --json '{"title":..,"slug":..,"summary":..}' [--outcome correction|obsolete]
+python -m agentmemory consolidate --memory MEMORY.md --evidence E.jsonl [--write]   # writes back only when all gates pass
+```
+
+This is the cold-start-free path: point `observe` at things the agent learns,
+`consolidate` folds them into MEMORY.md with validation, never overwriting on a
+failed gate.
 
 ## Out of scope (Phase 1)
 
