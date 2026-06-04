@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+
+from aigg_memory.memory import MemoryUnit, memory_domain, consolidate as _mem_consolidate
+from aigg_memory.store import EvidenceStore
 
 from agentmf.ask import create_ask_payload
 from agentmf.backends import SUPPORTED_BACKENDS
@@ -194,6 +197,206 @@ def _h_guidance_scan(body: dict, root: Path) -> Tuple[int, Envelope]:
     return _ok(data)
 
 
+# ---------------------------------------------------------------------------
+# Memory endpoints — typed agent-memory over aigg_memory.memory domain.
+#
+# A *corpus* is a directory (relative to root) that holds one sub-directory per
+# memory unit, each containing a SKILL.md file:
+#   <root>/<corpus>/<slug>/SKILL.md
+# An *evidence* path (relative to root) is the append-only JSONL store for
+# that corpus. Evidence is recorded online (observe); consolidation (Dream) is
+# an offline batch pass that promotes repeated observations into typed units.
+# ---------------------------------------------------------------------------
+
+_UNIT_SUFFIX = "/SKILL.md"
+_DEFAULT_CORPUS = "memory"
+_DOMAIN_PREFIX = "memory/"   # aigg_memory.memory.unit_path() always emits this prefix
+
+
+def _load_workspace(root: Path, corpus: str) -> Dict[str, str]:
+    """Load all SKILL.md files under corpus_dir, normalising workspace keys to the
+    domain's expected format (``memory/<slug>/SKILL.md``) regardless of the actual
+    corpus path on disk.  This lets serve handlers use any corpus directory with the
+    aigg_memory.memory domain unchanged."""
+    corpus_dir = root / corpus
+    if not corpus_dir.exists():
+        return {}
+    ws: Dict[str, str] = {}
+    for f in sorted(corpus_dir.glob("*/SKILL.md")):
+        slug = f.parent.name
+        key = f"{_DOMAIN_PREFIX}{slug}{_UNIT_SUFFIX}"   # domain-normalised key
+        ws[key] = f.read_text(encoding="utf-8")
+    return ws
+
+
+def _save_workspace(root: Path, corpus: str, workspace: Dict[str, str]) -> None:
+    """Write unit files back to disk, translating domain-normalised keys
+    (``memory/<slug>/SKILL.md``) to the real corpus location on disk."""
+    for key, content in workspace.items():
+        if not (key.startswith(_DOMAIN_PREFIX) and key.endswith(_UNIT_SUFFIX)):
+            continue
+        slug = Path(key).parent.name
+        target = root / corpus / slug / "SKILL.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+
+def _unit_summaries(workspace: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Extract a summary dict from every unit in the workspace."""
+    out = []
+    for path, content in sorted(workspace.items()):
+        if not path.endswith(_UNIT_SUFFIX):
+            continue
+        unit = MemoryUnit.from_text(content)
+        if not unit.name:
+            continue
+        out.append({
+            "path": path,
+            "name": unit.name,
+            "kind": unit.kind or "semantic",
+            "description": unit.frontmatter.get("description", ""),
+            "status": unit.frontmatter.get("status", "active"),
+            "observations": unit.frontmatter.get("observations", 1),
+            "confidence": unit.frontmatter.get("confidence", "medium"),
+            "match_terms": unit.match_terms,
+        })
+    return out
+
+
+def _keyword_select(workspace: Dict[str, str], request: str, n_best: int = 5,
+                    kinds: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+    """Keyword scan over match.user_intent — no agentmf import needed."""
+    req_lower = request.lower()
+    scored: List[Tuple[int, Dict[str, Any]]] = []
+    for path, content in workspace.items():
+        if not path.endswith(_UNIT_SUFFIX):
+            continue
+        unit = MemoryUnit.from_text(content)
+        if not unit.name:
+            continue
+        kind = unit.kind or "semantic"
+        if kinds and kind not in kinds:
+            continue
+        if unit.frontmatter.get("status") == "archived":
+            continue
+        terms = unit.match_terms
+        score = sum(1 for t in terms if t.lower() in req_lower)
+        if score > 0:
+            scored.append((score, {
+                "path": path,
+                "name": unit.name,
+                "kind": kind,
+                "description": unit.frontmatter.get("description", ""),
+                "body": unit.body.strip(),
+                "match_terms": terms,
+                "score": score,
+            }))
+    scored.sort(key=lambda x: -x[0])
+    return [item for _, item in scored[:n_best]]
+
+
+def _h_memory_observe(body: dict, root: Path) -> Tuple[int, Envelope]:
+    """Record one observation into the evidence store (online, cheap).
+    Body: { corpus?, evidence, source?, payload, outcome? }"""
+    evidence_path = body.get("evidence")
+    if not evidence_path:
+        return _err("AM_MEM_400", "evidence path required")
+    source = body.get("source", "observation")
+    payload = body.get("payload")
+    if not isinstance(payload, dict):
+        return _err("AM_MEM_400", "payload must be a JSON object")
+    outcome = body.get("outcome")
+
+    ev_abs = root / evidence_path
+    domain = memory_domain()
+    store = EvidenceStore(ev_abs, domain=domain)
+    try:
+        record = store.record(source, payload, outcome=outcome)
+    except Exception as exc:
+        return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
+    return _ok(record.to_dict())
+
+
+def _h_memory_consolidate(body: dict, root: Path) -> Tuple[int, Envelope]:
+    """Offline consolidation (Dream): promote repeated observations into typed
+    units, merge duplicates, archive obsolete. Gates block promotion on failures.
+    Body: { corpus?, evidence, write? }"""
+    evidence_path = body.get("evidence")
+    if not evidence_path:
+        return _err("AM_MEM_400", "evidence path required")
+    corpus = body.get("corpus", _DEFAULT_CORPUS)
+    write = bool(body.get("write", False))
+
+    ev_abs = root / evidence_path
+    domain = memory_domain()
+    store = EvidenceStore(ev_abs, domain=domain)
+    try:
+        records = store.load()
+        workspace = _load_workspace(root, corpus)
+        result = _mem_consolidate(workspace, records, domain=domain)
+    except Exception as exc:
+        return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
+
+    written = False
+    if write and result.gates_ok and result.new_workspace != workspace:
+        _save_workspace(root, corpus, result.new_workspace)
+        written = True
+
+    data: Dict[str, Any] = {
+        "proposals": [p.to_dict() for p in result.proposals],
+        "gates": [{"name": g.name, "passed": g.passed, "detail": g.detail} for g in result.gates],
+        "gates_ok": result.gates_ok,
+        "diffs": result.patch.diffs,
+        "diagnostics": result.patch.diagnostics.to_list(),
+        "written": written,
+        "units_after": _unit_summaries(result.new_workspace),
+    }
+    status = 200 if result.gates_ok else 422
+    return status, {"ok": result.gates_ok, "diagnostics": [], "data": data}
+
+
+def _h_memory_select(body: dict, root: Path) -> Tuple[int, Envelope]:
+    """Keyword retrieval of relevant memory units for a request (online, cheap).
+    Body: { corpus?, request, n_best?, kinds? }"""
+    request = body.get("request", "")
+    corpus = body.get("corpus", _DEFAULT_CORPUS)
+    n_best = int(body.get("n_best", 5))
+    kinds: Optional[List[str]] = body.get("kinds")
+
+    workspace = _load_workspace(root, corpus)
+    try:
+        units = _keyword_select(workspace, request, n_best=n_best, kinds=kinds)
+    except Exception as exc:
+        return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
+
+    # kind-aware bundle for direct context injection into a prompt
+    bundle_lines: List[str] = []
+    for kind_label, kind_key in [("## Procedures", "procedural"), ("## Facts", "semantic"),
+                                  ("## History", "episodic")]:
+        group = [u for u in units if u["kind"] == kind_key]
+        if group:
+            bundle_lines.append(kind_label)
+            for u in group:
+                prefix = f"- apply `{u['name']}` — " if kind_key == "procedural" else "- "
+                bundle_lines.append(prefix + (u["body"] or u["description"]))
+            bundle_lines.append("")
+    bundle = "\n".join(bundle_lines).rstrip("\n") + "\n" if bundle_lines else ""
+
+    return _ok({"units": units, "bundle": bundle, "total_in_corpus": len(workspace)})
+
+
+def _h_memory_units(body: dict, root: Path) -> Tuple[int, Envelope]:
+    """List all (non-archived) typed units in a corpus.
+    Body / query: { corpus? }"""
+    corpus = body.get("corpus", _DEFAULT_CORPUS)
+    workspace = _load_workspace(root, corpus)
+    return _ok({
+        "corpus": corpus,
+        "units": _unit_summaries(workspace),
+        "total": sum(1 for p in workspace if p.endswith(_UNIT_SUFFIX)),
+    })
+
+
 _ROUTES = {
     ("GET", "/healthz"): _h_healthz,
     ("GET", "/backends"): _h_backends,
@@ -207,6 +410,11 @@ _ROUTES = {
     ("POST", "/exec"): _h_exec,
     ("POST", "/compile"): _h_compile,
     ("POST", "/guidance/scan"): _h_guidance_scan,
+    # --- typed agent-memory (aigg_memory.memory domain) ---
+    ("POST", "/memory/observe"): _h_memory_observe,
+    ("POST", "/memory/consolidate"): _h_memory_consolidate,
+    ("POST", "/memory/select"): _h_memory_select,
+    ("POST", "/memory/units"): _h_memory_units,
 }
 
 
