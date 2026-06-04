@@ -11,6 +11,8 @@ from typing import Any, Dict, Optional, Union
 
 import yaml
 
+from agentmemory import Domain as _AmDomain
+from agentmemory import run_dream as _am_run_dream
 from agentmf.diagnostics import Diagnostics
 from agentmf.evolution import (
     DREAM_CATEGORY_RESPLIT_THRESHOLD,
@@ -47,37 +49,25 @@ def create_dream_mode_payload(
     diagnostics = Diagnostics()
     evidence_root = Path(evidence_dir)
     evidence_files = sorted(evidence_root.glob("**/*.jsonl"))
-    proposals = []
-    proposals.extend(
-        _dream_openclaw_duplicates(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_recurring_routing_gaps(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_missing_match_terms(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_drifted_permissions(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_trust_annotation(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_heavy_tool_warning(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_benchmark_case_suggester(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_category_resplit(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_low_signal_terms(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
-    proposals.extend(
-        _dream_corpus_wide_low_signal_terms(evidence_files, out_dir, timestamp, write, diagnostics)
-    )
+
+    # The dream detectors share a uniform signature and are run in a fixed order,
+    # concatenating their proposals — exactly the agentmemory kernel's run_dream
+    # dispatch. Each detector is bound as a kernel detector over the evidence
+    # files; the dict shapes and order are preserved byte-for-byte.
+    detectors = [
+        lambda files: _dream_openclaw_duplicates(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_recurring_routing_gaps(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_missing_match_terms(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_drifted_permissions(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_trust_annotation(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_heavy_tool_warning(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_benchmark_case_suggester(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_category_resplit(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_low_signal_terms(files, out_dir, timestamp, write, diagnostics),
+        lambda files: _dream_corpus_wide_low_signal_terms(files, out_dir, timestamp, write, diagnostics),
+    ]
+    proposals = _am_run_dream(_AmDomain(name="agentmakefile-dream", detectors=detectors), evidence_files)
+
     if diagnostics.has_errors:
         return DreamModeResult(diagnostics)
     return DreamModeResult(

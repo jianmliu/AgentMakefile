@@ -1,7 +1,7 @@
 # `agentmemory` — a domain-agnostic agent-memory kernel
 
-Status: Phase 1 (kernel) + Phase 3 (markdown domain) + Phase 2a/2b (AMF primitive
-+ persistence delegation) landed. Date: 2026-06-04.
+Status: Phase 1 (kernel) + Phase 3 (markdown domain) + Phase 2a/2b/2c (AMF
+primitive + persistence + dream-dispatch delegation) landed. Date: 2026-06-04.
 
 ## Why
 
@@ -154,10 +154,29 @@ write. AMF's *load* stays AMF-side on purpose: it emits per-line `AMF223`
 diagnostics (file + line context) that are domain-specific error reporting, not
 generic parsing. 348 tests pass.
 
-**Phase 2c (not yet).** The remaining deeper delegation — the proposal/patch
-dispatch and the dream-detector dispatch — needs the kernel to absorb AMF's exact
-diff format and proposal schema under the same byte-identical, verify-green
-discipline. Staged as a small, reversible slice rather than one risky rewrite.
+**Phase 2c (landed) — dream dispatch.** AMF's 10 dream detectors share a uniform
+signature and run in a fixed order, concatenating proposals — exactly the kernel's
+`run_dream`. They are now bound as kernel detectors over the evidence files and
+dispatched through `run_dream`; the dict shapes and order are preserved
+byte-for-byte (the 14 dream tests, which assert exact proposals/order, all pass).
+`run_dream` concatenates whatever its detectors return, so AMF's dict-shaped
+proposals flow through unchanged — the kernel's dispatch did not need to know
+AMF's proposal schema.
+
+**Boundary: the patch dispatch stays AMF-side (by design, not as a TODO).**
+AMF's patch appliers are multi-file YAML workspace mutations rendering per-file
+diffs; the kernel's `generate_patch` is single in-memory-document → one diff.
+Delegating would force the kernel to absorb AMF's YAML/multi-file/diff model —
+architecturally backwards — or rewrite AMF's appliers and break the byte-locked
+tests. This is the correct seam: **shared mechanism** (primitives, persistence,
+dispatch loops) lives in the kernel; **domain semantics** (how a patch edits a
+YAML target, what a diff looks like) stay in the domain. The kernel's
+`generate_patch` is already exercised by the markdown domain (Phase 3), proving
+the patch dispatch works for domains shaped to it.
+
+Decision ② is therefore satisfied at the right boundary: AgentMakefile depends on
+the kernel for hashing, redaction, persistence, and dream dispatch, while keeping
+its byte-locked domain semantics.
 
 ## Out of scope (Phase 1)
 
