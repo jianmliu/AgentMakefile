@@ -12,7 +12,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-from aigg_memory.memory import MemoryUnit, memory_domain, consolidate as _mem_consolidate
+from aigg_memory.memory import (
+    MemoryUnit,
+    consolidate_corpus as _mem_consolidate_corpus,
+    load_corpus as _mem_load_corpus,
+    memory_domain,
+)
 from aigg_memory.store import EvidenceStore
 
 from agentmf.ask import create_ask_payload
@@ -210,35 +215,10 @@ def _h_guidance_scan(body: dict, root: Path) -> Tuple[int, Envelope]:
 
 _UNIT_SUFFIX = "/SKILL.md"
 _DEFAULT_CORPUS = "memory"
-_DOMAIN_PREFIX = "memory/"   # aigg_memory.memory.unit_path() always emits this prefix
 
-
-def _load_workspace(root: Path, corpus: str) -> Dict[str, str]:
-    """Load all SKILL.md files under corpus_dir, normalising workspace keys to the
-    domain's expected format (``memory/<slug>/SKILL.md``) regardless of the actual
-    corpus path on disk.  This lets serve handlers use any corpus directory with the
-    aigg_memory.memory domain unchanged."""
-    corpus_dir = root / corpus
-    if not corpus_dir.exists():
-        return {}
-    ws: Dict[str, str] = {}
-    for f in sorted(corpus_dir.glob("*/SKILL.md")):
-        slug = f.parent.name
-        key = f"{_DOMAIN_PREFIX}{slug}{_UNIT_SUFFIX}"   # domain-normalised key
-        ws[key] = f.read_text(encoding="utf-8")
-    return ws
-
-
-def _save_workspace(root: Path, corpus: str, workspace: Dict[str, str]) -> None:
-    """Write unit files back to disk, translating domain-normalised keys
-    (``memory/<slug>/SKILL.md``) to the real corpus location on disk."""
-    for key, content in workspace.items():
-        if not (key.startswith(_DOMAIN_PREFIX) and key.endswith(_UNIT_SUFFIX)):
-            continue
-        slug = Path(key).parent.name
-        target = root / corpus / slug / "SKILL.md"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+# Corpus file IO is owned by aigg_memory.memory; serve reuses it (single
+# implementation). _mem_load_corpus / _mem_consolidate_corpus take a `corpus`
+# directory and key the workspace by the domain convention (memory/<slug>/SKILL.md).
 
 
 def _unit_summaries(workspace: Dict[str, str]) -> List[Dict[str, Any]]:
@@ -332,23 +312,19 @@ def _h_memory_consolidate(body: dict, root: Path) -> Tuple[int, Envelope]:
     store = EvidenceStore(ev_abs, domain=domain)
     try:
         records = store.load()
-        workspace = _load_workspace(root, corpus)
-        result = _mem_consolidate(workspace, records, domain=domain)
+        corpus_result = _mem_consolidate_corpus(root, records, write=write, corpus=corpus, domain=domain)
     except Exception as exc:
         return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
 
-    written = False
-    if write and result.gates_ok and result.new_workspace != workspace:
-        _save_workspace(root, corpus, result.new_workspace)
-        written = True
-
+    result = corpus_result.consolidation
     data: Dict[str, Any] = {
         "proposals": [p.to_dict() for p in result.proposals],
         "gates": [{"name": g.name, "passed": g.passed, "detail": g.detail} for g in result.gates],
         "gates_ok": result.gates_ok,
         "diffs": result.patch.diffs,
         "diagnostics": result.patch.diagnostics.to_list(),
-        "written": written,
+        "written": corpus_result.written,
+        "removed": corpus_result.removed,
         "units_after": _unit_summaries(result.new_workspace),
     }
     status = 200 if result.gates_ok else 422
@@ -363,7 +339,7 @@ def _h_memory_select(body: dict, root: Path) -> Tuple[int, Envelope]:
     n_best = int(body.get("n_best", 5))
     kinds: Optional[List[str]] = body.get("kinds")
 
-    workspace = _load_workspace(root, corpus)
+    workspace = _mem_load_corpus(root, corpus)
     try:
         units = _keyword_select(workspace, request, n_best=n_best, kinds=kinds)
     except Exception as exc:
@@ -389,7 +365,7 @@ def _h_memory_units(body: dict, root: Path) -> Tuple[int, Envelope]:
     """List all (non-archived) typed units in a corpus.
     Body / query: { corpus? }"""
     corpus = body.get("corpus", _DEFAULT_CORPUS)
-    workspace = _load_workspace(root, corpus)
+    workspace = _mem_load_corpus(root, corpus)
     return _ok({
         "corpus": corpus,
         "units": _unit_summaries(workspace),

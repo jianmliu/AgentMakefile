@@ -286,24 +286,33 @@ def consolidate(workspace: Dict[str, str], records: List, domain: Optional[Domai
 
 # --- file-backed corpus (the on-disk memory/ directory) -------------------
 
-def load_corpus(root: Union[str, Path]) -> Dict[str, str]:
-    """Read all `memory/<slug>/SKILL.md` under `root` into a workspace keyed by
-    paths relative to `root` (matching the appliers' path convention)."""
+def _disk_path(root: Path, corpus: str, key: str) -> Path:
+    """A workspace key is always domain-normalised (`memory/<slug>/SKILL.md`); on
+    disk the unit lives under `root/<corpus>/<slug>/SKILL.md`."""
+    slug = Path(key).parent.name
+    return root / corpus / slug / "SKILL.md"
+
+
+def load_corpus(root: Union[str, Path], corpus: str = "memory") -> Dict[str, str]:
+    """Read all `<corpus>/<slug>/SKILL.md` under `root` into a workspace keyed by
+    the domain path convention (`memory/<slug>/SKILL.md`), regardless of the
+    on-disk corpus directory."""
     root = Path(root)
     workspace: Dict[str, str] = {}
-    for path in sorted((root / "memory").glob("*/SKILL.md")):
-        workspace[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+    for path in sorted((root / corpus).glob("*/SKILL.md")):
+        workspace[unit_path(path.parent.name)] = path.read_text(encoding="utf-8")
     return workspace
 
 
-def write_corpus(root: Union[str, Path], workspace: Dict[str, str], only: Optional[List[str]] = None) -> List[str]:
+def write_corpus(root: Union[str, Path], workspace: Dict[str, str], corpus: str = "memory",
+                 only: Optional[List[str]] = None) -> List[str]:
     root = Path(root)
     written: List[str] = []
-    for rel in (only if only is not None else list(workspace)):
-        full = root / rel
-        full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(workspace[rel], encoding="utf-8")
-        written.append(rel)
+    for key in (only if only is not None else list(workspace)):
+        disk = _disk_path(root, corpus, key)
+        disk.parent.mkdir(parents=True, exist_ok=True)
+        disk.write_text(workspace[key], encoding="utf-8")
+        written.append(key)
     return written
 
 
@@ -319,20 +328,20 @@ class CorpusConsolidationResult:
 
 
 def consolidate_corpus(root: Union[str, Path], records: List, write: bool = False,
-                       domain: Optional[Domain] = None) -> CorpusConsolidationResult:
-    """Load the on-disk `memory/` corpus, consolidate from evidence, and (when
+                       corpus: str = "memory", domain: Optional[Domain] = None) -> CorpusConsolidationResult:
+    """Load the on-disk `<corpus>/` corpus, consolidate from evidence, and (when
     `write` and every gate passes) write changed unit files back, deleting any
     merged-away units. Returns the changed/removed paths."""
     root = Path(root)
-    before = load_corpus(root)
+    before = load_corpus(root, corpus)
     result = consolidate(before, records, domain=domain)
     written: List[str] = []
     removed: List[str] = []
     if write and result.gates_ok:
         after = result.new_workspace
-        changed = sorted(rel for rel, content in after.items() if before.get(rel) != content)
-        written = write_corpus(root, after, only=changed)
-        removed = sorted(rel for rel in before if rel not in after)
-        for rel in removed:
-            (root / rel).unlink(missing_ok=True)
+        changed = sorted(key for key, content in after.items() if before.get(key) != content)
+        written = write_corpus(root, after, corpus=corpus, only=changed)
+        removed = sorted(key for key in before if key not in after)
+        for key in removed:
+            _disk_path(root, corpus, key).unlink(missing_ok=True)
     return CorpusConsolidationResult(consolidation=result, written=written, removed=removed)

@@ -71,6 +71,26 @@ Each POST body is a JSON object; omitted fields use the function defaults.
 | `POST /validate` | `{}` | validation diagnostics for the root source | loader validation |
 | `POST /guidance/scan` | `{files:[paths]}` | scanned SKILL.md / AGENTS.md / CLAUDE.md / markdown → importable guidance | `scan_guidance_files` |
 
+### Typed agent-memory (POST) — over the `aigg_memory.memory` domain
+
+A **corpus** is a directory (relative to `root`) of `<corpus>/<slug>/SKILL.md`
+typed memory units; **evidence** is its append-only JSONL store. The write side
+runs through `aigg_memory.memory` (the corpus file IO + consolidation are owned
+there; serve reuses them — one implementation). The read side (`/memory/select`)
+is a self-contained keyword scan over the corpus, so it needs no scanned
+`MemoryMakefile`.
+
+| Method · Path | Body (key fields) | Returns (`data`) | Notes |
+| --- | --- | --- | --- |
+| `POST /memory/observe` | `{evidence, payload, source?, outcome?}` | the recorded evidence record (`event_id`, `summary`, …) | **online / cheap** — one observation appended; `outcome` ∈ `correction\|obsolete` |
+| `POST /memory/consolidate` | `{evidence, corpus?, write?}` | `{proposals, gates, gates_ok, diffs, written:[paths], removed:[paths], units_after}` | **offline (Dream)** — promote repeated obs → typed units (kind-aware: procedural→`candidate`, declarative→`active`); writes only when `write` and every gate passes; `422` if a gate fails. Mirrors the CLI `consolidate-corpus`. |
+| `POST /memory/select` | `{request, corpus?, n_best?, kinds?}` | `{units:[{name,kind,description,body,match_terms,score}], bundle, total_in_corpus}` | **online / cheap** — keyword recall over `match.user_intent`; archived units excluded; `bundle` is the kind-aware context (procedural→`apply …`, declarative→fact line) |
+| `POST /memory/units` | `{corpus?}` | `{corpus, units:[summaries], total}` | list non-archived unit summaries |
+
+`corpus` defaults to `memory`; it may be nested (e.g. `npcs/<id>/memory`), which
+makes per-agent / per-entity memory stores trivial. `written`/`removed` are path
+lists (aligned with the CLI), not booleans.
+
 ### Pricing & budget
 
 `pricing_table` (path) and the budget knobs (`budget`, `token_budget`,
