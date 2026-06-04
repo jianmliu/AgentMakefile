@@ -14649,3 +14649,27 @@ def test_recall_memory_kind_filtered_and_kind_aware_rendering(tmp_path: Path) ->
     # no kind filter -> kind-agnostic routing returns relevant units of any kind
     both = recall_memory(makefile, request="tdd test first")
     assert "tdd_flow" in [u["name"] for u in both["units"]]
+
+
+def test_memory_md_backend_renders_kind_aware(tmp_path: Path) -> None:
+    """Per-kind compile rendering: the memory-md backend compiles the whole typed
+    corpus into one MEMORY.md — procedural as actionable, declarative as facts."""
+    from agentmf.backends import SUPPORTED_BACKENDS
+    from agentmf.diagnostics import Diagnostics
+    from agentmf.ir import normalize
+    from agentmf.loader import load_source_with_diagnostics
+
+    makefile = _scan_memory_corpus(tmp_path)
+    source, _diags = load_source_with_diagnostics(makefile)
+    ir = normalize(source, Diagnostics())
+
+    assert "memory-md" in SUPPORTED_BACKENDS
+    files = SUPPORTED_BACKENDS["memory-md"].emit(ir)
+    assert len(files) == 1 and files[0].path == "MEMORY.md"
+    content = files[0].content
+
+    assert "## Procedures (apply)" in content
+    assert "apply `tdd_flow`" in content              # procedural -> actionable
+    assert "## Facts" in content
+    assert "token_budget contract" in content         # semantic -> fact line
+    assert "apply `budget_protocol`" not in content   # semantic NOT rendered as apply

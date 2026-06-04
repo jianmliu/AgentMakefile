@@ -190,6 +190,21 @@ class TargetFragmentBackend(Backend):
         return files
 
 
+class MemoryMarkdownBackend(Backend):
+    """Compile a typed memory corpus into one MEMORY.md, rendered per kind:
+    procedural units become actionable `apply` lines; semantic/episodic units
+    become context/fact lines. Reads `IRSkill.kind` (carried by the scanner)."""
+
+    name = "memory-md"
+    capabilities = BackendCapabilities(markdown=True)
+
+    def emit(self, ir: AgentRuleIR) -> List[GeneratedFile]:
+        artifact = ir.artifacts.get(self.name)
+        path = artifact.path if artifact and artifact.path else "MEMORY.md"
+        managed_block = artifact.managed_block if artifact else True
+        return [GeneratedFile(path=path, content=render_memory_markdown(ir), backend=self.name, managed_block=managed_block)]
+
+
 SUPPORTED_BACKENDS: Dict[str, Backend] = {
     "claude-md": ClaudeMarkdownBackend(),
     "agents-md": AgentsMarkdownBackend(),
@@ -199,6 +214,7 @@ SUPPORTED_BACKENDS: Dict[str, Backend] = {
     "skills-index": SkillsIndexBackend(),
     "claude-code": ClaudeCodeBackend(),
     "opencode": OpenCodeBackend(),
+    "memory-md": MemoryMarkdownBackend(),
     "agents-fragments": TargetFragmentBackend("agents-fragments", "agents", "Generic Coding Agents"),
     "claude-fragments": TargetFragmentBackend("claude-fragments", "claude", "Claude Code"),
 }
@@ -235,6 +251,44 @@ def render_cursor_rule(ir: AgentRuleIR, frontmatter: Dict[str, Any]) -> str:
         rendered = "true" if value is True else "false" if value is False else str(value)
         lines.append(f"{key}: {rendered}")
     lines.extend(["---", "", render_markdown(ir, "Cursor")])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+_MEMORY_KIND_ORDER = ["procedural", "semantic", "episodic", "working"]
+_MEMORY_KIND_LABELS = {
+    "procedural": "## Procedures (apply)",
+    "semantic": "## Facts",
+    "episodic": "## History",
+    "working": "## Scratch",
+}
+
+
+def render_memory_markdown(ir: AgentRuleIR) -> str:
+    """Kind-aware compile rendering of the typed memory corpus into one MEMORY.md."""
+    lines = [
+        f"# {_title(ir, 'Memory')}",
+        "",
+        "Generated from AgentMakefile. Keep project-specific edits outside this managed block.",
+        "",
+    ]
+    by_kind: Dict[str, List[IRSkill]] = {}
+    for skill in _unique_skills(ir.skills):
+        by_kind.setdefault(skill.kind or "semantic", []).append(skill)
+
+    ordered_kinds = _MEMORY_KIND_ORDER + sorted(k for k in by_kind if k not in _MEMORY_KIND_ORDER)
+    for kind in ordered_kinds:
+        group = by_kind.get(kind)
+        if not group:
+            continue
+        lines.append(_MEMORY_KIND_LABELS.get(kind, f"## {kind.title()}"))
+        lines.append("")
+        for skill in group:
+            description = skill.description or skill.qualified_name
+            if kind == "procedural":
+                lines.append(f"- apply `{skill.qualified_name}` — {description}")
+            else:
+                lines.append(f"- {description}")
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

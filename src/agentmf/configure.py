@@ -73,6 +73,10 @@ _BACKEND_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
         "description": "OpenCode config (agents + permissions, hard enforcement).",
         "default_output": "opencode.json",
     },
+    "memory-md": {
+        "description": "Typed memory corpus compiled to one MEMORY.md, rendered per kind.",
+        "default_output": "MEMORY.md",
+    },
     "agents-fragments": {
         "description": "Per-target Markdown fragments for generic agents (runtime injection).",
         "default_output": ".agentmf/fragments/agents/<target>.md",
