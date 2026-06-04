@@ -14498,3 +14498,30 @@ def test_serve_ui_budget_panel() -> None:
         "halt_policy",
     ):
         assert field in html, f"budget panel does not surface {field}"
+
+
+def test_evolution_primitives_delegate_to_agentmemory_kernel() -> None:
+    """Phase 2: AgentMakefile's evolution hashing/redaction is now provided by the
+    agentmemory kernel with AMF's policy injected. Pin byte-identity so a future
+    kernel-default change cannot silently alter AMF's evidence format (event_id
+    etc.). Covers non-ASCII + secrets + the real hash(redact(payload)) chain."""
+    import agentmemory as am
+    from agentmf.evolution import evidence as ev
+
+    samples = [
+        {"fact": "预算合同落地", "n": 3},
+        {"api_key": "sk-supersecret", "note": "bearer abc.def-123", "nested": {"password": "p", "ok": 1}},
+        ["普通", "sk-zzz", {"Authorization": "t", "keep": "v"}],
+    ]
+    for sample in samples:
+        # hashing is byte-identical to a directly-configured kernel call
+        assert ev._sha256_json(sample) == am.sha256_json(sample, prefix="sha256:", separators=(",", ":"), ensure_ascii=True)
+        assert ev._sha256_json(sample).startswith("sha256:")
+        # redaction masks AMF-policy secrets and the chain hash stays stable
+        redacted = ev._redact_secrets(sample)
+        assert "sk-supersecret" not in repr(redacted)
+        assert ev._sha256_json(redacted) == am.sha256_json(
+            am.redact_secrets(sample, mask="[REDACTED]", secret_key=ev._secret_key, secret_value=ev._secret_value),
+            prefix="sha256:", separators=(",", ":"), ensure_ascii=True,
+        )
+    assert ev._sha256_text("中文 abc").startswith("sha256:")

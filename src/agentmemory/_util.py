@@ -8,7 +8,7 @@ import datetime as _dt
 import hashlib
 import json
 import re
-from typing import Any
+from typing import Any, Callable, Optional
 
 _MASK = "«redacted»"
 _SECRET_KEY = re.compile(r"(secret|token|api[_-]?key|password|passwd|authorization|bearer|private[_-]?key)", re.I)
@@ -20,13 +20,16 @@ def utc_now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
-def sha256_json(obj: Any) -> str:
-    """Stable hash of any JSON-able object."""
-    return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")).hexdigest()
+def sha256_json(obj: Any, *, prefix: str = "", separators=None, ensure_ascii: bool = False) -> str:
+    """Stable hash of any JSON-able object. The serialization knobs let a
+    consumer (e.g. AgentMakefile) reproduce a byte-identical legacy format:
+    ``sha256_json(v, prefix="sha256:", separators=(",", ":"), ensure_ascii=True)``."""
+    encoded = json.dumps(obj, sort_keys=True, separators=separators, default=str, ensure_ascii=ensure_ascii)
+    return prefix + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def sha256_text(text: str, *, prefix: str = "") -> str:
+    return prefix + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def fingerprint(obj: Any) -> str:
@@ -34,19 +37,38 @@ def fingerprint(obj: Any) -> str:
     return sha256_json(obj)
 
 
-def redact_secrets(value: Any) -> Any:
-    """Deep-copy a structure, masking secret-looking keys and token-looking
-    string values. Ordinary values are preserved."""
-    if isinstance(value, dict):
-        out = {}
-        for key, item in value.items():
-            if isinstance(key, str) and _SECRET_KEY.search(key):
-                out[key] = _MASK
-            else:
-                out[key] = redact_secrets(item)
-        return out
-    if isinstance(value, list):
-        return [redact_secrets(v) for v in value]
-    if isinstance(value, str):
-        return _TOKEN_VALUE.sub(_MASK, value)
-    return value
+def _default_secret_key(key: str) -> bool:
+    return bool(_SECRET_KEY.search(key))
+
+
+def _default_secret_value(value: str) -> bool:
+    return bool(_TOKEN_VALUE.search(value))
+
+
+def redact_secrets(
+    value: Any,
+    *,
+    mask: str = _MASK,
+    secret_key: Optional[Callable[[str], bool]] = None,
+    secret_value: Optional[Callable[[str], bool]] = None,
+) -> Any:
+    """Deep-copy a structure, masking secret-looking dict keys and secret-looking
+    string values (whole-value replacement). Predicates and mask are injectable so
+    a consumer can reproduce a legacy redaction policy byte-for-byte."""
+    key_pred = secret_key or _default_secret_key
+    value_pred = secret_value or _default_secret_value
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            out = {}
+            for key, item in node.items():
+                key_text = str(key)
+                out[key_text] = mask if key_pred(key_text) else walk(item)
+            return out
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        if isinstance(node, str):
+            return mask if value_pred(node) else node
+        return node
+
+    return walk(value)

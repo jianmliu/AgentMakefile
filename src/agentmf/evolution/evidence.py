@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from agentmf.diagnostics import Diagnostics
+from agentmemory import redact_secrets as _am_redact_secrets
+from agentmemory import sha256_json as _am_sha256_json
+from agentmemory import sha256_text as _am_sha256_text
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
-import hashlib
 import json
 import re
 
@@ -240,20 +242,9 @@ def _selection_trace_hash(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _redact_secrets(value: Any) -> Any:
-    if isinstance(value, dict):
-        redacted = {}
-        for key, item in value.items():
-            key_text = str(key)
-            if _secret_key(key_text):
-                redacted[key_text] = "[REDACTED]"
-            else:
-                redacted[key_text] = _redact_secrets(item)
-        return redacted
-    if isinstance(value, list):
-        return [_redact_secrets(item) for item in value]
-    if isinstance(value, str) and _secret_value(value):
-        return "[REDACTED]"
-    return value
+    # Delegates to the agentmemory kernel with AgentMakefile's policy injected,
+    # so the redaction is byte-identical to the legacy implementation.
+    return _am_redact_secrets(value, mask="[REDACTED]", secret_key=_secret_key, secret_value=_secret_value)
 
 
 def _secret_key(key: str) -> bool:
@@ -283,12 +274,12 @@ def _secret_value(value: str) -> bool:
 
 
 def _sha256_json(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    # Delegates to the agentmemory kernel; the knobs reproduce the legacy bytes.
+    return _am_sha256_json(value, prefix="sha256:", separators=(",", ":"), ensure_ascii=True)
 
 
 def _sha256_text(value: str) -> str:
-    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return _am_sha256_text(value, prefix="sha256:")
 
 
 def _utc_now() -> str:

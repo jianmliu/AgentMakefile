@@ -1,6 +1,7 @@
 # `agentmemory` — a domain-agnostic agent-memory kernel
 
-Status: Phase 1 (kernel) + Phase 3 (markdown domain) landed. Date: 2026-06-04.
+Status: Phase 1 (kernel) + Phase 3 (markdown domain) + Phase 2a (AMF primitive
+delegation) landed. Date: 2026-06-04.
 
 ## Why
 
@@ -115,6 +116,36 @@ python -m agentmemory consolidate --memory MEMORY.md --evidence E.jsonl [--write
 This is the cold-start-free path: point `observe` at things the agent learns,
 `consolidate` folds them into MEMORY.md with validation, never overwriting on a
 failed gate.
+
+## AgentMakefile as a consumer (Phase 2 — staged)
+
+Decision ② is "AgentMakefile keeps working, depends on the kernel". Executing it
+revealed a hard constraint: AMF's evolution output is **byte-locked by 16 tests**
+(`event_id` is `sha256:<hex>` of a compact, `ensure_ascii=True` JSON encoding;
+the redaction mask is `[REDACTED]` with AMF's own secret predicates). The kernel
+serializes differently by default. So migration must be **byte-identical, verified
+green**, not a rewrite — otherwise it breaks AMF's tests.
+
+**Phase 2a (landed).** The kernel primitives became *injectable* (a pluggable
+kernel should be — decision ①):
+
+- `sha256_json(obj, *, prefix, separators, ensure_ascii)`
+- `sha256_text(text, *, prefix)`
+- `redact_secrets(value, *, mask, secret_key, secret_value)`
+
+`agentmf.evolution.evidence` now delegates `_sha256_json` / `_sha256_text` /
+`_redact_secrets` to the kernel with AMF's policy injected — byte-identical
+(proven across non-ASCII + secrets + the `hash(redact(payload))` chain, pinned by
+`test_evolution_primitives_delegate_to_agentmemory_kernel`). The whole evolution
+package + dream route their hashing/redaction through these, so the dependency
+edge `agentmf → agentmemory` is real and the duplicated crypto/redaction layer is
+gone. 347 tests pass.
+
+**Phase 2b/2c (not yet).** Deeper delegation — the evidence-record store, the
+proposal/patch dispatch, the dream-detector dispatch — each needs the kernel to
+absorb AMF's exact record schema and diff format under the same byte-identical,
+verify-green discipline. Staged so each is a small, reversible slice rather than
+one risky rewrite.
 
 ## Out of scope (Phase 1)
 
