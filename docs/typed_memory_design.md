@@ -297,7 +297,9 @@ closing the deep unification deferred at Phase 2c.
   domains, the two test files, the kernel design doc). Verified in a clean venv:
   installs with **only PyYAML** (no `agentmf`, no numpy/pydantic), the 20 tests
   pass, the `aigg-memory` console script registers. **Published** at
-  <https://github.com/jianmliu/aigg-memory>. Remaining: cut AgentMakefile over to
-  depend on the published package (PyPI or a git/path install) and delete the
-  in-tree copy. Until then the in-tree `src/aigg_memory/` stays the working source
-  and the standalone repo is generated from it.
+  <https://github.com/jianmliu/aigg-memory>. **Cutover done:** AgentMakefile now
+  depends on the package (`aigg-memory @ git+…@v0.1.0` in `pyproject`) and the
+  in-tree `src/aigg_memory/` + its standalone tests are removed; `agentmf`
+  (evolution / dream / serve / recall) imports the external package. The
+  domain-agnostic kernel is fully severed — a separate library AgentMakefile
+  consumes.

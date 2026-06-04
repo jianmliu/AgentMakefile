@@ -40,9 +40,10 @@ where the domain-specific pieces are *plugins*. AgentMakefile becomes one domain
 3. **In-tree isolated package.** `src/aigg_memory/` imports nothing from
    `agentmf`. Enforced by a test that scans the package source. **Phase 4
    (done):** extracted + **published** at <https://github.com/jianmliu/aigg-memory>
-   — installs in a clean venv with only PyYAML, all tests pass, no `agentmf`. The
-   AgentMakefile cutover (depend on the package, drop the in-tree copy) is the
-   remaining step; until then the in-tree copy is the working source.
+   — installs in a clean venv with only PyYAML, all tests pass, no `agentmf`.
+   **Cutover done:** AgentMakefile depends on the package (`aigg-memory @ git+…@v0.1.0`)
+   and the in-tree copy is removed. This kernel is now maintained in the
+   `aigg-memory` repo; this doc is a consumer-side reference.
 
 ## Kernel contract
 
