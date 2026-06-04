@@ -8,7 +8,7 @@ is the unit-tested core; the ``http.server`` shell only calls it.
 from __future__ import annotations
 
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -692,4 +692,4 @@ def run_server(root: Union[Path, str], port: int = 8787, token: Optional[str] = 
         def log_message(self, *args: Any) -> None:  # quiet
             pass
 
-    ThreadingHTTPServer(("127.0.0.1", port), _Handler).serve_forever()
+    HTTPServer(("127.0.0.1", port), _Handler).serve_forever()
