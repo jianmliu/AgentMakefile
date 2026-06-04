@@ -1,7 +1,12 @@
-"""A thin CLI for the markdown memory tool: observe + consolidate.
+"""A thin CLI for the agent-memory tools.
 
-    python -m aigg_memory observe   --evidence E.jsonl --source observation --json '{...}' [--outcome correction]
-    python -m aigg_memory consolidate --memory MEMORY.md --evidence E.jsonl [--write] [--format text|json]
+Flat markdown index:
+    python -m aigg_memory observe    --evidence E.jsonl --json '{...}' [--outcome correction]
+    python -m aigg_memory consolidate --memory MEMORY.md --evidence E.jsonl [--write]
+
+Typed unit corpus (memory/<slug>/SKILL.md):
+    python -m aigg_memory remember          --evidence E.jsonl --json '{"slug":..,"kind":..,..}' [--outcome correction|obsolete]
+    python -m aigg_memory consolidate-corpus --root DIR --evidence E.jsonl [--write]
 
 No agentmf import.
 """
@@ -14,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aigg_memory.markdown import consolidate, markdown_memory_domain
+from aigg_memory.memory import consolidate_corpus, memory_domain
 from aigg_memory.store import EvidenceStore
 
 DEFAULT_MEMORY = "# Memory\n"
@@ -50,6 +56,27 @@ def observe_command(evidence_path: str, source: str, payload: Dict[str, Any], ou
     return record.to_dict()
 
 
+def remember_command(evidence_path: str, payload: Dict[str, Any], outcome: Optional[str] = None) -> Dict[str, Any]:
+    """Record an observation for the typed unit corpus (memory-domain summary
+    keeps slug/name/kind/description/match/body)."""
+    store = EvidenceStore(evidence_path, domain=memory_domain())
+    record = store.record("observation", payload, outcome=outcome)
+    return record.to_dict()
+
+
+def consolidate_corpus_command(root: str, evidence_path: str, write: bool = False) -> Dict[str, Any]:
+    result = consolidate_corpus(root, _load_records(evidence_path), write=write)
+    consolidation = result.consolidation
+    return {
+        "proposals": [p.to_dict() for p in consolidation.proposals],
+        "diffs": consolidation.patch.diffs,
+        "gates": [{"name": g.name, "passed": g.passed, "detail": g.detail} for g in consolidation.gates],
+        "gates_ok": result.gates_ok,
+        "written": result.written,
+        "removed": result.removed,
+    }
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="aigg_memory", description="markdown agent-memory consolidation")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -66,12 +93,46 @@ def main(argv: Optional[List[str]] = None) -> int:
     cons.add_argument("--write", action="store_true", help="write back when all gates pass")
     cons.add_argument("--format", choices=["text", "json"], default="text")
 
+    remember = sub.add_parser("remember", help="record an observation for the typed unit corpus")
+    remember.add_argument("--evidence", required=True)
+    remember.add_argument("--json", required=True, dest="payload_json", help="observation payload as JSON")
+    remember.add_argument("--outcome", choices=["correction", "obsolete"], default=None)
+
+    corpus = sub.add_parser("consolidate-corpus", help="consolidate evidence into memory/<slug>/SKILL.md units")
+    corpus.add_argument("--root", default=".", help="project root containing the memory/ directory")
+    corpus.add_argument("--evidence", required=True)
+    corpus.add_argument("--write", action="store_true", help="write changed units when all gates pass")
+    corpus.add_argument("--format", choices=["text", "json"], default="text")
+
     args = parser.parse_args(argv)
 
     if args.command == "observe":
         record = observe_command(args.evidence, args.source, json.loads(args.payload_json), args.outcome)
         print(json.dumps(record, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "remember":
+        record = remember_command(args.evidence, json.loads(args.payload_json), args.outcome)
+        print(json.dumps(record, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "consolidate-corpus":
+        out = consolidate_corpus_command(args.root, args.evidence, write=args.write)
+        if args.format == "json":
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+        else:
+            print(f"proposals: {len(out['proposals'])}")
+            for proposal in out["proposals"]:
+                print(f"  - {proposal['title']}")
+            for gate in out["gates"]:
+                print(f"  gate {gate['name']}: {'PASS' if gate['passed'] else 'FAIL'} {gate['detail']}")
+            if out["written"]:
+                print("written: " + ", ".join(out["written"]))
+            if out["removed"]:
+                print("removed: " + ", ".join(out["removed"]))
+            if not out["written"] and not out["removed"]:
+                print("no changes" if out["gates_ok"] else "blocked: gate failed")
+        return 0 if out["gates_ok"] else 1
 
     if args.command == "consolidate":
         out = consolidate_command(args.memory, args.evidence, write=args.write)

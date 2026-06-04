@@ -2,6 +2,8 @@
 abstraction. Units carry a `kind`; consolidation is kind-aware (procedural needs
 review, semantic auto-activates). Zero agentmf import.
 """
+from pathlib import Path
+
 import aigg_memory as am
 from aigg_memory import memory as mem
 
@@ -129,3 +131,65 @@ def test_gates_flag_bad_kind_and_missing_match() -> None:
     gates = {g.name: g for g in am.evaluate_workspace(domain, {}, after, am.Proposal("x", "x", []))}
     assert gates["kind_valid"].passed is False
     assert gates["has_match_terms"].passed is False
+
+
+# --- M4: file-backed consolidation -----------------------------------------
+
+def _two_obs(slug, kind, desc, match):
+    return [
+        _obs(slug, slug, kind, desc, match, "the body", "e1"),
+        _obs(slug, slug, kind, desc, match, "the body", "e2"),
+    ]
+
+
+def test_consolidate_corpus_writes_units_to_disk(tmp_path: Path) -> None:
+    records = _two_obs("budget_protocol", "semantic", "token_budget contract", ["token budget"])
+
+    # dry-run writes nothing
+    dry = mem.consolidate_corpus(tmp_path, records, write=False)
+    assert dry.gates_ok and dry.written == []
+    assert not (tmp_path / "memory" / "budget_protocol" / "SKILL.md").exists()
+
+    # write persists the unit
+    result = mem.consolidate_corpus(tmp_path, records, write=True)
+    assert result.gates_ok
+    assert result.written == ["memory/budget_protocol/SKILL.md"]
+    unit_file = tmp_path / "memory" / "budget_protocol" / "SKILL.md"
+    assert unit_file.exists()
+    unit = mem.MemoryUnit.from_text(unit_file.read_text(encoding="utf-8"))
+    assert unit.kind == "semantic" and unit.frontmatter["status"] == "active"
+
+
+def test_consolidate_corpus_is_idempotent(tmp_path: Path) -> None:
+    records = _two_obs("tdd_flow", "procedural", "red green refactor", ["tdd"])
+    first = mem.consolidate_corpus(tmp_path, records, write=True)
+    assert first.written == ["memory/tdd_flow/SKILL.md"]
+    # the unit already exists -> add_unit is a no-op -> nothing rewritten
+    again = mem.consolidate_corpus(tmp_path, records, write=True)
+    assert again.written == [] and again.gates_ok
+
+
+def test_consolidate_corpus_updates_existing_unit_on_disk(tmp_path: Path) -> None:
+    mem.consolidate_corpus(tmp_path, _two_obs("skill_corpus", "semantic", "old", ["skill corpus"]), write=True)
+    correction = [am.EvidenceRecord(1, "t9", "observation", "f",
+                                    {"slug": "skill_corpus", "description": "248 skills tier3 gated", "body": "new body"},
+                                    "correction", "h", "e9")]
+    result = mem.consolidate_corpus(tmp_path, correction, write=True)
+    assert result.written == ["memory/skill_corpus/SKILL.md"]
+    unit = mem.MemoryUnit.from_text((tmp_path / "memory" / "skill_corpus" / "SKILL.md").read_text(encoding="utf-8"))
+    assert "248 skills" in unit.frontmatter["description"] and unit.body == "new body"
+
+
+def test_cli_remember_and_consolidate_corpus(tmp_path: Path) -> None:
+    from aigg_memory import cli
+
+    evidence = tmp_path / "ev.jsonl"
+    payload = {"slug": "budget_protocol", "name": "budget_protocol", "kind": "semantic",
+               "description": "token_budget contract", "match": ["token budget"], "body": "note"}
+    cli.remember_command(str(evidence), payload)
+    cli.remember_command(str(evidence), payload)
+
+    out = cli.consolidate_corpus_command(str(tmp_path), str(evidence), write=True)
+    assert out["gates_ok"] is True
+    assert "memory/budget_protocol/SKILL.md" in out["written"]
+    assert (tmp_path / "memory" / "budget_protocol" / "SKILL.md").exists()

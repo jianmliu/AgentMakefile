@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 import yaml
 
@@ -281,3 +282,57 @@ def consolidate(workspace: Dict[str, str], records: List, domain: Optional[Domai
     patch = generate_workspace_patch(domain, combined, workspace)
     gates = evaluate_workspace(domain, workspace, patch.new_workspace, combined)
     return MemoryConsolidationResult(proposals=proposals, patch=patch, gates=gates, new_workspace=patch.new_workspace)
+
+
+# --- file-backed corpus (the on-disk memory/ directory) -------------------
+
+def load_corpus(root: Union[str, Path]) -> Dict[str, str]:
+    """Read all `memory/<slug>/SKILL.md` under `root` into a workspace keyed by
+    paths relative to `root` (matching the appliers' path convention)."""
+    root = Path(root)
+    workspace: Dict[str, str] = {}
+    for path in sorted((root / "memory").glob("*/SKILL.md")):
+        workspace[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+    return workspace
+
+
+def write_corpus(root: Union[str, Path], workspace: Dict[str, str], only: Optional[List[str]] = None) -> List[str]:
+    root = Path(root)
+    written: List[str] = []
+    for rel in (only if only is not None else list(workspace)):
+        full = root / rel
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(workspace[rel], encoding="utf-8")
+        written.append(rel)
+    return written
+
+
+@dataclass
+class CorpusConsolidationResult:
+    consolidation: MemoryConsolidationResult
+    written: List[str]
+    removed: List[str]
+
+    @property
+    def gates_ok(self) -> bool:
+        return self.consolidation.gates_ok
+
+
+def consolidate_corpus(root: Union[str, Path], records: List, write: bool = False,
+                       domain: Optional[Domain] = None) -> CorpusConsolidationResult:
+    """Load the on-disk `memory/` corpus, consolidate from evidence, and (when
+    `write` and every gate passes) write changed unit files back, deleting any
+    merged-away units. Returns the changed/removed paths."""
+    root = Path(root)
+    before = load_corpus(root)
+    result = consolidate(before, records, domain=domain)
+    written: List[str] = []
+    removed: List[str] = []
+    if write and result.gates_ok:
+        after = result.new_workspace
+        changed = sorted(rel for rel, content in after.items() if before.get(rel) != content)
+        written = write_corpus(root, after, only=changed)
+        removed = sorted(rel for rel in before if rel not in after)
+        for rel in removed:
+            (root / rel).unlink(missing_ok=True)
+    return CorpusConsolidationResult(consolidation=result, written=written, removed=removed)
