@@ -115,6 +115,9 @@ def _apply_archive_unit(workspace: Dict[str, str], change: dict) -> Dict[str, st
         return workspace
     unit = MemoryUnit.from_text(workspace[path])
     unit.frontmatter["status"] = "archived"
+    if change.get("source_events"):  # the obsolete signal is part of the unit's provenance
+        merged = set(unit.frontmatter.get("source_events") or []) | set(change["source_events"])
+        unit.frontmatter["source_events"] = sorted(merged)
     ws = dict(workspace)
     ws[path] = unit.to_text()
     return ws
@@ -207,7 +210,7 @@ def _detect_obsolete(records: List) -> List[Proposal]:
                 proposals.append(Proposal(
                     proposal_id=fingerprint(("archive", slug))[:12],
                     title=f"archive: {slug}",
-                    changes=[{"type": "archive_unit", "slug": slug}],
+                    changes=[{"type": "archive_unit", "slug": slug, "source_events": [record.event_id]}],
                     scope={"corpus": "memory/"},
                 ))
     return proposals
@@ -345,3 +348,45 @@ def consolidate_corpus(root: Union[str, Path], records: List, write: bool = Fals
         for key in removed:
             _disk_path(root, corpus, key).unlink(missing_ok=True)
     return CorpusConsolidationResult(consolidation=result, written=written, removed=removed)
+
+
+@dataclass
+class ConsolidationStatus:
+    corpus: str
+    total_evidence: int
+    consolidated_events: int       # distinct event_ids already folded into units
+    pending: int                   # evidence not yet absorbed into any unit
+    oldest_pending_timestamp: Optional[str]
+    recommended: bool              # advisory: pending >= min_new (the app owns the policy)
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "corpus": self.corpus,
+            "total_evidence": self.total_evidence,
+            "consolidated_events": self.consolidated_events,
+            "pending": self.pending,
+            "oldest_pending_timestamp": self.oldest_pending_timestamp,
+            "recommended": self.recommended,
+        }
+
+
+def consolidation_status(root: Union[str, Path], records: List, corpus: str = "memory",
+                         min_new: int = 1) -> ConsolidationStatus:
+    """A cheap readiness signal so an application can decide *when* to consolidate
+    (the trigger is app policy — an NPC sleeping, a session ending, a chain epoch).
+    Stateless: an evidence record is 'pending' when its event_id is not yet folded
+    into any unit's source_events. The engine reports; the app decides."""
+    consolidated: set = set()
+    for content in load_corpus(root, corpus).values():
+        for event in MemoryUnit.from_text(content).frontmatter.get("source_events") or []:
+            consolidated.add(event)
+    pending = [r for r in records if r.event_id not in consolidated]
+    oldest = min((r.timestamp for r in pending), default=None)
+    return ConsolidationStatus(
+        corpus=corpus,
+        total_evidence=len(records),
+        consolidated_events=len(consolidated),
+        pending=len(pending),
+        oldest_pending_timestamp=oldest,
+        recommended=len(pending) >= min_new,
+    )

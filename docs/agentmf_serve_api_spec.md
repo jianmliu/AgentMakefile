@@ -84,12 +84,23 @@ is a self-contained keyword scan over the corpus, so it needs no scanned
 | --- | --- | --- | --- |
 | `POST /memory/observe` | `{evidence, payload, source?, outcome?}` | the recorded evidence record (`event_id`, `summary`, …) | **online / cheap** — one observation appended; `outcome` ∈ `correction\|obsolete` |
 | `POST /memory/consolidate` | `{evidence, corpus?, write?}` | `{proposals, gates, gates_ok, diffs, written:[paths], removed:[paths], units_after}` | **offline (Dream)** — promote repeated obs → typed units (kind-aware: procedural→`candidate`, declarative→`active`); writes only when `write` and every gate passes; `422` if a gate fails. Mirrors the CLI `consolidate-corpus`. |
+| `POST /memory/consolidation-status` | `{evidence, corpus?, min_new?}` | `{total_evidence, consolidated_events, pending, oldest_pending_timestamp, recommended}` | **readiness signal** — cheap online check of how much evidence is not yet folded into units (`pending`). The engine reports; the **app owns the trigger policy** (see below). `recommended = pending >= min_new`. |
 | `POST /memory/select` | `{request, corpus?, n_best?, kinds?}` | `{units:[{name,kind,description,body,match_terms,score}], bundle, total_in_corpus}` | **online / cheap** — keyword recall over `match.user_intent`; archived units excluded; `bundle` is the kind-aware context (procedural→`apply …`, declarative→fact line) |
 | `POST /memory/units` | `{corpus?}` | `{corpus, units:[summaries], total}` | list non-archived unit summaries |
 
 `corpus` defaults to `memory`; it may be nested (e.g. `npcs/<id>/memory`), which
 makes per-agent / per-entity memory stores trivial. `written`/`removed` are path
 lists (aligned with the CLI), not booleans.
+
+**The Dream trigger is application policy, not an engine schedule.** `observe` is
+an online side-effect (the app records evidence as it operates); `consolidate`
+(Dream) is an offline batch the **app fires at its own natural moment** — an NPC
+sleeping / a player leaving an area (MUD), a session or budget-epoch / settlement
+event (onchainpal), a PR merge / idle window (coding agent). Per-entity corpora
+(`npcs/<id>/memory`) give each entity its own Dream rhythm. The engine deliberately
+ships **no scheduler**; it only offers `/memory/consolidation-status` as a cheap
+signal the app can poll to decide *whether* to fire, keeping the *when* in the
+app. Typical loop: `status → if recommended (by the app's own rule) → consolidate`.
 
 ### Pricing & budget
 

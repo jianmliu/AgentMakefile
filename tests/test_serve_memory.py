@@ -248,6 +248,41 @@ class TestMemorySelect:
 # units list
 # ---------------------------------------------------------------------------
 
+class TestMemoryConsolidationStatus:
+    def _seed(self, tmp_path, n=2):
+        for _ in range(n):
+            _observe(tmp_path, "ev.jsonl",
+                     _npc_payload("jiujianxian", "酒剑仙", kind="semantic",
+                                  desc="嗜酒剑道高人", match=["sword", "酒剑"]))
+
+    def _status(self, tmp_path, **kw):
+        return dispatch("POST", "/memory/consolidation-status",
+                        {"evidence": "ev.jsonl", "corpus": "memory", **kw}, tmp_path)
+
+    def test_status_reports_pending_before_consolidation(self, tmp_path):
+        self._seed(tmp_path)
+        status, env = self._status(tmp_path)
+        assert status == 200 and env["ok"]
+        data = env["data"]
+        assert data["pending"] == 2 and data["consolidated_events"] == 0
+        assert data["recommended"] is True
+
+    def test_status_clears_after_consolidation(self, tmp_path):
+        self._seed(tmp_path)
+        _consolidate(tmp_path, "ev.jsonl", write=True)
+        _, env = self._status(tmp_path)
+        assert env["data"]["pending"] == 0 and env["data"]["recommended"] is False
+
+    def test_status_min_new_is_app_policy(self, tmp_path):
+        self._seed(tmp_path)  # 2 pending
+        _, env = self._status(tmp_path, min_new=3)
+        assert env["data"]["pending"] == 2 and env["data"]["recommended"] is False
+
+    def test_status_missing_evidence_returns_400(self, tmp_path):
+        status, env = dispatch("POST", "/memory/consolidation-status", {"corpus": "memory"}, tmp_path)
+        assert status == 400 and not env["ok"]
+
+
 class TestMemoryUnits:
     def test_units_empty_corpus(self, tmp_path):
         status, env = _units(tmp_path)

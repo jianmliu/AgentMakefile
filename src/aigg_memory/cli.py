@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aigg_memory.markdown import consolidate, markdown_memory_domain
-from aigg_memory.memory import consolidate_corpus, memory_domain
+from aigg_memory.memory import consolidate_corpus, consolidation_status, memory_domain
 from aigg_memory.store import EvidenceStore
 
 DEFAULT_MEMORY = "# Memory\n"
@@ -77,6 +77,10 @@ def consolidate_corpus_command(root: str, evidence_path: str, write: bool = Fals
     }
 
 
+def consolidation_status_command(root: str, evidence_path: str, corpus: str = "memory", min_new: int = 1) -> Dict[str, Any]:
+    return consolidation_status(root, _load_records(evidence_path), corpus=corpus, min_new=min_new).to_dict()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="aigg_memory", description="markdown agent-memory consolidation")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -104,7 +108,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     corpus.add_argument("--write", action="store_true", help="write changed units when all gates pass")
     corpus.add_argument("--format", choices=["text", "json"], default="text")
 
+    status = sub.add_parser("consolidation-status", help="readiness signal: how much evidence is pending consolidation")
+    status.add_argument("--root", default=".")
+    status.add_argument("--evidence", required=True)
+    status.add_argument("--corpus", default="memory")
+    status.add_argument("--min-new", type=int, default=1, dest="min_new")
+
     args = parser.parse_args(argv)
+
+    if args.command == "consolidation-status":
+        print(json.dumps(consolidation_status_command(args.root, args.evidence, corpus=args.corpus, min_new=args.min_new),
+                         ensure_ascii=False, indent=2))
+        return 0
 
     if args.command == "observe":
         record = observe_command(args.evidence, args.source, json.loads(args.payload_json), args.outcome)

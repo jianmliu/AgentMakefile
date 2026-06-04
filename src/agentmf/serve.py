@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from aigg_memory.memory import (
     MemoryUnit,
     consolidate_corpus as _mem_consolidate_corpus,
+    consolidation_status as _mem_consolidation_status,
     load_corpus as _mem_load_corpus,
     memory_domain,
 )
@@ -361,6 +362,23 @@ def _h_memory_select(body: dict, root: Path) -> Tuple[int, Envelope]:
     return _ok({"units": units, "bundle": bundle, "total_in_corpus": len(workspace)})
 
 
+def _h_memory_consolidation_status(body: dict, root: Path) -> Tuple[int, Envelope]:
+    """Readiness signal so an app can decide *when* to consolidate (the trigger is
+    app policy — an NPC sleeping, a session ending, a chain epoch). Online / cheap.
+    Body: { evidence, corpus?, min_new? }"""
+    evidence_path = body.get("evidence")
+    if not evidence_path:
+        return _err("AM_MEM_400", "evidence path required")
+    corpus = body.get("corpus", _DEFAULT_CORPUS)
+    min_new = int(body.get("min_new", 1))
+    store = EvidenceStore(root / evidence_path, domain=memory_domain())
+    try:
+        status = _mem_consolidation_status(root, store.load(), corpus=corpus, min_new=min_new)
+    except Exception as exc:
+        return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
+    return _ok(status.to_dict())
+
+
 def _h_memory_units(body: dict, root: Path) -> Tuple[int, Envelope]:
     """List all (non-archived) typed units in a corpus.
     Body / query: { corpus? }"""
@@ -389,6 +407,7 @@ _ROUTES = {
     # --- typed agent-memory (aigg_memory.memory domain) ---
     ("POST", "/memory/observe"): _h_memory_observe,
     ("POST", "/memory/consolidate"): _h_memory_consolidate,
+    ("POST", "/memory/consolidation-status"): _h_memory_consolidation_status,
     ("POST", "/memory/select"): _h_memory_select,
     ("POST", "/memory/units"): _h_memory_units,
 }

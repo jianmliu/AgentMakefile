@@ -180,6 +180,41 @@ def test_consolidate_corpus_updates_existing_unit_on_disk(tmp_path: Path) -> Non
     assert "248 skills" in unit.frontmatter["description"] and unit.body == "new body"
 
 
+def test_consolidation_status_tracks_pending_vs_absorbed(tmp_path: Path) -> None:
+    """The readiness signal: evidence whose event_id is not yet folded into a
+    unit's source_events is 'pending'. The engine reports; the app decides."""
+    records = _two_obs("sage", "semantic", "wisdom of the blade", ["wise"])  # e1, e2
+
+    st = mem.consolidation_status(tmp_path, records)
+    assert st.total_evidence == 2 and st.consolidated_events == 0
+    assert st.pending == 2 and st.recommended is True
+    assert st.oldest_pending_timestamp == "t"
+
+    # after consolidation those events are absorbed -> nothing pending
+    mem.consolidate_corpus(tmp_path, records, write=True)
+    done = mem.consolidation_status(tmp_path, records)
+    assert done.pending == 0 and done.consolidated_events == 2 and done.recommended is False
+
+    # a fresh observation is pending again
+    records3 = records + [_obs("sage", "sage", "semantic", "wisdom of the blade", ["wise"], "body", "e3")]
+    more = mem.consolidation_status(tmp_path, records3)
+    assert more.pending == 1 and more.oldest_pending_timestamp == "t"
+    # threshold is the app's policy knob; the engine only reports `recommended`
+    assert mem.consolidation_status(tmp_path, records3, min_new=2).recommended is False
+
+
+def test_obsolete_event_is_absorbed_into_source_events(tmp_path: Path) -> None:
+    """An obsolete signal that archives a unit counts as consolidated (its
+    event_id joins the unit's source_events), so it does not linger as pending."""
+    mem.consolidate_corpus(tmp_path, _two_obs("relic", "semantic", "old relic", ["relic"]), write=True)
+    obsolete = [am.EvidenceRecord(1, "t2", "observation", "f", {"slug": "relic"}, "obsolete", "h", "e9")]
+    mem.consolidate_corpus(tmp_path, obsolete, write=True)
+    unit = mem.MemoryUnit.from_text((tmp_path / "memory" / "relic" / "SKILL.md").read_text(encoding="utf-8"))
+    assert unit.frontmatter["status"] == "archived"
+    assert "e9" in unit.frontmatter["source_events"]
+    assert mem.consolidation_status(tmp_path, obsolete).pending == 0
+
+
 def test_cli_remember_and_consolidate_corpus(tmp_path: Path) -> None:
     from aigg_memory import cli
 
