@@ -24,7 +24,7 @@ from agentmemory.models import (
     Patch,
     Proposal,
 )
-from agentmemory.store import EvidenceStore
+from agentmemory.store import EvidenceStore, append_jsonl, read_jsonl
 
 __all__ = [
     # data model
@@ -37,6 +37,8 @@ __all__ = [
     "Domain",
     # store
     "EvidenceStore",
+    "append_jsonl",
+    "read_jsonl",
     # loop
     "run_dream",
     "generate_patch",

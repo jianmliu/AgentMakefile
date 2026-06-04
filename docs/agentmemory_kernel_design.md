@@ -1,7 +1,7 @@
 # `agentmemory` — a domain-agnostic agent-memory kernel
 
-Status: Phase 1 (kernel) + Phase 3 (markdown domain) + Phase 2a (AMF primitive
-delegation) landed. Date: 2026-06-04.
+Status: Phase 1 (kernel) + Phase 3 (markdown domain) + Phase 2a/2b (AMF primitive
++ persistence delegation) landed. Date: 2026-06-04.
 
 ## Why
 
@@ -141,11 +141,23 @@ package + dream route their hashing/redaction through these, so the dependency
 edge `agentmf → agentmemory` is real and the duplicated crypto/redaction layer is
 gone. 347 tests pass.
 
-**Phase 2b/2c (not yet).** Deeper delegation — the evidence-record store, the
-proposal/patch dispatch, the dream-detector dispatch — each needs the kernel to
-absorb AMF's exact record schema and diff format under the same byte-identical,
-verify-green discipline. Staged so each is a small, reversible slice rather than
-one risky rewrite.
+**Phase 2b (landed).** The JSONL **persistence** primitives moved into the kernel:
+
+- `append_jsonl(path, record, *, serialize=None)` — one record per line; the
+  `serialize` knob reproduces a legacy line format byte-for-byte.
+- `read_jsonl(path) -> list[dict]` — parse, skipping blanks.
+
+The kernel's own `EvidenceStore` now persists through these, and
+`agentmf.evolution.evidence` appends evidence through `append_jsonl` with its
+compact `separators=(",", ":")` serializer — proven byte-identical to the legacy
+write. AMF's *load* stays AMF-side on purpose: it emits per-line `AMF223`
+diagnostics (file + line context) that are domain-specific error reporting, not
+generic parsing. 348 tests pass.
+
+**Phase 2c (not yet).** The remaining deeper delegation — the proposal/patch
+dispatch and the dream-detector dispatch — needs the kernel to absorb AMF's exact
+diff format and proposal schema under the same byte-identical, verify-green
+discipline. Staged as a small, reversible slice rather than one risky rewrite.
 
 ## Out of scope (Phase 1)
 

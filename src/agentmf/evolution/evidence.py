@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from agentmf.diagnostics import Diagnostics
+from agentmemory import append_jsonl as _am_append_jsonl
 from agentmemory import redact_secrets as _am_redact_secrets
 from agentmemory import sha256_json as _am_sha256_json
 from agentmemory import sha256_text as _am_sha256_text
@@ -86,9 +87,13 @@ def create_evolution_evidence_payload(
     output_path = Path(out_dir) / _SOURCE_DIRS[source] / f"{_safe_name(source)}.jsonl"
     if write:
         try:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+            # Persist via the agentmemory kernel; the serializer reproduces the
+            # legacy compact line format byte-for-byte.
+            _am_append_jsonl(
+                output_path,
+                record,
+                serialize=lambda r: json.dumps(r, sort_keys=True, separators=(",", ":")),
+            )
         except OSError as exc:
             diagnostics.error(
                 "AMF221",

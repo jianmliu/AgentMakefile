@@ -138,6 +138,27 @@ def test_unknown_change_type_warns_without_crashing() -> None:
     assert "AM_UNSUPPORTED_CHANGE" in codes
 
 
+def test_append_and_read_jsonl_with_injectable_serializer(tmp_path: Path) -> None:
+    """The persistence primitives: append_jsonl + read_jsonl, with a serializer
+    knob so a consumer (AgentMakefile) can reproduce a legacy line format."""
+    import json
+
+    path = tmp_path / "evidence.jsonl"
+    records = [{"z": 3, "a": 1, "u": "汉字"}, {"event_id": "sha256:x", "n": 2}]
+    compact = lambda r: json.dumps(r, sort_keys=True, separators=(",", ":"))
+    for record in records:
+        am.append_jsonl(path, record, serialize=compact)
+
+    # the serializer is honored verbatim (compact + sorted, no spaces)
+    first_line = path.read_text(encoding="utf-8").splitlines()[0]
+    assert first_line == compact(records[0])
+    assert ", " not in first_line and '": ' not in first_line  # compact separators
+    # round-trips back to the same dicts
+    assert am.read_jsonl(path) == records
+    # missing file -> empty, not an error
+    assert am.read_jsonl(tmp_path / "absent.jsonl") == []
+
+
 def test_redact_secrets_masks_keys_and_token_values() -> None:
     cleaned = am.redact_secrets({"token": "abc", "note": "bearer sk-deadbeefdeadbeef end", "n": 3})
     assert cleaned["token"] != "abc"           # secret-looking key masked

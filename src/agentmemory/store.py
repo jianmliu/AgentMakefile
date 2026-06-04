@@ -3,11 +3,41 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from agentmemory._util import fingerprint as _fingerprint
 from agentmemory._util import redact_secrets, sha256_json, utc_now
 from agentmemory.models import Domain, EvidenceRecord
+
+Serializer = Callable[[Dict[str, Any]], str]
+
+
+def _default_serialize(record: Dict[str, Any]) -> str:
+    return json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+
+def append_jsonl(path: Union[str, Path], record: Dict[str, Any], *, serialize: Optional[Serializer] = None) -> None:
+    """Append one record as a JSONL line. ``serialize`` lets a consumer reproduce
+    a byte-identical legacy line format (e.g. compact separators, ensure_ascii)."""
+    serialize = serialize or _default_serialize
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as stream:
+        stream.write(serialize(record) + "\n")
+
+
+def read_jsonl(path: Union[str, Path]) -> List[Dict[str, Any]]:
+    """Parse a JSONL file into a list of dicts, skipping blank lines. Raises on
+    malformed JSON — callers wanting per-line diagnostics should parse themselves."""
+    target = Path(path)
+    if not target.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    for line in target.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            out.append(json.loads(line))
+    return out
 
 
 def _default_summary(payload: Any) -> Dict[str, Any]:
@@ -57,18 +87,8 @@ class EvidenceStore:
             event_id=event_id,
             refs=list(refs or []),
         )
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+        append_jsonl(self.path, record.to_dict())
         return record
 
     def load(self) -> List[EvidenceRecord]:
-        if not self.path.exists():
-            return []
-        records: List[EvidenceRecord] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            records.append(EvidenceRecord.from_dict(json.loads(line)))
-        return records
+        return [EvidenceRecord.from_dict(d) for d in read_jsonl(self.path)]
