@@ -94,6 +94,33 @@ terms: consolidation proposes, waking commits, and the commit still passes the
 per-kind gate (procedural needs review; semantic may auto-promote at high
 confidence). Naming Dream "a memory process" does not weaken the gate.
 
+### The Dream trigger is application policy, not an engine schedule
+
+*When* consolidation fires is not the engine's call — it is application-specific.
+Different applications have different natural "sleep" moments:
+
+| application | `observe` (online encoding) fires on | Dream (offline consolidation) fires on |
+| --- | --- | --- |
+| MUD / game (NPC memory) | each player↔NPC interaction | the NPC **sleeping** (night tick), a player leaving the area, a scene/quest ending |
+| onchainpal (calls AIGG inference) | each inference call / a session | a budget-epoch close, a settlement event, session end |
+| coding agent (AMF skill evolution) | each task / tool call | a work session ending, a PR merge, an idle window |
+
+In a MUD "sleep = consolidation" is literal: each NPC is its own corpus
+(`npcs/<id>/memory`), its daytime interactions are recorded as episodic evidence,
+and when it sleeps that corpus consolidates — episodic interactions become semantic
+facts (a relationship score) or even procedural habits. Per-entity corpora give
+each entity its **own Dream rhythm**.
+
+So the engine deliberately ships **no scheduler**. It owns the *mechanism*
+(`observe` / `consolidate`); the application owns the *trigger*, instrumented in its
+own events. The only engine-side affordance is a cheap **readiness signal** —
+`consolidation_status(root, records, corpus) -> {pending, oldest_pending_timestamp,
+recommended}` (a record is *pending* until its `event_id` is folded into a unit's
+`source_events`) — that an app can poll to decide *whether* to fire, while the
+*when* (the threshold, the sleep hook, the epoch) stays the app's policy. Typical
+loop: `status → if the app's own rule says go → consolidate`. Exposed as the CLI
+`consolidation-status` and `POST /memory/consolidation-status`.
+
 ## Decisions (recorded)
 
 1. **Everything-is-memory, typed.** One unit format with a `kind`; skills are
@@ -106,7 +133,10 @@ confidence). Naming Dream "a memory process" does not weaken the gate.
    (offline), not an external tool; `run_dream` is the unified consolidation engine
    across kinds. The system is the full cycle: encode → store → consolidate →
    retrieve → forget.
-5. **Spec first**, then implement.
+5. **The Dream trigger is application policy.** The engine ships no scheduler — it
+   owns the mechanism (`observe`/`consolidate`) and offers a readiness signal; the
+   app owns *when* to fire (NPC sleep, session/epoch end, idle window).
+6. **Spec first**, then implement.
 
 ## Where the kinds genuinely differ (not all identical)
 
@@ -235,7 +265,7 @@ closing the deep unification deferred at Phase 2c.
 | **M1 — landed** | `Workspace` abstraction in the kernel: `generate_workspace_patch` / `evaluate_workspace` over `dict[path→content]` + per-file diffs, plus `lift_document_applier` bridging a single-document applier into the one-entry case. Additive — the single-document API is untouched, so Phase-3 stays green; a test proves one-entry-workspace ≡ document. |
 | **M2 — landed** | `memory` domain (`aigg_memory.memory`): `MemoryUnit` frontmatter (+`kind`) parse/render (PyYAML, unicode-safe), multi-file appliers (`add_unit` / `update_unit` / `merge_units` / `archive_unit`) on the Workspace, kind-aware gates (`units_parse` / `unique_ids` / `has_match_terms` / `kind_valid`), evidence detectors with the **kind-aware policy** (procedural → `candidate` / needs-review; declarative → `active`), and a `consolidate(workspace, records)` orchestrator. The kernel core stays dependency-free; the `memory` domain adds PyYAML (a memory store reading SKILL.md legitimately needs YAML). TDD end-to-end on a corpus with procedural + semantic units. |
 | **M3 — landed** | Scanner enhancement: `_read_skill` merges an explicit `match.user_intent` (authoritative routing terms) and carries `kind`; `kind` is now a first-class field on `SkillSpec` + `IRSkill` (additive, default `None`). End-to-end proven: `aigg-memory consolidate` writes typed units → `agentmf skills scan memory/` → a **valid, routable** `MemoryMakefile` (`kind` survives into the IR; the keyword matcher routes a unit by its explicit terms). Per-kind compile *rendering* is M4. |
-| **M4 — landed (write side)** | `consolidate_corpus(root, records, write)` + CLI (`remember` records a typed observation; `consolidate-corpus` loads `memory/` → consolidates → writes changed unit files back, gated; idempotent; deletes merged-away units). Proven end-to-end on disk: `remember ×N` → `consolidate-corpus --write` → real `memory/<slug>/SKILL.md` with kind-aware status. |
+| **M4 — landed (write side)** | `consolidate_corpus(root, records, write)` + CLI (`remember` records a typed observation; `consolidate-corpus` loads `memory/` → consolidates → writes changed unit files back, gated; idempotent; deletes merged-away units). Proven end-to-end on disk: `remember ×N` → `consolidate-corpus --write` → real `memory/<slug>/SKILL.md` with kind-aware status. Plus `consolidation_status` (CLI `consolidation-status`, `POST /memory/consolidation-status`): the app-owned-trigger readiness signal. The full `/memory/*` HTTP surface (observe/consolidate/status/select/units) + a web-UI recall panel ship over the same domain. |
 | **M5 — landed (read side)** | Two kind-aware read surfaces: (1) **request-scoped** — `agentmf.memory_recall.recall_memory(path, request, kinds=…)` routes via the existing matcher, **filters selected units by `kind`**, and renders a kind-aware bundle; (2) **corpus-wide compile** — a new **`memory-md` backend** compiles the whole typed corpus into one `MEMORY.md`, rendered per kind: procedural → `apply <name> — …` (actionable, under "## Procedures (apply)"); semantic → "## Facts"; episodic → "## History". Additive (new backend + reuses the selector) — zero change to existing backends, no compile-test risk. With this, nothing in the pipeline treats memory as "pure skill": `kind` drives scan, recall, and compile rendering. |
 | **(later)** | embedding / hybrid recall; `kind: working` (ephemeral, TTL'd); re-route AMF's own skill evolution through the same `memory` domain — the closed loop made literal (procedural memory). |
 
