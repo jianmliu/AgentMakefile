@@ -1,4 +1,8 @@
-# Typed Long-Term Memory — one substrate; skills are procedural memory
+# Typed Long-Term Memory — one substrate, one process cycle
+
+A complete memory system, not just a store: **typed storage** (skills are procedural
+memory; notes are semantic / episodic) plus the **process cycle** (encode → store →
+consolidate → retrieve → forget), where **Dream is the consolidation process**.
 
 Status: design (for review). Date: 2026-06-04.
 Supersedes the earlier "memory-as-skills" framing (this file's history).
@@ -32,6 +36,64 @@ extracted it as the kernel. The same loop now consolidates *every* kind — only
 policies differ. Evolution and memory-keeping are the same operation on different
 kinds.
 
+## Memory is processes, not just storage
+
+A complete memory system is not a store — it is a *cycle of processes*. The typed
+substrate above is only the "storage" box. Named properly:
+
+| memory process | component | request hot path? |
+| --- | --- | --- |
+| **encoding** | `EvidenceStore.record` (observation → evidence) | online |
+| **working memory** | the current task context (`kind: working`, ephemeral) | online |
+| **storage** | the typed units (procedural / semantic / episodic) | — |
+| **consolidation = Dream** | `run_dream`: replay evidence, promote, merge, prune, generalize | **offline / batch** |
+| **retrieval** | matcher / `select` (relevance recall) | online |
+| **forgetting** | prune / archive detectors | offline |
+
+### Dream is the consolidation process — and the transformer between kinds
+
+In neuroscience, memory consolidation happens during sleep/dreaming (hippocampal
+replay → neocortical storage). "Dream Mode" is named for this literally: it is the
+**offline consolidation phase**, not a tool that operates on memory from outside.
+
+Systems consolidation = turning **episodic** experience into **semantic /
+procedural** knowledge. That is exactly what Dream does: many episodic routing
+events → a generalized procedural `match` rule, or a new skill. So the kinds are not
+static silos — Dream is the engine of the flow between them:
+
+```
+episodic experience  ──(Dream consolidation)──▶  semantic facts / procedural skills
+```
+
+`confidence` / `observations` are therefore the **degree of consolidation**:
+observed once = weak / episodic; promoted across many observations = strong /
+semantic.
+
+### Already structurally true
+
+Phase 2c routed AMF's dream through the kernel's `run_dream`; Phase 3's markdown
+domain consolidation runs through `run_dream` too. So **`run_dream` is already the
+unified consolidation engine across kinds** — AMF dream (procedural consolidation)
+and the markdown detectors (semantic / episodic consolidation) are the same process,
+different kind. The Phase 2c merge unified the consolidation *process*; this section
+gives it the right name.
+
+### Two speeds = the cost principle
+
+- **online**: retrieval (matcher) — cheap, in the hot path.
+- **offline**: consolidation (Dream) — expensive, batch.
+
+This is the project's cost principle (a big model at build time producing cheap
+artifacts; cheap consumption at run time): Dream is the expensive offline thinking
+that yields units cheap to recall at run time.
+
+### Boundary preserved
+
+AMF's Dream is dry-run, review-only — it *proposes*; promotion *commits*. In memory
+terms: consolidation proposes, waking commits, and the commit still passes the
+per-kind gate (procedural needs review; semantic may auto-promote at high
+confidence). Naming Dream "a memory process" does not weaken the gate.
+
 ## Decisions (recorded)
 
 1. **Everything-is-memory, typed.** One unit format with a `kind`; skills are
@@ -40,7 +102,11 @@ kinds.
 2. **Index/route is kind-agnostic; consume and consolidate are kind-aware.**
 3. **Memory units ride on AgentMakefile skills** for the read side (scan / matcher
    / compile); `aigg-memory` owns the write/consolidation side.
-4. **Spec first**, then implement.
+4. **Memory is processes, not just storage.** Dream *is* the consolidation process
+   (offline), not an external tool; `run_dream` is the unified consolidation engine
+   across kinds. The system is the full cycle: encode → store → consolidate →
+   retrieve → forget.
+5. **Spec first**, then implement.
 
 ## Where the kinds genuinely differ (not all identical)
 
