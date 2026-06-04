@@ -432,6 +432,8 @@ _INDEX_HTML = """<!doctype html>
   .budget-meta b { color: inherit; font-weight: 600; }
   .ok-badge { color: #10b981; } .bad-badge { color: #ef4444; }
   .budget-policy { margin-top: .4rem; font-size: .76rem; color: var(--mut); }
+  .kind { font-size: .8rem; color: var(--mut); display: inline-flex; align-items: center; gap: .2rem; }
+  hr { border: 0; border-top: 1px solid var(--bd); margin: 2rem 0 1rem; }
 </style>
 </head>
 <body>
@@ -462,6 +464,28 @@ _INDEX_HTML = """<!doctype html>
       <h2>Models</h2><ul id="models"></ul>
     </aside>
   </div>
+
+  <hr>
+  <h1 style="font-size:1.1rem">Memory <small id="mem-health" style="color:var(--mut);font-weight:400;font-size:.8rem"></small></h1>
+  <div class="bar">
+    <input id="mem-request" placeholder="Recall memory for a task — e.g. 游侠 swordsmanship">
+    <input id="mem-corpus" value="memory" title="corpus directory" style="width:160px">
+    <label class="kind"><input type="checkbox" class="mem-kind" value="procedural" checked> proc</label>
+    <label class="kind"><input type="checkbox" class="mem-kind" value="semantic" checked> sem</label>
+    <label class="kind"><input type="checkbox" class="mem-kind" value="episodic" checked> epi</label>
+    <button id="mem-recall">Recall</button>
+    <button id="mem-list">List units</button>
+  </div>
+  <div class="grid">
+    <section>
+      <h2>Bundle · POST /memory/select</h2>
+      <pre id="mem-bundle">Recall memory for a request, or list the corpus.</pre>
+    </section>
+    <aside>
+      <h2>Units</h2><ul id="mem-units"></ul>
+    </aside>
+  </div>
+
   <div class="tok"><input id="token" placeholder="bearer token (only if server set --token)"></div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -529,6 +553,35 @@ async function run() {
     }
   } catch (e) { $("result").innerHTML = '<span class="err">request failed: ' + e + "</span>"; }
 }
+function memKinds() {
+  const checked = [...document.querySelectorAll(".mem-kind:checked")].map((c) => c.value);
+  return checked.length && checked.length < 3 ? checked : null;   // omit filter when all (or none) selected
+}
+async function memRecall() {
+  const body = { request: $("mem-request").value, corpus: $("mem-corpus").value };
+  const kinds = memKinds();
+  if (kinds) body.kinds = kinds;
+  $("mem-bundle").textContent = "…";
+  try {
+    const { env } = await api("POST", "/memory/select", body);
+    const d = env.data || {};
+    $("mem-bundle").textContent = d.bundle || "(no relevant memory)";
+    bullets("mem-units", (d.units || []).map((u) => `${u.name} · ${u.kind} · score ${u.score}`));
+    $("mem-health").textContent = `· ${d.total_in_corpus || 0} in corpus`;
+  } catch (e) { $("mem-bundle").innerHTML = '<span class="err">recall failed: ' + e + "</span>"; }
+}
+async function memList() {
+  try {
+    const { env } = await api("POST", "/memory/units", { corpus: $("mem-corpus").value });
+    const d = env.data || {};
+    bullets("mem-units", (d.units || []).map((u) => `${u.name} · ${u.kind} · ${u.status}`));
+    $("mem-bundle").textContent = `${d.total || 0} unit(s) in "${d.corpus}".`;
+    $("mem-health").textContent = `· ${d.total || 0} units`;
+  } catch (e) { $("mem-bundle").innerHTML = '<span class="err">list failed: ' + e + "</span>"; }
+}
+$("mem-recall").addEventListener("click", memRecall);
+$("mem-list").addEventListener("click", memList);
+$("mem-request").addEventListener("keydown", (e) => { if (e.key === "Enter") memRecall(); });
 $("run").addEventListener("click", run);
 $("request").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
 boot();

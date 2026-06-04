@@ -126,6 +126,10 @@ JS, no build step, no dependencies — embedded in `serve.py`). It is a thin
   `headroom_after_first_call` and `halt_policy` shown alongside. This is the
   same contract the AIGG gateway enforces server-side and the candidate payload
   for the MCP budget extension.
+- A **Memory** panel recalls typed memory: a request box + corpus field + a
+  per-kind filter (procedural / semantic / episodic) drive `POST /memory/select`,
+  rendering the kind-aware **bundle** (procedural → `apply …`, declarative → fact
+  line) plus the matched units; a **List units** button calls `POST /memory/units`.
 - An optional bearer-token field is sent as `Authorization` so the page works
   whether or not the server was started with `--token`. The page itself loads
   ungated; only the JSON API enforces the token.
