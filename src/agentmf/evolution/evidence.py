@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from agentmf.diagnostics import Diagnostics
-from agentmemory import append_jsonl as _am_append_jsonl
-from agentmemory import redact_secrets as _am_redact_secrets
-from agentmemory import sha256_json as _am_sha256_json
-from agentmemory import sha256_text as _am_sha256_text
+from aigg_memory import append_jsonl as _am_append_jsonl
+from aigg_memory import redact_secrets as _am_redact_secrets
+from aigg_memory import sha256_json as _am_sha256_json
+from aigg_memory import sha256_text as _am_sha256_text
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,7 +87,7 @@ def create_evolution_evidence_payload(
     output_path = Path(out_dir) / _SOURCE_DIRS[source] / f"{_safe_name(source)}.jsonl"
     if write:
         try:
-            # Persist via the agentmemory kernel; the serializer reproduces the
+            # Persist via the aigg_memory kernel; the serializer reproduces the
             # legacy compact line format byte-for-byte.
             _am_append_jsonl(
                 output_path,
@@ -247,7 +247,7 @@ def _selection_trace_hash(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _redact_secrets(value: Any) -> Any:
-    # Delegates to the agentmemory kernel with AgentMakefile's policy injected,
+    # Delegates to the aigg_memory kernel with AgentMakefile's policy injected,
     # so the redaction is byte-identical to the legacy implementation.
     return _am_redact_secrets(value, mask="[REDACTED]", secret_key=_secret_key, secret_value=_secret_value)
 
@@ -279,7 +279,7 @@ def _secret_value(value: str) -> bool:
 
 
 def _sha256_json(value: Any) -> str:
-    # Delegates to the agentmemory kernel; the knobs reproduce the legacy bytes.
+    # Delegates to the aigg_memory kernel; the knobs reproduce the legacy bytes.
     return _am_sha256_json(value, prefix="sha256:", separators=(",", ":"), ensure_ascii=True)
 
 

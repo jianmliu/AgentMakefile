@@ -14500,12 +14500,12 @@ def test_serve_ui_budget_panel() -> None:
         assert field in html, f"budget panel does not surface {field}"
 
 
-def test_evolution_primitives_delegate_to_agentmemory_kernel() -> None:
+def test_evolution_primitives_delegate_to_aigg_memory_kernel() -> None:
     """Phase 2: AgentMakefile's evolution hashing/redaction is now provided by the
-    agentmemory kernel with AMF's policy injected. Pin byte-identity so a future
+    aigg_memory kernel with AMF's policy injected. Pin byte-identity so a future
     kernel-default change cannot silently alter AMF's evidence format (event_id
     etc.). Covers non-ASCII + secrets + the real hash(redact(payload)) chain."""
-    import agentmemory as am
+    import aigg_memory as am
     from agentmf.evolution import evidence as ev
 
     samples = [

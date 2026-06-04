@@ -4,8 +4,8 @@ operations (promote, merge duplicates, fix stale, prune). Zero agentmf import.
 """
 from pathlib import Path
 
-import agentmemory as am
-from agentmemory import markdown as md
+import aigg_memory as am
+from aigg_memory import markdown as md
 
 SAMPLE = """# Memory
 
@@ -85,7 +85,7 @@ def test_gate_flags_malformed_bullet() -> None:
 
 
 def test_cli_consolidate_writes_when_gates_pass(tmp_path: Path) -> None:
-    from agentmemory import cli
+    from aigg_memory import cli
 
     memory = tmp_path / "MEMORY.md"
     memory.write_text(SAMPLE, encoding="utf-8")

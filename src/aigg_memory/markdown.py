@@ -17,9 +17,9 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import List, Optional
 
-from agentmemory._util import fingerprint
-from agentmemory.kernel import evaluate, generate_patch, run_dream
-from agentmemory.models import Diagnostics, Domain, GateResult, Patch, Proposal
+from aigg_memory._util import fingerprint
+from aigg_memory.kernel import evaluate, generate_patch, run_dream
+from aigg_memory.models import Diagnostics, Domain, GateResult, Patch, Proposal
 
 _ENTRY_RE = re.compile(r"^- \[(?P<title>.+?)\]\((?P<slug>[^)]+)\)\s*[—:-]\s*(?P<summary>.*)$")
 

@@ -1,7 +1,7 @@
 """A thin CLI for the markdown memory tool: observe + consolidate.
 
-    python -m agentmemory observe   --evidence E.jsonl --source observation --json '{...}' [--outcome correction]
-    python -m agentmemory consolidate --memory MEMORY.md --evidence E.jsonl [--write] [--format text|json]
+    python -m aigg_memory observe   --evidence E.jsonl --source observation --json '{...}' [--outcome correction]
+    python -m aigg_memory consolidate --memory MEMORY.md --evidence E.jsonl [--write] [--format text|json]
 
 No agentmf import.
 """
@@ -13,8 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agentmemory.markdown import consolidate, markdown_memory_domain
-from agentmemory.store import EvidenceStore
+from aigg_memory.markdown import consolidate, markdown_memory_domain
+from aigg_memory.store import EvidenceStore
 
 DEFAULT_MEMORY = "# Memory\n"
 
@@ -51,7 +51,7 @@ def observe_command(evidence_path: str, source: str, payload: Dict[str, Any], ou
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="agentmemory", description="markdown agent-memory consolidation")
+    parser = argparse.ArgumentParser(prog="aigg_memory", description="markdown agent-memory consolidation")
     sub = parser.add_subparsers(dest="command", required=True)
 
     observe = sub.add_parser("observe", help="append an observation to the evidence store")

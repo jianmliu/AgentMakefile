@@ -1,4 +1,7 @@
-# `agentmemory` — a domain-agnostic agent-memory kernel
+# `aigg-memory` — a domain-agnostic agent-memory kernel
+
+> Distribution / repo name: **`aigg-memory`**. Python import package:
+> **`aigg_memory`** (a hyphen is not a valid module identifier).
 
 Status: Phase 1 (kernel) + Phase 3 (markdown domain) + Phase 2a/2b/2c (AMF
 primitive + persistence + dream-dispatch delegation) landed. Date: 2026-06-04.
@@ -21,7 +24,7 @@ terms, the compiler, the selector). The coupling is small and concentrated —
 detector. The AgentMakefile-specific parts are the **patch appliers** and the
 **dream detectors**.
 
-`agentmemory` extracts the loop into a kernel with **zero `agentmf` dependency**,
+`aigg_memory` extracts the loop into a kernel with **zero `agentmf` dependency**,
 where the domain-specific pieces are *plugins*. AgentMakefile becomes one domain
 (routing-config memory); a markdown notebook (`MEMORY.md`-style) is another.
 
@@ -34,7 +37,7 @@ where the domain-specific pieces are *plugins*. AgentMakefile becomes one domain
 2. **AgentMakefile keeps working.** Its `evolution`/`dream` public API and tests
    stay green; it is migrated onto the kernel as a domain in a later phase (it
    becomes a *consumer*, not a fork).
-3. **In-tree isolated package.** `src/agentmemory/` imports nothing from
+3. **In-tree isolated package.** `src/aigg_memory/` imports nothing from
    `agentmf`. Enforced by a test that scans the package source. Liftable to its
    own repo once stable.
 
@@ -43,7 +46,7 @@ where the domain-specific pieces are *plugins*. AgentMakefile becomes one domain
 The kernel deliberately operates on an **in-memory document string**, not files —
 it does not know markdown from YAML. The caller maps documents ↔ files.
 
-### Data model (`agentmemory.models`)
+### Data model (`aigg_memory.models`)
 
 - `Diagnostic(severity, code, message, location?, hint?)` · `.to_dict()`
 - `Diagnostics` — `.error()/.warning()`, `.has_errors`, `.to_list()`, `.extend()`
@@ -64,7 +67,7 @@ it does not know markdown from YAML. The caller maps documents ↔ files.
 | `gates[i]` | `(before: str, after: str, proposal) -> GateResult` | validation gate that can block promotion |
 | `detectors[i]` | `(records: list[EvidenceRecord]) -> list[Proposal]` | offline consolidation (the "dream") |
 
-### Loop API (`agentmemory`)
+### Loop API (`aigg_memory`)
 
 - `EvidenceStore(path, domain=None)` · `.record(source, payload, outcome=None,
   fingerprint=None, refs=None, timestamp=None) -> EvidenceRecord` · `.load() -> list`
@@ -93,7 +96,7 @@ the `evo` CLI keep passing unchanged.
 
 ## Markdown notebook domain (Phase 3 — landed)
 
-`agentmemory.markdown` is a real, usable agent-memory tool over the kernel,
+`aigg_memory.markdown` is a real, usable agent-memory tool over the kernel,
 modelling the MEMORY.md index format (`- [Title](slug.md) — summary`) and the
 consolidate-memory operations:
 
@@ -109,8 +112,8 @@ Gates: `unique_slugs`, `well_formed_index`. The orchestrator
 whole loop purely (no file IO); the CLI adds the IO:
 
 ```
-python -m agentmemory observe     --evidence E.jsonl --json '{"title":..,"slug":..,"summary":..}' [--outcome correction|obsolete]
-python -m agentmemory consolidate --memory MEMORY.md --evidence E.jsonl [--write]   # writes back only when all gates pass
+python -m aigg_memory observe     --evidence E.jsonl --json '{"title":..,"slug":..,"summary":..}' [--outcome correction|obsolete]
+python -m aigg_memory consolidate --memory MEMORY.md --evidence E.jsonl [--write]   # writes back only when all gates pass
 ```
 
 This is the cold-start-free path: point `observe` at things the agent learns,
@@ -136,9 +139,9 @@ kernel should be — decision ①):
 `agentmf.evolution.evidence` now delegates `_sha256_json` / `_sha256_text` /
 `_redact_secrets` to the kernel with AMF's policy injected — byte-identical
 (proven across non-ASCII + secrets + the `hash(redact(payload))` chain, pinned by
-`test_evolution_primitives_delegate_to_agentmemory_kernel`). The whole evolution
+`test_evolution_primitives_delegate_to_aigg_memory_kernel`). The whole evolution
 package + dream route their hashing/redaction through these, so the dependency
-edge `agentmf → agentmemory` is real and the duplicated crypto/redaction layer is
+edge `agentmf → aigg_memory` is real and the duplicated crypto/redaction layer is
 gone. 347 tests pass.
 
 **Phase 2b (landed).** The JSONL **persistence** primitives moved into the kernel:

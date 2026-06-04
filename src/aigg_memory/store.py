@@ -5,9 +5,9 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from agentmemory._util import fingerprint as _fingerprint
-from agentmemory._util import redact_secrets, sha256_json, utc_now
-from agentmemory.models import Domain, EvidenceRecord
+from aigg_memory._util import fingerprint as _fingerprint
+from aigg_memory._util import redact_secrets, sha256_json, utc_now
+from aigg_memory.models import Domain, EvidenceRecord
 
 Serializer = Callable[[Dict[str, Any]], str]
 

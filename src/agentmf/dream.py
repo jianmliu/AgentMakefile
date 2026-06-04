@@ -11,8 +11,8 @@ from typing import Any, Dict, Optional, Union
 
 import yaml
 
-from agentmemory import Domain as _AmDomain
-from agentmemory import run_dream as _am_run_dream
+from aigg_memory import Domain as _AmDomain
+from aigg_memory import run_dream as _am_run_dream
 from agentmf.diagnostics import Diagnostics
 from agentmf.evolution import (
     DREAM_CATEGORY_RESPLIT_THRESHOLD,
@@ -51,7 +51,7 @@ def create_dream_mode_payload(
     evidence_files = sorted(evidence_root.glob("**/*.jsonl"))
 
     # The dream detectors share a uniform signature and are run in a fixed order,
-    # concatenating their proposals — exactly the agentmemory kernel's run_dream
+    # concatenating their proposals — exactly the aigg_memory kernel's run_dream
     # dispatch. Each detector is bound as a kernel detector over the evidence
     # files; the dict shapes and order are preserved byte-for-byte.
     detectors = [

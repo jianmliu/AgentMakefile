@@ -9,7 +9,7 @@ import difflib
 from pathlib import Path
 from typing import List, Union
 
-from agentmemory.models import Diagnostics, Domain, GateResult, Patch, Proposal
+from aigg_memory.models import Diagnostics, Domain, GateResult, Patch, Proposal
 
 
 def run_dream(domain: Domain, records: List) -> List[Proposal]:

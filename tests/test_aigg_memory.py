@@ -1,4 +1,4 @@
-"""Tests for the domain-agnostic agent-memory kernel (agentmemory).
+"""Tests for the domain-agnostic agent-memory kernel (aigg_memory).
 
 The kernel must hold an agent-memory loop (evidence -> dream -> patch -> evaluate
 -> promote) with ZERO dependency on agentmf. We prove it with a minimal markdown
@@ -8,7 +8,7 @@ notebook domain (a MEMORY.md-style store), which doubles as the canonical
 from collections import Counter
 from pathlib import Path
 
-import agentmemory as am
+import aigg_memory as am
 
 
 def _markdown_memory_domain() -> "am.Domain":
@@ -68,14 +68,14 @@ def _markdown_memory_domain() -> "am.Domain":
 
 
 def test_kernel_has_zero_agentmf_dependency() -> None:
-    """The isolation invariant: no agentmemory source file may import agentmf."""
+    """The isolation invariant: no aigg_memory source file may import agentmf."""
     pkg_dir = Path(am.__file__).parent
     offenders = []
     for path in pkg_dir.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         if "import agentmf" in text or "from agentmf" in text:
             offenders.append(path.name)
-    assert not offenders, f"agentmemory must not import agentmf, found in: {offenders}"
+    assert not offenders, f"aigg_memory must not import agentmf, found in: {offenders}"
 
 
 def test_markdown_memory_consolidation_loop(tmp_path: Path) -> None:
