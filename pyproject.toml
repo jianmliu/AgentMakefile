@@ -17,7 +17,7 @@ dependencies = [
   "numpy>=1.21",
   # The agent-memory kernel, extracted to its own repo (zero agentmf dep).
   # Installed from git until published to PyPI.
-  "aigg-memory @ git+https://github.com/jianmliu/aigg-memory@v0.1.0",
+  "aigg-memory @ git+https://github.com/jianmliu/aigg-memory@v0.2.0",
 ]
 
 [project.optional-dependencies]

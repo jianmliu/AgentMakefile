@@ -14673,19 +14673,3 @@ def test_memory_md_backend_renders_kind_aware(tmp_path: Path) -> None:
     assert "## Facts" in content
     assert "token_budget contract" in content         # semantic -> fact line
     assert "apply `budget_protocol`" not in content   # semantic NOT rendered as apply
-
-
-def test_serve_ui_memory_panel() -> None:
-    """The web UI surfaces typed memory: a recall panel over /memory/select +
-    /memory/units, with a kind filter."""
-    from agentmf.serve import render_index
-
-    html = render_index()
-    assert "/memory/select" in html and "/memory/units" in html
-    # panel elements the JS drives
-    for element_id in ("mem-request", "mem-corpus", "mem-bundle", "mem-units", "mem-recall", "mem-list"):
-        assert f'id="{element_id}"' in html, f"missing memory panel element {element_id}"
-    # kind filter checkboxes
-    assert 'class="mem-kind"' in html
-    for kind in ("procedural", "semantic", "episodic"):
-        assert kind in html

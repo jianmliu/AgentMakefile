@@ -10,16 +10,7 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
-
-from aigg_memory.memory import (
-    MemoryUnit,
-    consolidate_corpus as _mem_consolidate_corpus,
-    consolidation_status as _mem_consolidation_status,
-    load_corpus as _mem_load_corpus,
-    memory_domain,
-)
-from aigg_memory.store import EvidenceStore
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from agentmf.ask import create_ask_payload
 from agentmf.backends import SUPPORTED_BACKENDS
@@ -203,194 +194,6 @@ def _h_guidance_scan(body: dict, root: Path) -> Tuple[int, Envelope]:
     return _ok(data)
 
 
-# ---------------------------------------------------------------------------
-# Memory endpoints — typed agent-memory over aigg_memory.memory domain.
-#
-# A *corpus* is a directory (relative to root) that holds one sub-directory per
-# memory unit, each containing a SKILL.md file:
-#   <root>/<corpus>/<slug>/SKILL.md
-# An *evidence* path (relative to root) is the append-only JSONL store for
-# that corpus. Evidence is recorded online (observe); consolidation (Dream) is
-# an offline batch pass that promotes repeated observations into typed units.
-# ---------------------------------------------------------------------------
-
-_UNIT_SUFFIX = "/SKILL.md"
-_DEFAULT_CORPUS = "memory"
-
-# Corpus file IO is owned by aigg_memory.memory; serve reuses it (single
-# implementation). _mem_load_corpus / _mem_consolidate_corpus take a `corpus`
-# directory and key the workspace by the domain convention (memory/<slug>/SKILL.md).
-
-
-def _unit_summaries(workspace: Dict[str, str]) -> List[Dict[str, Any]]:
-    """Extract a summary dict from every unit in the workspace."""
-    out = []
-    for path, content in sorted(workspace.items()):
-        if not path.endswith(_UNIT_SUFFIX):
-            continue
-        unit = MemoryUnit.from_text(content)
-        if not unit.name:
-            continue
-        out.append({
-            "path": path,
-            "name": unit.name,
-            "kind": unit.kind or "semantic",
-            "description": unit.frontmatter.get("description", ""),
-            "status": unit.frontmatter.get("status", "active"),
-            "observations": unit.frontmatter.get("observations", 1),
-            "confidence": unit.frontmatter.get("confidence", "medium"),
-            "match_terms": unit.match_terms,
-        })
-    return out
-
-
-def _keyword_select(workspace: Dict[str, str], request: str, n_best: int = 5,
-                    kinds: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
-    """Keyword scan over match.user_intent — no agentmf import needed."""
-    req_lower = request.lower()
-    scored: List[Tuple[int, Dict[str, Any]]] = []
-    for path, content in workspace.items():
-        if not path.endswith(_UNIT_SUFFIX):
-            continue
-        unit = MemoryUnit.from_text(content)
-        if not unit.name:
-            continue
-        kind = unit.kind or "semantic"
-        if kinds and kind not in kinds:
-            continue
-        if unit.frontmatter.get("status") == "archived":
-            continue
-        terms = unit.match_terms
-        score = sum(1 for t in terms if t.lower() in req_lower)
-        if score > 0:
-            scored.append((score, {
-                "path": path,
-                "name": unit.name,
-                "kind": kind,
-                "description": unit.frontmatter.get("description", ""),
-                "body": unit.body.strip(),
-                "match_terms": terms,
-                "score": score,
-            }))
-    scored.sort(key=lambda x: -x[0])
-    return [item for _, item in scored[:n_best]]
-
-
-def _h_memory_observe(body: dict, root: Path) -> Tuple[int, Envelope]:
-    """Record one observation into the evidence store (online, cheap).
-    Body: { corpus?, evidence, source?, payload, outcome? }"""
-    evidence_path = body.get("evidence")
-    if not evidence_path:
-        return _err("AM_MEM_400", "evidence path required")
-    source = body.get("source", "observation")
-    payload = body.get("payload")
-    if not isinstance(payload, dict):
-        return _err("AM_MEM_400", "payload must be a JSON object")
-    outcome = body.get("outcome")
-
-    ev_abs = root / evidence_path
-    domain = memory_domain()
-    store = EvidenceStore(ev_abs, domain=domain)
-    try:
-        record = store.record(source, payload, outcome=outcome)
-    except Exception as exc:
-        return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
-    return _ok(record.to_dict())
-
-
-def _h_memory_consolidate(body: dict, root: Path) -> Tuple[int, Envelope]:
-    """Offline consolidation (Dream): promote repeated observations into typed
-    units, merge duplicates, archive obsolete. Gates block promotion on failures.
-    Body: { corpus?, evidence, write? }"""
-    evidence_path = body.get("evidence")
-    if not evidence_path:
-        return _err("AM_MEM_400", "evidence path required")
-    corpus = body.get("corpus", _DEFAULT_CORPUS)
-    write = bool(body.get("write", False))
-
-    ev_abs = root / evidence_path
-    domain = memory_domain()
-    store = EvidenceStore(ev_abs, domain=domain)
-    try:
-        records = store.load()
-        corpus_result = _mem_consolidate_corpus(root, records, write=write, corpus=corpus, domain=domain)
-    except Exception as exc:
-        return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
-
-    result = corpus_result.consolidation
-    data: Dict[str, Any] = {
-        "proposals": [p.to_dict() for p in result.proposals],
-        "gates": [{"name": g.name, "passed": g.passed, "detail": g.detail} for g in result.gates],
-        "gates_ok": result.gates_ok,
-        "diffs": result.patch.diffs,
-        "diagnostics": result.patch.diagnostics.to_list(),
-        "written": corpus_result.written,
-        "removed": corpus_result.removed,
-        "units_after": _unit_summaries(result.new_workspace),
-    }
-    status = 200 if result.gates_ok else 422
-    return status, {"ok": result.gates_ok, "diagnostics": [], "data": data}
-
-
-def _h_memory_select(body: dict, root: Path) -> Tuple[int, Envelope]:
-    """Keyword retrieval of relevant memory units for a request (online, cheap).
-    Body: { corpus?, request, n_best?, kinds? }"""
-    request = body.get("request", "")
-    corpus = body.get("corpus", _DEFAULT_CORPUS)
-    n_best = int(body.get("n_best", 5))
-    kinds: Optional[List[str]] = body.get("kinds")
-
-    workspace = _mem_load_corpus(root, corpus)
-    try:
-        units = _keyword_select(workspace, request, n_best=n_best, kinds=kinds)
-    except Exception as exc:
-        return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
-
-    # kind-aware bundle for direct context injection into a prompt
-    bundle_lines: List[str] = []
-    for kind_label, kind_key in [("## Procedures", "procedural"), ("## Facts", "semantic"),
-                                  ("## History", "episodic")]:
-        group = [u for u in units if u["kind"] == kind_key]
-        if group:
-            bundle_lines.append(kind_label)
-            for u in group:
-                prefix = f"- apply `{u['name']}` — " if kind_key == "procedural" else "- "
-                bundle_lines.append(prefix + (u["body"] or u["description"]))
-            bundle_lines.append("")
-    bundle = "\n".join(bundle_lines).rstrip("\n") + "\n" if bundle_lines else ""
-
-    return _ok({"units": units, "bundle": bundle, "total_in_corpus": len(workspace)})
-
-
-def _h_memory_consolidation_status(body: dict, root: Path) -> Tuple[int, Envelope]:
-    """Readiness signal so an app can decide *when* to consolidate (the trigger is
-    app policy — an NPC sleeping, a session ending, a chain epoch). Online / cheap.
-    Body: { evidence, corpus?, min_new? }"""
-    evidence_path = body.get("evidence")
-    if not evidence_path:
-        return _err("AM_MEM_400", "evidence path required")
-    corpus = body.get("corpus", _DEFAULT_CORPUS)
-    min_new = int(body.get("min_new", 1))
-    store = EvidenceStore(root / evidence_path, domain=memory_domain())
-    try:
-        status = _mem_consolidation_status(root, store.load(), corpus=corpus, min_new=min_new)
-    except Exception as exc:
-        return _err("AM_MEM_500", f"{type(exc).__name__}: {exc}", status=500)
-    return _ok(status.to_dict())
-
-
-def _h_memory_units(body: dict, root: Path) -> Tuple[int, Envelope]:
-    """List all (non-archived) typed units in a corpus.
-    Body / query: { corpus? }"""
-    corpus = body.get("corpus", _DEFAULT_CORPUS)
-    workspace = _mem_load_corpus(root, corpus)
-    return _ok({
-        "corpus": corpus,
-        "units": _unit_summaries(workspace),
-        "total": sum(1 for p in workspace if p.endswith(_UNIT_SUFFIX)),
-    })
-
-
 _ROUTES = {
     ("GET", "/healthz"): _h_healthz,
     ("GET", "/backends"): _h_backends,
@@ -404,12 +207,6 @@ _ROUTES = {
     ("POST", "/exec"): _h_exec,
     ("POST", "/compile"): _h_compile,
     ("POST", "/guidance/scan"): _h_guidance_scan,
-    # --- typed agent-memory (aigg_memory.memory domain) ---
-    ("POST", "/memory/observe"): _h_memory_observe,
-    ("POST", "/memory/consolidate"): _h_memory_consolidate,
-    ("POST", "/memory/consolidation-status"): _h_memory_consolidation_status,
-    ("POST", "/memory/select"): _h_memory_select,
-    ("POST", "/memory/units"): _h_memory_units,
 }
 
 
@@ -451,8 +248,6 @@ _INDEX_HTML = """<!doctype html>
   .budget-meta b { color: inherit; font-weight: 600; }
   .ok-badge { color: #10b981; } .bad-badge { color: #ef4444; }
   .budget-policy { margin-top: .4rem; font-size: .76rem; color: var(--mut); }
-  .kind { font-size: .8rem; color: var(--mut); display: inline-flex; align-items: center; gap: .2rem; }
-  hr { border: 0; border-top: 1px solid var(--bd); margin: 2rem 0 1rem; }
 </style>
 </head>
 <body>
@@ -481,27 +276,6 @@ _INDEX_HTML = """<!doctype html>
     <aside>
       <h2>Targets</h2><ul id="targets"></ul>
       <h2>Models</h2><ul id="models"></ul>
-    </aside>
-  </div>
-
-  <hr>
-  <h1 style="font-size:1.1rem">Memory <small id="mem-health" style="color:var(--mut);font-weight:400;font-size:.8rem"></small></h1>
-  <div class="bar">
-    <input id="mem-request" placeholder="Recall memory for a task — e.g. 游侠 swordsmanship">
-    <input id="mem-corpus" value="memory" title="corpus directory" style="width:160px">
-    <label class="kind"><input type="checkbox" class="mem-kind" value="procedural" checked> proc</label>
-    <label class="kind"><input type="checkbox" class="mem-kind" value="semantic" checked> sem</label>
-    <label class="kind"><input type="checkbox" class="mem-kind" value="episodic" checked> epi</label>
-    <button id="mem-recall">Recall</button>
-    <button id="mem-list">List units</button>
-  </div>
-  <div class="grid">
-    <section>
-      <h2>Bundle · POST /memory/select</h2>
-      <pre id="mem-bundle">Recall memory for a request, or list the corpus.</pre>
-    </section>
-    <aside>
-      <h2>Units</h2><ul id="mem-units"></ul>
     </aside>
   </div>
 
@@ -572,35 +346,6 @@ async function run() {
     }
   } catch (e) { $("result").innerHTML = '<span class="err">request failed: ' + e + "</span>"; }
 }
-function memKinds() {
-  const checked = [...document.querySelectorAll(".mem-kind:checked")].map((c) => c.value);
-  return checked.length && checked.length < 3 ? checked : null;   // omit filter when all (or none) selected
-}
-async function memRecall() {
-  const body = { request: $("mem-request").value, corpus: $("mem-corpus").value };
-  const kinds = memKinds();
-  if (kinds) body.kinds = kinds;
-  $("mem-bundle").textContent = "…";
-  try {
-    const { env } = await api("POST", "/memory/select", body);
-    const d = env.data || {};
-    $("mem-bundle").textContent = d.bundle || "(no relevant memory)";
-    bullets("mem-units", (d.units || []).map((u) => `${u.name} · ${u.kind} · score ${u.score}`));
-    $("mem-health").textContent = `· ${d.total_in_corpus || 0} in corpus`;
-  } catch (e) { $("mem-bundle").innerHTML = '<span class="err">recall failed: ' + e + "</span>"; }
-}
-async function memList() {
-  try {
-    const { env } = await api("POST", "/memory/units", { corpus: $("mem-corpus").value });
-    const d = env.data || {};
-    bullets("mem-units", (d.units || []).map((u) => `${u.name} · ${u.kind} · ${u.status}`));
-    $("mem-bundle").textContent = `${d.total || 0} unit(s) in "${d.corpus}".`;
-    $("mem-health").textContent = `· ${d.total || 0} units`;
-  } catch (e) { $("mem-bundle").innerHTML = '<span class="err">list failed: ' + e + "</span>"; }
-}
-$("mem-recall").addEventListener("click", memRecall);
-$("mem-list").addEventListener("click", memList);
-$("mem-request").addEventListener("keydown", (e) => { if (e.key === "Enter") memRecall(); });
 $("run").addEventListener("click", run);
 $("request").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
 boot();

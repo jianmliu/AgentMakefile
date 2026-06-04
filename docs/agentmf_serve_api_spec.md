@@ -71,36 +71,24 @@ Each POST body is a JSON object; omitted fields use the function defaults.
 | `POST /validate` | `{}` | validation diagnostics for the root source | loader validation |
 | `POST /guidance/scan` | `{files:[paths]}` | scanned SKILL.md / AGENTS.md / CLAUDE.md / markdown → importable guidance | `scan_guidance_files` |
 
-### Typed agent-memory (POST) — over the `aigg_memory.memory` domain
+### Typed agent-memory — moved to `aigg-memory serve`
 
-A **corpus** is a directory (relative to `root`) of `<corpus>/<slug>/SKILL.md`
-typed memory units; **evidence** is its append-only JSONL store. The write side
-runs through `aigg_memory.memory` (the corpus file IO + consolidation are owned
-there; serve reuses them — one implementation). The read side (`/memory/select`)
-is a self-contained keyword scan over the corpus, so it needs no scanned
-`MemoryMakefile`.
+The `/memory/*` HTTP endpoints + web UI used to live here; they now belong to the
+standalone **[aigg-memory](https://github.com/jianmliu/aigg-memory)** library,
+which ships its own self-contained server:
 
-| Method · Path | Body (key fields) | Returns (`data`) | Notes |
-| --- | --- | --- | --- |
-| `POST /memory/observe` | `{evidence, payload, source?, outcome?}` | the recorded evidence record (`event_id`, `summary`, …) | **online / cheap** — one observation appended; `outcome` ∈ `correction\|obsolete` |
-| `POST /memory/consolidate` | `{evidence, corpus?, write?}` | `{proposals, gates, gates_ok, diffs, written:[paths], removed:[paths], units_after}` | **offline (Dream)** — promote repeated obs → typed units (kind-aware: procedural→`candidate`, declarative→`active`); writes only when `write` and every gate passes; `422` if a gate fails. Mirrors the CLI `consolidate-corpus`. |
-| `POST /memory/consolidation-status` | `{evidence, corpus?, min_new?}` | `{total_evidence, consolidated_events, pending, oldest_pending_timestamp, recommended}` | **readiness signal** — cheap online check of how much evidence is not yet folded into units (`pending`). The engine reports; the **app owns the trigger policy** (see below). `recommended = pending >= min_new`. |
-| `POST /memory/select` | `{request, corpus?, n_best?, kinds?}` | `{units:[{name,kind,description,body,match_terms,score}], bundle, total_in_corpus}` | **online / cheap** — keyword recall over `match.user_intent`; archived units excluded; `bundle` is the kind-aware context (procedural→`apply …`, declarative→fact line) |
-| `POST /memory/units` | `{corpus?}` | `{corpus, units:[summaries], total}` | list non-archived unit summaries |
+```
+aigg-memory serve --root . --port 8788
+# POST /memory/observe · /memory/consolidate · /memory/consolidation-status
+#      /memory/select · /memory/units   + a recall web UI at /
+```
 
-`corpus` defaults to `memory`; it may be nested (e.g. `npcs/<id>/memory`), which
-makes per-agent / per-entity memory stores trivial. `written`/`removed` are path
-lists (aligned with the CLI), not booleans.
-
-**The Dream trigger is application policy, not an engine schedule.** `observe` is
-an online side-effect (the app records evidence as it operates); `consolidate`
-(Dream) is an offline batch the **app fires at its own natural moment** — an NPC
-sleeping / a player leaving an area (MUD), a session or budget-epoch / settlement
-event (onchainpal), a PR merge / idle window (coding agent). Per-entity corpora
-(`npcs/<id>/memory`) give each entity its own Dream rhythm. The engine deliberately
-ships **no scheduler**; it only offers `/memory/consolidation-status` as a cheap
-signal the app can poll to decide *whether* to fire, keeping the *when* in the
-app. Typical loop: `status → if recommended (by the app's own rule) → consolidate`.
+This keeps the dependency direction clean: `agentmf serve` exposes only
+AgentMakefile's own value (routing / plugin / compile / guidance); an agent that
+wants the typed-memory HTTP surface talks to `aigg-memory serve` **directly**, with
+no AgentMakefile in the path. (AgentMakefile still consumes the `aigg_memory`
+library internally for evolution/dream and for compiling a memory corpus into a
+routable skill-index — see `docs/typed_memory_design.md`.)
 
 ### Pricing & budget
 
@@ -137,10 +125,6 @@ JS, no build step, no dependencies — embedded in `serve.py`). It is a thin
   `headroom_after_first_call` and `halt_policy` shown alongside. This is the
   same contract the AIGG gateway enforces server-side and the candidate payload
   for the MCP budget extension.
-- A **Memory** panel recalls typed memory: a request box + corpus field + a
-  per-kind filter (procedural / semantic / episodic) drive `POST /memory/select`,
-  rendering the kind-aware **bundle** (procedural → `apply …`, declarative → fact
-  line) plus the matched units; a **List units** button calls `POST /memory/units`.
 - An optional bearer-token field is sent as `Authorization` so the page works
   whether or not the server was started with `--token`. The page itself loads
   ungated; only the JSON API enforces the token.
