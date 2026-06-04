@@ -39,10 +39,10 @@ where the domain-specific pieces are *plugins*. AgentMakefile becomes one domain
    becomes a *consumer*, not a fork).
 3. **In-tree isolated package.** `src/aigg_memory/` imports nothing from
    `agentmf`. Enforced by a test that scans the package source. **Phase 4
-   (done):** extracted to a standalone `aigg-memory` repo — installs in a clean
-   venv with only PyYAML, all tests pass, no `agentmf`. Publishing + the
-   AgentMakefile cutover (depend on the package, drop the in-tree copy) are the
-   remaining owner steps; until then the in-tree copy is the working source.
+   (done):** extracted + **published** at <https://github.com/jianmliu/aigg-memory>
+   — installs in a clean venv with only PyYAML, all tests pass, no `agentmf`. The
+   AgentMakefile cutover (depend on the package, drop the in-tree copy) is the
+   remaining step; until then the in-tree copy is the working source.
 
 ## Kernel contract
 
