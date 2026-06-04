@@ -15,6 +15,7 @@ class ScannedSkill:
     description: str
     path: Path
     match_terms: List[str]
+    kind: Optional[str] = None
 
     @property
     def qualified_name(self) -> str:
@@ -81,6 +82,7 @@ def build_agentmakefile_data(
         skill.name: {
             **({"namespace": skill.namespace} if skill.namespace else {}),
             "description": skill.description,
+            **({"kind": skill.kind} if skill.kind else {}),
             "implementation": {"source": str(skill.path)},
             "match": {"user_intent": skill.match_terms},
         }
@@ -131,13 +133,36 @@ def _read_skill(path: Path, *, namespace: Optional[str]) -> ScannedSkill:
     raw_name = str(metadata.get("name") or path.parent.name)
     skill_namespace, name = _split_skill_name(raw_name, namespace)
     description = str(metadata.get("description") or f"Skill {raw_name}.")
+    kind = metadata.get("kind")
     return ScannedSkill(
         name=name,
         namespace=skill_namespace,
         description=description,
         path=path,
-        match_terms=_match_terms(name, description, body),
+        match_terms=_merge_explicit_match(_explicit_match_terms(metadata), _match_terms(name, description, body)),
+        kind=str(kind) if kind else None,
     )
+
+
+def _explicit_match_terms(metadata: Dict[str, Any]) -> List[str]:
+    """An author-declared `match.user_intent` in the frontmatter — authoritative
+    routing terms (used by typed memory units; benefits real skills too)."""
+    match = metadata.get("match")
+    if not isinstance(match, dict):
+        return []
+    user_intent = match.get("user_intent")
+    if not isinstance(user_intent, list):
+        return []
+    return [str(term).strip() for term in user_intent if str(term).strip()]
+
+
+def _merge_explicit_match(explicit: List[str], derived: List[str]) -> List[str]:
+    """Explicit terms first (authoritative), then derived terms; de-duplicated."""
+    merged: List[str] = []
+    for term in [*explicit, *derived]:
+        if term and term not in merged:
+            merged.append(term)
+    return merged
 
 
 def _split_frontmatter(text: str) -> tuple[Dict[str, Any], str]:

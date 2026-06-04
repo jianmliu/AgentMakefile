@@ -14525,3 +14525,76 @@ def test_evolution_primitives_delegate_to_aigg_memory_kernel() -> None:
             prefix="sha256:", separators=(",", ":"), ensure_ascii=True,
         )
     assert ev._sha256_text("中文 abc").startswith("sha256:")
+
+
+def test_skill_scanner_honors_explicit_match_and_carries_kind(tmp_path: Path) -> None:
+    """M3: the scanner merges an explicit match.user_intent and carries `kind`."""
+    from agentmf.skill_scanner import build_agentmakefile_data, scan_skill_dirs
+
+    unit = tmp_path / "memory" / "budget_protocol"
+    unit.mkdir(parents=True)
+    (unit / "SKILL.md").write_text(
+        "---\n"
+        "name: budget_protocol\n"
+        "description: token_budget contract\n"
+        "kind: semantic\n"
+        "match:\n"
+        "  user_intent:\n"
+        "  - token budget\n"
+        "  - cost contract\n"
+        "---\n\nthe note body\n",
+        encoding="utf-8",
+    )
+    skills = scan_skill_dirs([tmp_path / "memory"])
+    assert skills[0].kind == "semantic"
+    assert "token budget" in skills[0].match_terms and "cost contract" in skills[0].match_terms
+
+    data = build_agentmakefile_data(skills, package_name="MemoryMakefile")
+    entry = data["skills"]["budget_protocol"]
+    assert entry["kind"] == "semantic"
+    assert "token budget" in entry["match"]["user_intent"]
+
+
+def test_scanned_memory_corpus_is_valid_and_routable(tmp_path: Path) -> None:
+    """End-to-end M2 -> M3 handoff: aigg-memory writes typed units; AgentMakefile
+    scans them into a valid, routable skill-index. Routing is kind-agnostic."""
+    import aigg_memory as am
+    from aigg_memory import memory as mem
+    from agentmf.loader import load_source_with_diagnostics
+    from agentmf.selector import create_link_plan
+    from agentmf.skill_scanner import render_agentmakefile_from_skill_dirs
+
+    def obs(slug, kind, desc, match, ev):
+        return am.EvidenceRecord(
+            1, "t", "observation", "f",
+            {"slug": slug, "name": slug, "kind": kind, "description": desc, "match": match, "body": "note"},
+            None, "h", ev,
+        )
+
+    records = [
+        obs("budget_protocol", "semantic", "token_budget contract", ["token budget", "cost contract"], "e1"),
+        obs("budget_protocol", "semantic", "token_budget contract", ["token budget", "cost contract"], "e2"),
+        obs("tdd_flow", "procedural", "red green refactor", ["tdd", "test first"], "e3"),
+        obs("tdd_flow", "procedural", "red green refactor", ["tdd", "test first"], "e4"),
+    ]
+    result = mem.consolidate({}, records)
+    # write the typed units to disk — the file contract between the two systems
+    for path, content in result.new_workspace.items():
+        full = tmp_path / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(content, encoding="utf-8")
+
+    makefile = tmp_path / "MemoryMakefile"
+    makefile.write_text(
+        render_agentmakefile_from_skill_dirs([tmp_path / "memory"], package_name="MemoryMakefile"),
+        encoding="utf-8",
+    )
+
+    source, diags = load_source_with_diagnostics(makefile)
+    assert source is not None and not diags.has_errors          # valid AgentMakefile
+    assert source.skills["budget_protocol"].kind == "semantic"
+    assert source.skills["tdd_flow"].kind == "procedural"
+
+    plan = create_link_plan(makefile, request="token budget contract", matcher="keyword")
+    assert not plan.diagnostics.has_errors
+    assert "skill.budget_protocol" in plan.plan.get("selected_targets", [])

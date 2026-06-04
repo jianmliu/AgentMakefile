@@ -67,6 +67,7 @@ class PolicySpec(StrictModel):
 class SkillSpec(StrictModel):
     namespace: Optional[str] = None
     description: Optional[str] = None
+    kind: Optional[str] = None  # memory kind: procedural | semantic | episodic | working
     implementation: Dict[str, Any] = Field(default_factory=dict)
     inputs: InputSpec = Field(default_factory=InputSpec)
     match: Dict[str, Any] = Field(default_factory=dict)
@@ -159,6 +160,7 @@ class IRSkill(StrictModel):
     qualified_name: str
     namespace: Optional[str] = None
     description: Optional[str] = None
+    kind: Optional[str] = None
     implementation: Dict[str, Any] = Field(default_factory=dict)
     inputs: InputSpec = Field(default_factory=InputSpec)
     match: Dict[str, Any] = Field(default_factory=dict)
