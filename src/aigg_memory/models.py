@@ -141,11 +141,27 @@ class Patch:
     diagnostics: Diagnostics
 
 
+@dataclass
+class WorkspacePatch:
+    """A multi-file patch. A single document is the one-entry case, so this
+    generalizes Patch (see generate_workspace_patch)."""
+
+    new_workspace: Dict[str, str]
+    diffs: Dict[str, str]          # path -> unified diff, only for files that changed
+    applied: List[str]
+    diagnostics: Diagnostics
+
+
 # Plugin callable signatures (documentation aliases)
 Summarizer = Callable[[Dict[str, Any]], Dict[str, Any]]
 Applier = Callable[[str, Dict[str, Any]], str]
 Gate = Callable[[str, str, Proposal], GateResult]
 Detector = Callable[[List[EvidenceRecord]], List[Proposal]]
+
+# Workspace = a set of files (path -> content); the multi-file generalization.
+Workspace = Dict[str, str]
+WorkspaceApplier = Callable[[Dict[str, str], Dict[str, Any]], Dict[str, str]]
+WorkspaceGate = Callable[[Dict[str, str], Dict[str, str], Proposal], GateResult]
 
 
 @dataclass

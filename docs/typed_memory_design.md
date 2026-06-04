@@ -232,7 +232,7 @@ closing the deep unification deferred at Phase 2c.
 
 | phase | scope |
 | --- | --- |
-| **M1** | `Workspace` abstraction in the kernel (generalize `generate_patch`/`evaluate`; one-entry = today). Backward-compatible; Phase-3 tests stay green. |
+| **M1 — landed** | `Workspace` abstraction in the kernel: `generate_workspace_patch` / `evaluate_workspace` over `dict[path→content]` + per-file diffs, plus `lift_document_applier` bridging a single-document applier into the one-entry case. Additive — the single-document API is untouched, so Phase-3 stays green; a test proves one-entry-workspace ≡ document. |
 | **M2** | `memory` domain: frontmatter (+`kind`) parse/render, multi-file appliers, kind-aware gates, evidence detectors. TDD end-to-end on a `memory/` corpus with both `procedural` and `semantic` units. |
 | **M3** | Scanner enhancement: honor explicit `match.user_intent` + carry `kind`. Wire `agentmf skills scan memory/` → route → **kind-aware compile** to `MEMORY.md` / skill files. |
 | **M4** | `aigg-memory consolidate` writes typed units; `select` returns task-scoped, kind-filtered memory bundles. |

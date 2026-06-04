@@ -164,3 +164,96 @@ def test_redact_secrets_masks_keys_and_token_values() -> None:
     assert cleaned["token"] != "abc"           # secret-looking key masked
     assert "sk-deadbeefdeadbeef" not in cleaned["note"]  # token-looking value masked
     assert cleaned["n"] == 3                    # ordinary values preserved
+
+
+# --- M1: the Workspace abstraction (multi-file patches) -------------------
+
+def _file_domain() -> "am.Domain":
+    """A minimal multi-file domain: changes create/edit/delete files in a
+    workspace (path -> content)."""
+
+    def write_file(workspace, change):
+        ws = dict(workspace)
+        ws[change["path"]] = change["content"]
+        return ws
+
+    def append_line(workspace, change):
+        ws = dict(workspace)
+        ws[change["path"]] = ws.get(change["path"], "") + change["line"] + "\n"
+        return ws
+
+    def delete_file(workspace, change):
+        ws = dict(workspace)
+        ws.pop(change["path"], None)
+        return ws
+
+    def no_empty_files(before, after, proposal):
+        empties = [p for p, c in after.items() if c == ""]
+        return am.GateResult("no_empty_files", len(empties) == 0)
+
+    return am.Domain(
+        name="files",
+        appliers={"write_file": write_file, "append_line": append_line, "delete_file": delete_file},
+        gates=[no_empty_files],
+    )
+
+
+def test_workspace_patch_multifile() -> None:
+    domain = _file_domain()
+    ws0 = {"a.md": "hello\n"}
+    proposal = am.Proposal("p", "multi-file", [
+        {"type": "write_file", "path": "b.md", "content": "new\n"},
+        {"type": "append_line", "path": "a.md", "line": "world"},
+        {"type": "delete_file", "path": "gone.md"},  # absent -> no-op (still 'applied')
+    ])
+    patch = am.generate_workspace_patch(domain, proposal, ws0)
+
+    assert not patch.diagnostics.has_errors
+    assert patch.applied == ["write_file", "append_line", "delete_file"]
+    assert patch.new_workspace["b.md"] == "new\n"           # created
+    assert patch.new_workspace["a.md"] == "hello\nworld\n"   # edited
+    # per-file diffs only for files that actually changed, git-style headers
+    assert set(patch.diffs) == {"a.md", "b.md"}
+    assert "b/b.md" in patch.diffs["b.md"]
+    # the caller's workspace is not mutated
+    assert ws0 == {"a.md": "hello\n"}
+
+    gates = am.evaluate_workspace(domain, ws0, patch.new_workspace, proposal)
+    assert gates and all(g.passed for g in gates)
+
+
+def test_workspace_diff_marks_created_and_deleted_files() -> None:
+    domain = _file_domain()
+    before = {"keep.md": "x\n", "drop.md": "bye\n"}
+    proposal = am.Proposal("p", "t", [
+        {"type": "write_file", "path": "fresh.md", "content": "hi\n"},
+        {"type": "delete_file", "path": "drop.md"},
+    ])
+    patch = am.generate_workspace_patch(domain, proposal, before)
+    assert "fresh.md" not in before and patch.new_workspace["fresh.md"] == "hi\n"
+    assert "drop.md" not in patch.new_workspace
+    assert set(patch.diffs) == {"fresh.md", "drop.md"}      # keep.md unchanged -> no diff
+
+
+def test_single_document_is_a_one_entry_workspace() -> None:
+    """Backward-compat: a single-document applier lifted into a one-entry
+    workspace reproduces generate_patch's content — document == 1-entry workspace."""
+    def add_line(document, change):
+        return document.rstrip("\n") + "\n- " + change["text"] + "\n"
+
+    proposal = am.Proposal("p", "t", [{"type": "add", "text": "x"}])
+    p_doc = am.generate_patch(am.Domain(name="d", appliers={"add": add_line}), proposal, "# Doc\n")
+
+    ws_domain = am.Domain(name="d", appliers={"add": am.lift_document_applier("DOC", add_line)})
+    p_ws = am.generate_workspace_patch(ws_domain, proposal, {"DOC": "# Doc\n"})
+
+    assert p_ws.new_workspace["DOC"] == p_doc.new_text   # identical content
+    assert p_ws.applied == p_doc.applied
+
+
+def test_workspace_unknown_change_warns_without_crashing() -> None:
+    patch = am.generate_workspace_patch(am.Domain(name="empty"), am.Proposal("x", "t", [{"type": "nope"}]), {"a": "1"})
+    assert patch.applied == []
+    assert patch.new_workspace == {"a": "1"}               # untouched
+    assert patch.diagnostics.has_errors is False           # warning, not error
+    assert "AM_UNSUPPORTED_CHANGE" in [d["code"] for d in patch.diagnostics.to_list()]

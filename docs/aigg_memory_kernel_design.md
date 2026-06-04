@@ -79,7 +79,16 @@ it does not know markdown from YAML. The caller maps documents ↔ files.
   a unified diff.
 - `evaluate(domain, before, after, proposal) -> list[GateResult]`.
 - `promote(path, text) -> Path` — commit the consolidated document.
-- helpers: `fingerprint(obj)`, `sha256_json(obj)`, `sha256_text(s)`, `redact_secrets(v)`.
+- **multi-file (Workspace) generalization** — a single document is the one-entry case:
+  - `generate_workspace_patch(domain, proposal, workspace) -> WorkspacePatch` —
+    appliers are `(workspace, change) -> workspace`; returns the new workspace +
+    **per-file diffs** (only for changed files); same warn/error policy as
+    `generate_patch`; the caller's workspace is not mutated.
+  - `evaluate_workspace(domain, before_ws, after_ws, proposal) -> list[GateResult]`.
+  - `lift_document_applier(path, applier)` — adapt a `(str, change) -> str` applier
+    into a workspace applier editing one file (single document ≡ one-entry workspace).
+- helpers: `fingerprint(obj)`, `sha256_json(obj)`, `sha256_text(s)`, `redact_secrets(v)`,
+  `append_jsonl(path, record, *, serialize)`, `read_jsonl(path)`.
 
 ## Mapping back to AgentMakefile (later phase)
 

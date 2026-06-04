@@ -14,7 +14,15 @@ from aigg_memory._util import (
     sha256_text,
     utc_now,
 )
-from aigg_memory.kernel import evaluate, generate_patch, promote, run_dream
+from aigg_memory.kernel import (
+    evaluate,
+    evaluate_workspace,
+    generate_patch,
+    generate_workspace_patch,
+    lift_document_applier,
+    promote,
+    run_dream,
+)
 from aigg_memory.models import (
     Diagnostic,
     Diagnostics,
@@ -23,6 +31,7 @@ from aigg_memory.models import (
     GateResult,
     Patch,
     Proposal,
+    WorkspacePatch,
 )
 from aigg_memory.store import EvidenceStore, append_jsonl, read_jsonl
 
@@ -34,6 +43,7 @@ __all__ = [
     "Proposal",
     "GateResult",
     "Patch",
+    "WorkspacePatch",
     "Domain",
     # store
     "EvidenceStore",
@@ -43,6 +53,9 @@ __all__ = [
     "run_dream",
     "generate_patch",
     "evaluate",
+    "generate_workspace_patch",
+    "evaluate_workspace",
+    "lift_document_applier",
     "promote",
     # utilities
     "fingerprint",
