@@ -14454,3 +14454,25 @@ targets:
     # error envelope: an unsupported matcher fails with ok=false + diagnostics
     status, env = dispatch("POST", "/select", {"request": "x", "matcher": "bogus"}, root)
     assert env["ok"] is False and env["diagnostics"]
+
+
+def test_serve_ui_static() -> None:
+    """The minimal web UI is a single self-contained HTML page the serve shell
+    returns at /, /ui, /index.html — it drives the JSON API client-side."""
+    from agentmf.serve import render_index, static_response
+
+    html = render_index()
+    assert "<!doctype html" in html.lower()
+    assert "AgentMakefile" in html
+    # it must reference the endpoints it consumes, so a regression that drops one
+    # of them from the API is visible here too
+    for hook in ("/healthz", "/targets", "/backends", "/matchers", "/models", "/select"):
+        assert hook in html
+
+    content_type, body = static_response("/")
+    assert content_type.startswith("text/html")
+    assert b"<!doctype html" in body.lower()
+    assert static_response("/ui")[0].startswith("text/html")
+    assert static_response("/index.html")[0].startswith("text/html")
+    assert static_response("/select") is None  # JSON routes are NOT static
+    assert static_response("/nope") is None

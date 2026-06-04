@@ -210,6 +210,117 @@ _ROUTES = {
 }
 
 
+_INDEX_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentMakefile</title>
+<style>
+  :root { color-scheme: light dark; --b:#3b82f6; --mut:#888; --bd:#8884; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 1.5rem;
+         max-width: 1100px; margin-inline: auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+  h1 small { color: var(--mut); font-weight: 400; font-size: .8rem; }
+  h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); margin: 1.2rem 0 .4rem; }
+  .bar { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  input, select, button { font: inherit; padding: .5rem .6rem; border: 1px solid var(--bd); border-radius: 6px; background: transparent; color: inherit; }
+  #request { flex: 1 1 320px; }
+  button { background: var(--b); color: #fff; border: 0; cursor: pointer; }
+  button:active { opacity: .8; }
+  .grid { display: grid; grid-template-columns: 1fr 240px; gap: 1.5rem; margin-top: 1rem; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  pre { background: #8881; padding: 1rem; border-radius: 8px; overflow: auto; max-height: 60vh; margin: 0; white-space: pre-wrap; word-break: break-word; }
+  ul { margin: 0; padding-left: 1.1rem; }
+  li { margin: .15rem 0; }
+  .tok { margin-top: 1.5rem; }
+  .tok input { width: 280px; }
+  .err { color: #ef4444; }
+</style>
+</head>
+<body>
+  <h1>AgentMakefile <small id="health">connecting…</small></h1>
+  <div class="bar">
+    <input id="request" placeholder="Describe a task — e.g. review this code for bugs" autofocus>
+    <select id="matcher" title="matcher"></select>
+    <select id="backend" title="backend"></select>
+    <input id="budget" type="number" min="0" placeholder="budget (opt)" style="width:120px">
+    <button id="run">Select</button>
+  </div>
+  <div class="grid">
+    <section>
+      <h2>Selection result · POST /select</h2>
+      <pre id="result">Enter a request and press Select.</pre>
+    </section>
+    <aside>
+      <h2>Targets</h2><ul id="targets"></ul>
+      <h2>Models</h2><ul id="models"></ul>
+    </aside>
+  </div>
+  <div class="tok"><input id="token" placeholder="bearer token (only if server set --token)"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const authHeaders = () => { const t = $("token").value.trim(); return t ? { Authorization: "Bearer " + t } : {}; };
+async function api(method, path, body) {
+  const headers = { ...authHeaders() };
+  if (body) headers["Content-Type"] = "application/json";
+  const r = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  return { status: r.status, env: await r.json() };
+}
+function options(id, items) { $(id).innerHTML = items.map((i) => `<option>${i}</option>`).join(""); }
+function bullets(id, items) { $(id).innerHTML = items.map((i) => `<li>${i}</li>`).join(""); }
+async function boot() {
+  try {
+    const h = await api("GET", "/healthz");
+    const d = h.env.data || {};
+    $("health").textContent = "· " + (d.agentmakefile_present ? d.root : "no AgentMakefile at " + d.root);
+    const [mt, bk, tg, md] = await Promise.all([
+      api("GET", "/matchers"), api("GET", "/backends"), api("GET", "/targets"), api("GET", "/models"),
+    ]);
+    options("matcher", mt.env.data);
+    options("backend", bk.env.data);
+    bullets("targets", (tg.env.data || []).map((t) => `${t.name} · p${t.priority}`));
+    bullets("models", (md.env.data || []).map((m) => m.name + (m.default ? " (default)" : "")));
+    if (bk.env.data.includes("agents-fragments")) $("backend").value = "agents-fragments";
+  } catch (e) {
+    $("health").innerHTML = '<span class="err">· server offline</span>';
+  }
+}
+async function run() {
+  const body = { request: $("request").value, matcher: $("matcher").value, backend: $("backend").value };
+  const b = $("budget").value; if (b) body.budget = Number(b);
+  $("result").textContent = "…";
+  try {
+    const { status, env } = await api("POST", "/select", body);
+    const head = `# status ${status} · ok=${env.ok}\\n`;
+    $("result").textContent = head + JSON.stringify(env.diagnostics.length ? { diagnostics: env.diagnostics, data: env.data } : env.data, null, 2);
+  } catch (e) { $("result").innerHTML = '<span class="err">request failed: ' + e + "</span>"; }
+}
+$("run").addEventListener("click", run);
+$("request").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+boot();
+</script>
+</body>
+</html>
+"""
+
+_STATIC_PATHS = {"/", "/ui", "/index.html"}
+
+
+def render_index() -> str:
+    """The single self-contained web UI page (no build step, no dependencies)."""
+    return _INDEX_HTML
+
+
+def static_response(path: str) -> Optional[Tuple[str, bytes]]:
+    """Return (content_type, body) for a static UI path, or None for API/unknown
+    paths (which the JSON dispatch owns)."""
+    if path in _STATIC_PATHS:
+        return "text/html; charset=utf-8", _INDEX_HTML.encode("utf-8")
+    return None
+
+
 def dispatch(method: str, path: str, body: Optional[dict], root: Union[Path, str]) -> Tuple[int, Envelope]:
     """Pure request dispatch — the unit-tested core. Returns (http_status, envelope)."""
     handler = _ROUTES.get((method, path))
@@ -251,6 +362,15 @@ def run_server(root: Union[Path, str], port: int = 8787, token: Optional[str] = 
             self._send(status, env)
 
         def do_GET(self) -> None:  # noqa: N802
+            static = static_response(self.path)
+            if static is not None:
+                content_type, body = static
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             self._handle("GET")
 
         def do_POST(self) -> None:  # noqa: N802

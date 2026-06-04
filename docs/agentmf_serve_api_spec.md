@@ -88,6 +88,24 @@ server-side in Go.
 - **MCP-ready.** The same endpoints map cleanly onto MCP tools later (one tool per POST); the budget block is the candidate `budget` extension payload (tracked in project memory). `serve` is the inbound channel that exists today; MCP is the standardized one later.
 - **Not a runtime.** `serve` emits plans/contracts/artifacts; enforcement of token/tool budgets stays with the host (or the AIGG gateway). This keeps AgentMakefile a compiler + contract-emitter, not a competing runtime.
 
+## Web UI (MVP)
+
+`GET /`, `/ui`, `/index.html` serve a single self-contained HTML page (vanilla
+JS, no build step, no dependencies — embedded in `serve.py`). It is a thin
+*consumer* of the JSON API, proving the engine/consumer split:
+
+- On load it calls `GET /healthz /matchers /backends /targets /models` to
+  populate the project status, the matcher/backend selectors, and the
+  target/model lists.
+- The request box + **Select** button issue `POST /select` and render the link
+  plan (selected targets, selection trace, recommended model, budget).
+- An optional bearer-token field is sent as `Authorization` so the page works
+  whether or not the server was started with `--token`. The page itself loads
+  ungated; only the JSON API enforces the token.
+
+This is the cc-switch-style shell reduced to its smallest honest form: no
+client framework, no server-side rendering, no new domain logic.
+
 ## Out of scope (deliberately)
 
 - Auth beyond a localhost bearer; multi-tenant; remote hosting.
