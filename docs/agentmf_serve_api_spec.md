@@ -99,6 +99,13 @@ JS, no build step, no dependencies — embedded in `serve.py`). It is a thin
   target/model lists.
 - The request box + **Select** button issue `POST /select` and render the link
   plan (selected targets, selection trace, recommended model, budget).
+- When a budget is entered it also calls `POST /plugin/payload` and renders the
+  host-enforceable **A/B/C token-budget contract** as a cost bar: a grey
+  `stable_prefix_tokens` segment + a blue `per_call_ceiling` segment over the
+  `total` track, turning red when `fits_first_call` is false, with
+  `headroom_after_first_call` and `halt_policy` shown alongside. This is the
+  same contract the AIGG gateway enforces server-side and the candidate payload
+  for the MCP budget extension.
 - An optional bearer-token field is sent as `Authorization` so the page works
   whether or not the server was started with `--token`. The page itself loads
   ungated; only the JSON API enforces the token.

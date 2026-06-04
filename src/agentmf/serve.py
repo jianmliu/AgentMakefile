@@ -237,6 +237,17 @@ _INDEX_HTML = """<!doctype html>
   .tok { margin-top: 1.5rem; }
   .tok input { width: 280px; }
   .err { color: #ef4444; }
+  .budget-panel { margin: 0 0 1rem; padding: .75rem .9rem; border: 1px solid var(--bd); border-radius: 8px; }
+  .budget-panel.hidden { display: none; }
+  .budget-panel h3 { margin: 0 0 .5rem; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); }
+  .cost-bar { display: flex; height: 22px; border-radius: 5px; overflow: hidden; background: #8881; }
+  .cost-bar .seg-prefix { background: #9ca3af; }
+  .cost-bar .seg-call { background: var(--b); }
+  .cost-bar.over .seg-call { background: #ef4444; }
+  .budget-meta { display: flex; gap: .25rem 1rem; flex-wrap: wrap; margin-top: .55rem; font-size: .8rem; color: var(--mut); }
+  .budget-meta b { color: inherit; font-weight: 600; }
+  .ok-badge { color: #10b981; } .bad-badge { color: #ef4444; }
+  .budget-policy { margin-top: .4rem; font-size: .76rem; color: var(--mut); }
 </style>
 </head>
 <body>
@@ -250,6 +261,15 @@ _INDEX_HTML = """<!doctype html>
   </div>
   <div class="grid">
     <section>
+      <div id="budget-panel" class="budget-panel hidden">
+        <h3>Token budget · POST /plugin/payload</h3>
+        <div id="cost-bar" class="cost-bar">
+          <div class="seg-prefix" id="seg-prefix" title="stable prefix tokens"></div>
+          <div class="seg-call" id="seg-call" title="per-call ceiling"></div>
+        </div>
+        <div id="budget-meta" class="budget-meta"></div>
+        <div id="budget-policy" class="budget-policy"></div>
+      </div>
       <h2>Selection result · POST /select</h2>
       <pre id="result">Enter a request and press Select.</pre>
     </section>
@@ -287,6 +307,27 @@ async function boot() {
     $("health").innerHTML = '<span class="err">· server offline</span>';
   }
 }
+function renderBudget(tb) {
+  const panel = $("budget-panel");
+  if (!tb) { panel.classList.add("hidden"); return; }
+  panel.classList.remove("hidden");
+  const total = tb.total || 0;
+  const prefix = tb.stable_prefix_tokens || 0;
+  const ceiling = tb.per_call_ceiling || 0;
+  const pct = (n) => Math.max(0, Math.min(100, total ? (n / total) * 100 : 0));
+  $("seg-prefix").style.width = pct(prefix) + "%";
+  $("seg-call").style.width = pct(Math.max(0, ceiling - prefix)) + "%";
+  $("cost-bar").classList.toggle("over", tb.fits_first_call === false);
+  const badge = tb.fits_first_call ? "ok-badge" : "bad-badge";
+  $("budget-meta").innerHTML = [
+    `total <b>${total}</b>`,
+    `stable_prefix_tokens <b>${prefix}</b>`,
+    `per_call_ceiling <b>${ceiling}</b>`,
+    `headroom_after_first_call <b>${tb.headroom_after_first_call}</b>`,
+    `fits_first_call <b class="${badge}">${tb.fits_first_call}</b>`,
+  ].map((s) => `<span>${s}</span>`).join("");
+  $("budget-policy").textContent = "halt_policy: " + (tb.halt_policy || "");
+}
 async function run() {
   const body = { request: $("request").value, matcher: $("matcher").value, backend: $("backend").value };
   const b = $("budget").value; if (b) body.budget = Number(b);
@@ -295,6 +336,13 @@ async function run() {
     const { status, env } = await api("POST", "/select", body);
     const head = `# status ${status} · ok=${env.ok}\\n`;
     $("result").textContent = head + JSON.stringify(env.diagnostics.length ? { diagnostics: env.diagnostics, data: env.data } : env.data, null, 2);
+    // budget panel: the host-enforceable A/B/C contract lives in /plugin/payload
+    if (b) {
+      const pp = await api("POST", "/plugin/payload", { request: $("request").value, token_budget: Number(b) });
+      renderBudget(pp.env.data && pp.env.data.token_budget);
+    } else {
+      renderBudget(null);
+    }
   } catch (e) { $("result").innerHTML = '<span class="err">request failed: ' + e + "</span>"; }
 }
 $("run").addEventListener("click", run);

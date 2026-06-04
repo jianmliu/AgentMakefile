@@ -14476,3 +14476,25 @@ def test_serve_ui_static() -> None:
     assert static_response("/index.html")[0].startswith("text/html")
     assert static_response("/select") is None  # JSON routes are NOT static
     assert static_response("/nope") is None
+
+
+def test_serve_ui_budget_panel() -> None:
+    """When a budget is entered the UI also calls /plugin/payload and renders the
+    A/B/C token_budget contract as a cost panel (not raw JSON)."""
+    from agentmf.serve import render_index
+
+    html = render_index()
+    # the UI must consume the richer contract endpoint, not only /select
+    assert "/plugin/payload" in html
+    # a dedicated budget panel element exists
+    assert 'id="budget-panel"' in html
+    # and the panel renders the host-enforceable contract fields by name
+    for field in (
+        "total",
+        "stable_prefix_tokens",
+        "per_call_ceiling",
+        "fits_first_call",
+        "headroom_after_first_call",
+        "halt_policy",
+    ):
+        assert field in html, f"budget panel does not surface {field}"
