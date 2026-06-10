@@ -197,4 +197,4 @@ maintenance problems" `agentmf_evolution_skill_workshop_spec.md` names for large
 
 `agentmf_evolution_skill_workshop_spec.md` · `aigg_memory_kernel_design.md` · `typed_memory_design.md`
 · `agentmf_guidance_ingestion_spec.md` · the aigg-memory kernel paper `docs/paper_memory_kernel.md`
-(in the aigg-memory repo).
+and the ecosystem-manager spec `docs/aigg_skill_design.md` (both in the aigg-memory repo).
